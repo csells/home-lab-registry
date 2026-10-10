@@ -10,3 +10,5 @@ private/
 *.key
 ssh_known_hosts
 .DS_Store
+
+/agent/lab-metrics*

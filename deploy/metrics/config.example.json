@@ -1,0 +1,8 @@
+{
+  "disks": [{"name": "local", "path": "/"}],
+  "lvm_thin_pools": false,
+  "listen": "",
+  "cert": "/etc/lab-metrics/server.pem",
+  "key": "/etc/lab-metrics/server-key.pem",
+  "client_ca": "/etc/lab-metrics/client-ca.pem"
+}

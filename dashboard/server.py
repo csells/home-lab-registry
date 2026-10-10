@@ -2,20 +2,17 @@ import base64,hmac,json,pathlib,threading,time,logging
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 from client import request
 from model import inventory
-from metrics import collect_all,LiveMetrics
+from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
 from access import credential
 from guac import launch
-BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'error':'Loading registry','fetched_at':None};READINGS={};LIVE=None
+BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'error':'Loading registry','fetched_at':None};LIVE=None
 def reconcile():
-    global STATE,READINGS
-    cfg=json.loads((PRIVATE/'reader.json').read_text());last_metrics=0
+    global STATE
+    cfg=json.loads((PRIVATE/'reader.json').read_text())
     while True:
         try:
-            if time.monotonic()-last_metrics>=600:
-                READINGS=collect_all(PRIVATE);last_metrics=time.monotonic()
-                logging.info('Machine collection: %s',{k:v['status'] for k,v in READINGS.items()})
-            records=request(cfg,'GET','/v1/services')['services'];value=inventory(records,READINGS);value['fetched_at']=time.time();value['error']=None
+            records=request(cfg,'GET','/v1/services')['services'];LIVE.configure(records);value=inventory(records,LIVE.readings());value['fetched_at']=time.time();value['error']=None
             with LOCK:STATE=value
         except Exception:
             logging.exception('Reconciliation failed')
@@ -51,11 +48,25 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self.send_error(503,'Terminal unavailable; verify registry and pinned access');return
             self.send_response(302);self.send_header('Location',destination);self.send_header('Cache-Control','no-store, private');self.send_header('Referrer-Policy','no-referrer');self.send_header('Content-Length','0');self.end_headers();return
-        if path=='/api/live':
+        if path=='/api/metrics/stream':
+            allowed=json.loads((PRIVATE/'origins.json').read_text())
+            if self.headers.get('Sec-Fetch-Site')=='cross-site' or (self.headers.get('Origin') and self.headers['Origin'] not in allowed):self.send_error(403);return
             key=parse_qs(urlsplit(self.path).query).get('machine',[''])[0]
-            try:data=LIVE.read(key)
-            except KeyError:self.send_error(404);return
-            raw=json.dumps(data).encode();kind='application/json'
+            try:
+                with LIVE.subscribe(key) as stream:
+                    self.send_response(200);self.send_header('Content-Type','text/event-stream');self.send_header('Cache-Control','no-store');self.send_header('X-Accel-Buffering','no');self.send_header('Connection','close');self.end_headers()
+                    self.connection.settimeout(10);self.close_connection=True;version=-1
+                    while not stream.stop.is_set():
+                        with stream.cv:
+                            if stream.version==version:stream.cv.wait(5)
+                            if stream.version!=version:
+                                value=stream.reading();version=stream.version
+                                raw=('event: metrics\ndata: '+json.dumps(value)+'\n\n').encode()
+                            else:raw=b': keepalive\n\n'
+                        self.wfile.write(raw);self.wfile.flush()
+            except KeyError:self.send_error(404)
+            except (BrokenPipeError,ConnectionResetError,TimeoutError):pass
+            return
         elif path in ['/api/inventory','/api/machines','/api/services']:
             with LOCK:data=dict(STATE)
             data['server_time']=time.time()

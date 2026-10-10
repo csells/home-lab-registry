@@ -1,0 +1,22 @@
+[Unit]
+Description=Cached machine resource metrics
+After=local-fs.target
+[Service]
+# Root is needed only when LVM thin-pool reporting is enabled.
+# Otherwise use a dedicated unprivileged account and give its stream SSH key
+# access to that same account's Unix socket.
+User=root
+RuntimeDirectory=lab-metrics
+RuntimeDirectoryMode=0700
+ExecStart=/usr/local/bin/lab-metrics -config /etc/lab-metrics.json
+Restart=on-failure
+RestartSec=5
+Nice=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=-/run/lock/lvm
+MemoryMax=48M
+[Install]
+WantedBy=multi-user.target

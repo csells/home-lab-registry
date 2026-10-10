@@ -5,7 +5,9 @@ A small, self-hosted machine and service catalog with an authenticated dashboard
 ## Components
 
 - `registry/`: Python standard-library HTTPS API, SQLite catalog, revisions, health observations, probes and export/restore.
-- `dashboard/`: read-only dashboard, restricted SSH measurements, credential-copy endpoint, and Apache Guacamole session integration.
+- `dashboard/`: read-only dashboard, cached streaming measurements, credential-copy endpoint, and Apache Guacamole session integration.
+- `agent/`: small Go collector using gopsutil, bounded local history and mutually authenticated TLS streams.
+- `deploy/metrics/`: collector installation, stream authentication and overhead validation.
 - `deploy/guacamole/`: pinned official containers and an example authenticated proxy.
 - `skills/home-lab/`: portable copy of the operating skill, including registry discovery, Proxmox/community-script practices and backup procedures. Inventory belongs in the registry, never in the skill.
 
@@ -23,13 +25,13 @@ Dashboard `private/` files (never committed):
 | `reader.json` | `url`, `ca_file`, `reader_token`; read access only |
 | `registry-ca.pem` | Registry CA, referenced by reader config |
 | `origins.json` | JSON array of exact permitted HTTPS origins |
-| `targets.json` | Map of machine IDs to `{host,user,kind}`; kind `proxmox` or `macos` |
-| `metrics_key`, `known_hosts` | Restricted-command SSH key and independently verified host pins |
+| `stream-ca.pem` | Private metrics CA trust anchor used to verify each agent identity |
+| `stream-client.pem`, `stream-client-key.pem` | Dashboard client identity for mutually authenticated agent streams |
 | `terminal_key`, `guacamole_known_hosts` | Dedicated interactive SSH key and verified host pins |
 | `guacamole-key` | Same signing key as private Guacamole `.env` |
 | `machine-passwords.json` | Map of machine IDs to login IDs and passwords |
 
-The measurement key must execute only fixed read-only commands. Proxmox expects three JSON lines: node `/status`, node `/storage`, and `/cluster/resources --type node` via `pvesh`. macOS expects `top` CPU output, `sysctl hw.memsize kern.boottime`, `vm_stat` and `df` for the Data volume. Provision these explicitly and pin each host identity. The browser never supplies shell commands to this collector.
+Install and qualify collectors using [the metrics deployment guide](deploy/metrics/README.md). Agent endpoints are discovered from machine records, never a second static host list. The browser never receives agent keys or certificates.
 
 See the Guacamole README for terminal deployment. Preserve Authorization through the reverse proxy to the dashboard; authenticate Guacamole at that same outer boundary. Restrict origins and enable WebSockets. Do not expose the loopback dashboard or Guacamole backend directly.
 
@@ -39,7 +41,14 @@ Use `registry/client.py --help`. Records require name, host, owner, capabilities
 
 Writes require writer authentication and `If-Match` revision preconditions. Readers cannot mutate the catalog. Health observations have expiry; unknown/stale is not proof of downtime. HTTP/TCP probes and local exporters are operator-configured; this is not automatic network discovery.
 
-Live charts keep bounded in-memory history, sampled on demand while a machine card is visible, shared between viewers. Charts display a 10-minute window; unavailable periods have gaps. History resets on dashboard restart. Disk chart shows the most-used storage pool, not disk throughput. CPU values reflect the host collector's own sampling cadence. Unconfigured machines show no fabricated readings.
+Collectors retain ten minutes of local history even with no viewers. Opening a card
+immediately loads that cache, then updates arrive over Server-Sent Events. Each
+watched machine has one shared dashboard-to-agent stream, closed after the last
+viewer leaves. Hidden tabs stop subscribing. No SSH collection commands or periodic
+resource HTTP requests are used. Agent restart resets its bounded RAM history;
+dashboard restart does not. Gaps remain gaps. Disk is the most-used monitored
+filesystem/storage pool, not throughput. Charts preserve the observed peak in each
+20-second display bucket. Agents not yet installed show monitoring unconfigured.
 
 ## Security and recovery
 
@@ -53,6 +62,7 @@ Take a SQLite-consistent export and back up private configuration, proxy, servic
 (cd registry && python3 -m unittest -v)
 (cd dashboard && python3 -m unittest -v)
 node --check dashboard/app.js
+(cd agent && go test -race ./...)
 ```
 
 Browser qualification should include real clipboard comparison without printing values, real terminal commands, phone-width layouts, live sampling, anonymous/cross-origin rejection and stale/failure states. Desktop emulation does not prove physical mobile keyboard behavior.
