@@ -1,0 +1,21 @@
+[Unit]
+Description=Home lab service registry
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=lab-registry
+Group=lab-registry
+ExecStart=/usr/bin/python3 /opt/lab-registry/registry.py --config /etc/lab-registry/config.json
+Restart=on-failure
+RestartSec=3
+StateDirectory=lab-registry
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/lab-registry
+MemoryMax=256M
+TasksMax=64
+[Install]
+WantedBy=multi-user.target

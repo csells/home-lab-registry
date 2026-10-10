@@ -13,7 +13,7 @@ This repository contains source and examples only: no real catalog, machine iden
 
 ## Deployment
 
-Use a dedicated Linux VM with Python 3.11+, Docker Compose and an authenticated HTTPS reverse proxy. Budget at least 2 GiB RAM for registry, dashboard and Guacamole; actual capacity depends on session count. Install Python dependencies from `requirements.txt`. Run the registry with `python3 registry/registry.py --config /etc/lab-registry/config.json`; inspect `--help` and the config fields at the end of that source. Supply TLS certificate/key, database path and independent reader/writer tokens privately. Bind/route the API only to trusted clients. Run the dashboard using `python3 dashboard/server.py` behind your proxy on loopback 8089. Both Python services require service-manager units with unprivileged accounts and unattended startup.
+Use a dedicated Linux VM with Python 3.11+, Docker Compose and an authenticated HTTPS reverse proxy. Budget at least 2 GiB RAM for registry, dashboard and Guacamole; actual capacity depends on session count. Install Python dependencies from `requirements.txt`. Run the registry with `python3 registry/registry.py --config /etc/lab-registry/config.json`; inspect `--help` and the config fields at the end of that source. Supply TLS certificate/key, database path and independent reader/writer tokens privately. Bind/route the API only to trusted clients. Run the dashboard using `python3 dashboard/server.py` behind your proxy on loopback 8089. Example service-manager units are in `deploy/`; create their unprivileged accounts and make private files readable only by the appropriate service account.
 
 Dashboard `private/` files (never committed):
 

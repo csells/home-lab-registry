@@ -1,0 +1,14 @@
+[Unit]
+Description=Home lab machines and services dashboard
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=lab-dashboard
+WorkingDirectory=/opt/machine-dashboard
+ExecStart=/usr/bin/python3 /opt/machine-dashboard/server.py
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+[Install]
+WantedBy=multi-user.target
