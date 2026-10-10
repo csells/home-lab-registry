@@ -1,0 +1,32 @@
+# Service configuration backup SOP
+
+Apply this procedure to persistent lab services and machine configuration. Discover each service, its dependencies and existing backup arrangements from the central registry before choosing tools or destinations.
+
+## Capture and store
+
+1. Identify everything needed to recover the service: configuration, deployment manifests, service units, versions, certificates and private keys, authentication or pairing state, and application databases needed to preserve settings. Use application-supported exports or consistent database backups. Record separately whether bulk data and media are covered or recoverable from another source.
+2. Use **Google Drive as the sole retained backup destination**, through the registered central backup service. Discover the controller and repositories from the registry. Other machines/VMs may execute exports or hold temporary staging, but must not retain another backup repository. GitHub is source control, not a backup destination.
+3. Take a recovery copy before changing existing configuration or migrating, then capture the verified new configuration after the change. Preserve the last known-good version. For a new service, take its initial backup before declaring setup complete.
+4. Automate recurring backups through the central backup service, independent of an interactive login or agent session. Use versioned, atomic backups with documented retention. For small configuration backups, default to daily runs and 30 days of history; preserve an existing stricter schedule and adapt to the service's acceptable loss window. An immediate post-change backup supplements the schedule. Keep the final recovery copy on retirement for the documented retention period.
+
+Transfer over authenticated encrypted connections. Encrypt archives containing secrets at rest; keep recovery keys in the credential vault or another protected location recoverable without the failed source host. Give backup jobs only the access they need. Keep archive contents and keys out of Git, registry records, logs and user-facing health evidence.
+
+## Verify and operate
+
+Run the real scheduled job through its service manager and confirm a complete snapshot arrived at the off-machine destination. Restore it into an isolated directory or disposable guest, check configuration and database integrity, and exercise application startup when safe. Prevent restored controllers or schedulers from contacting live devices or running production jobs. A checksum or archive listing verifies transfer, not restoration; report exactly which recovery steps passed.
+
+Repeat the restore check after backup scope/tooling changes and periodically on a documented schedule (default quarterly). Monitor backup job failures, destination capacity and age of the last successful backup independently of application uptime. A healthy service does not prove its backup works. Record the monitoring mechanism; do not claim notifications exist unless delivery was configured and tested.
+
+In the service's registry `backup` field, record coverage/exclusions, off-machine destination and path, job identity, cadence, retention, encryption/recovery credential references, latest backup evidence and restore-test date/result. Put commands and recovery steps in its runbook, also available from the backup destination if the source fails. Register an independently operated backup service separately when applicable. Also maintain `config_backup` for dashboard display: `status` (`unknown`, `manual`, or `scheduled`), `locations` (array of `{host, path}` with the physical machine or external-storage identifier and absolute archive/repository path), and credential-free `notes` stating coverage, automation and restore gaps. An unknown status may have no locations; manual/scheduled require a recorded location. Scheduled describes the job, not proof of a successful restore. Backup locations and notes are visible to authenticated dashboard viewers; keep credential references in the private runbook/`backup` field.
+
+If a destination, credential, schedule or restore check is unavailable, preserve any safe recovery copy, mark the coverage gap in the registry and report it explicitly. Continue independent authorized work; do not mark backup setup complete. Updating this SOP does not retroactively configure or verify existing service backups.
+
+## Cloud destinations
+
+For Google Drive, use rclone as the authenticated transport and a versioned encrypted backup tool such as restic; rsync does not provide a Drive backend. Let the central service own scheduling, collection, encryption, Drive uploads, retention and reporting. Source-side helpers may produce application-consistent exports on demand; they must not independently schedule or retain backups. Bound temporary staging and remove it after operations. Preserve application-consistent database exports and existing coverage. Keep media sync and configuration backup credentials/scope separate; verify unattended token refresh and actual repository writes.
+
+Discover the approved folder convention in the registry. Record Drive as external storage, rather than inventing a physical machine; list it as the only retained destination in dashboard backup locations. Record repository paths, source jobs, retention, independently recoverable encryption-key references, exact restore evidence and freshness monitoring. Preserve historical repository paths across host migrations or record their mapping explicitly.
+
+During migration, keep old jobs and copies until centrally managed jobs, Drive restores and persistent failure/freshness monitoring pass, then disable old schedules and remove redundant retained copies after preserving required history in Drive. A successful snapshot does not validate the monitor, and a disposable monitoring candidate does not replace permanent monitoring. Remove temporary consent listeners, routes and guest credential copies after authorization is installed on persistent sources.
+
+Keep service setup definitions and the Ansible code that applies them together in their operational configuration source; include them in the encrypted Drive backup. The registry points to that source and reports deployed state, backup policy, results and restore evidence. Do not mistake a controller-maintenance playbook for a tested rebuild recipe for every lab service. Keep the independent recovery credential in the vault, outside the encrypted repository it unlocks; verify it works before removing temporary recovery-key copies.

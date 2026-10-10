@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+private/
+*.db
+*.db-wal
+*.db-shm
+*.pem
+*.key
+ssh_known_hosts
+.DS_Store

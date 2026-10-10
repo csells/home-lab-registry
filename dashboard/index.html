@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>Home lab · Control room</title><link rel="stylesheet" href="/app.css"><script defer src="/app.js"></script></head>
+<body>
+<a href="#content" class="skip-link">Skip to inventory</a>
+<header class="masthead"><a class="brand" href="#machines" aria-label="Home lab machines"><span class="brand-mark" aria-hidden="true">⌘</span><span>Home lab<span class="brand-sub">CONTROL ROOM</span></span></a></header>
+<main id="content">
+<section class="page-heading"><div><p class="eyebrow">YOUR CONTROL ROOM</p><h1>Make yourself at home.</h1><p class="intro">Open a machine. Check a service. Know what needs attention.</p></div><div class="refresh-block"><button id="refresh" class="button secondary">↻ Refresh</button><span id="updated">Connecting to the lab…</span></div></section>
+<nav aria-label="Inventory views"><button id="machines-tab" aria-pressed="true">Machines <span id="machine-count">—</span></button><button id="services-tab" aria-pressed="false">Services <span id="service-count">—</span></button></nav>
+<div id="error" role="alert" hidden></div>
+<section class="inventory-tools" aria-label="Inventory controls"><div class="inventory-title"><h2 id="title">Machines</h2><p id="view-description">Your hardware, with every way in.</p></div><div class="search-tools"><label class="search-field"><span class="sr-only">Search</span><input id="search" type="search" placeholder="Find a machine…" autocomplete="off"></label><label><span class="sr-only">Filter by host</span><select id="host"><option value="">All hosts</option></select></label></div></section>
+<section id="health-filters" aria-label="Health filters"></section><p id="summary" class="inventory-summary" aria-live="polite">Loading inventory…</p>
+<section id="cards" class="machines" aria-label="Machines"></section>
+<footer><strong>Home lab</strong><span>Live charts while viewing · Registry refreshed every 30 seconds.</span></footer>
+<div id="toast" role="status" class="sr-only"></div>
+</main></body></html>

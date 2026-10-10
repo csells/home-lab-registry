@@ -1,0 +1,70 @@
+import base64,hmac,json,pathlib,threading,time,logging
+from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
+from client import request
+from model import inventory
+from metrics import collect_all,LiveMetrics
+from urllib.parse import urlsplit,parse_qs
+from access import credential
+from guac import launch
+BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'error':'Loading registry','fetched_at':None};READINGS={};LIVE=None
+def reconcile():
+    global STATE,READINGS
+    cfg=json.loads((PRIVATE/'reader.json').read_text());last_metrics=0
+    while True:
+        try:
+            if time.monotonic()-last_metrics>=600:
+                READINGS=collect_all(PRIVATE);last_metrics=time.monotonic()
+                logging.info('Machine collection: %s',{k:v['status'] for k,v in READINGS.items()})
+            records=request(cfg,'GET','/v1/services')['services'];value=inventory(records,READINGS);value['fetched_at']=time.time();value['error']=None
+            with LOCK:STATE=value
+        except Exception:
+            logging.exception('Reconciliation failed')
+            with LOCK:STATE={**STATE,'error':'Registry refresh failed; displayed readings may be stale.'}
+        time.sleep(30)
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self,*args):pass
+    def do_POST(self):
+        if not hmac.compare_digest(self.headers.get('Authorization',''),self.server.auth):
+            self.send_error(401);return
+        # Reject cross-origin requests and form submissions before reading any secret.
+        allowed=json.loads((PRIVATE/'origins.json').read_text())
+        if self.headers.get('Origin') not in allowed or self.headers.get('X-Lab-Action')!='copy-password' or self.headers.get('Content-Type')!='application/json':
+            self.send_error(403);return
+        if self.path!='/api/copy-password':self.send_error(404);return
+        try:
+            length=int(self.headers.get('Content-Length','0'))
+            if not 0<length<=1024:raise ValueError()
+            body=json.loads(self.rfile.read(length))
+            if not isinstance(body.get('machine'),str) or not isinstance(body.get('login'),str):raise ValueError()
+            value=credential(PRIVATE,body['machine'],body['login'])
+        except (ValueError,TypeError,KeyError):self.send_error(400);return
+        if value is None:self.send_error(404);return
+        raw=value.encode()
+        self.send_response(200);self.send_header('Content-Type','text/plain; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store, private');self.send_header('Pragma','no-cache');self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(raw)
+    def do_GET(self):
+        if not hmac.compare_digest(self.headers.get('Authorization',''),self.server.auth):
+            self.send_response(401);self.send_header('WWW-Authenticate','Basic realm="Home lab preview"');self.send_header('Content-Length','0');self.end_headers();return
+        path=self.path.split('?')[0]
+        if path.startswith('/terminal/'):
+            if self.headers.get('Sec-Fetch-Site')=='cross-site':self.send_error(403);return
+            try: destination=launch(PRIVATE,path.removeprefix('/terminal/').rstrip('/'))
+            except Exception:
+                self.send_error(503,'Terminal unavailable; verify registry and pinned access');return
+            self.send_response(302);self.send_header('Location',destination);self.send_header('Cache-Control','no-store, private');self.send_header('Referrer-Policy','no-referrer');self.send_header('Content-Length','0');self.end_headers();return
+        if path=='/api/live':
+            key=parse_qs(urlsplit(self.path).query).get('machine',[''])[0]
+            try:data=LIVE.read(key)
+            except KeyError:self.send_error(404);return
+            raw=json.dumps(data).encode();kind='application/json'
+        elif path in ['/api/inventory','/api/machines','/api/services']:
+            with LOCK:data=dict(STATE)
+            data['server_time']=time.time()
+            if path!='/api/inventory':key=path.rsplit('/',1)[1];data={key:data[key],'error':data['error'],'fetched_at':data['fetched_at']}
+            raw=json.dumps(data).encode();kind='application/json'
+        elif path in ['/','/app.js','/app.css']:
+            file={'/':'index.html','/app.js':'app.js','/app.css':'app.css'}[path];raw=(BASE/file).read_bytes();kind={'/':'text/html','/app.js':'text/javascript','/app.css':'text/css'}[path]
+        else:self.send_error(404);return
+        self.send_response(200);self.send_header('Content-Type',kind+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");self.end_headers();self.wfile.write(raw)
+if __name__=='__main__':
+    LIVE=LiveMetrics(PRIVATE)
+    logging.basicConfig(level=logging.INFO);credentials=json.loads((PRIVATE/'login.json').read_text());s=ThreadingHTTPServer(('127.0.0.1',8089),Handler);s.auth='Basic '+base64.b64encode((credentials['username']+':'+credentials['password']).encode()).decode();threading.Thread(target=reconcile,daemon=True).start();s.serve_forever()
