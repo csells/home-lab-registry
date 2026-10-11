@@ -39,3 +39,28 @@ Apple Silicon cross-compilation passes. macOS runtime and overhead qualification
 remain pending an available isolated Mac VM. Cross-compilation is not runtime
 validation. Host-level Proxmox qualification and fleet rollout also remain pending
 staging approval; the tested agent measures the disposable VM itself.
+
+## Flat-chart regression
+
+The original fixed 0–100% axis compressed real idle CPU and memory changes to
+0.4–0.5 rendered pixels at phone width. Whole-percent current values hid additional
+variation. Collection was working; visual verification had been insufficient.
+
+CPU now uses a zero-based scale with a minimum 10-percentage-point span. RAM
+uses a labeled observed range with a minimum 10-point span and 5-point boundaries.
+Disk capacity keeps its 0–100% scale: stable capacity must remain visually stable.
+All scales are printed below the charts; current readings show one decimal, and
+the live caption includes the sample time. No synthetic variation is added.
+
+`dashboard/check_charts.py` tests the actual rendered SVG at phone width against
+known changing and constant inputs, using an authenticated disposable preview.
+Provide credentials through `LAB_LOGIN_JSON`; never include credentials in URLs.
+This regression checks rendered pixel differences, not just sample arrival.
+
+A bounded real workload in the disposable VM then exercised the complete path:
+one CPU core busy for 30 seconds, 256 MiB allocated memory, and a temporary 2 GiB
+filesystem reservation. At phone width, rendered bar-height differences were
+38.7 px CPU, 17.9 px RAM and 2.8 px disk. Browser readings rose and returned after
+cleanup. The fixture ran with a 384 MiB memory cap and 120-second maximum runtime;
+its temporary file was verified removed. Desktop and phone-width overflow checks
+passed. Idle variation also passed the original failing browser check after the fix.

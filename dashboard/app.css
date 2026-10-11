@@ -20,3 +20,5 @@
 .telemetry-caption{display:flex;justify-content:space-between;margin-top:6px;font-size:10px;line-height:14px;color:#aac4c1}
 .telemetry-state{display:flex;align-items:center;gap:5px}.telemetry-state:before{content:'';height:5px;width:5px;border-radius:50%;background:#b29b6d}.telemetry-state.is-live:before{background:#39d5b5}
 @media(max-width:600px){.telemetry-strip{padding:12px 18px 9px}.telemetry-charts{gap:12px}.telemetry-label{font-size:10px}.telemetry-strip .trend{height:48px}}
+
+.telemetry-range{font-size:10px;line-height:14px;color:#aac4c1;margin-top:3px;font-variant-numeric:tabular-nums}

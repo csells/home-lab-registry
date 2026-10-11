@@ -5,7 +5,10 @@ measurements. It samples CPU and memory every five seconds, reads configured
 filesystem capacity and optional LVM thin pools every minute, and keeps 120 real
 samples in RAM. Sampling continues without viewers; nothing is transmitted without
 a subscription. There are no per-sample file writes. Restart starts a new history;
-gaps are shown honestly. Disk readings carry their own timestamps. RAM means total
+gaps are shown honestly. Charts use explicitly labeled ranges: CPU starts at zero with a minimum 10-point
+span, RAM zooms to a minimum 10-point range, and disk capacity stays at 0–100%.
+Current values retain one decimal and the live caption shows the sample time.
+Disk readings carry their own timestamps. RAM means total
 minus OS-available memory, excluding reclaimable cache.
 
 The dashboard discovers enabled agents from the registry. It opens one shared,
