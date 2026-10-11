@@ -1,0 +1,13 @@
+{
+  "disks": [
+    {
+      "name": "Data",
+      "path": "/System/Volumes/Data"
+    }
+  ],
+  "lvm_thin_pools": false,
+  "listen": ":9911",
+  "cert": "/Library/Application Support/HomeLabMetrics/server.pem",
+  "key": "/Library/Application Support/HomeLabMetrics/server-key.pem",
+  "client_ca": "/Library/Application Support/HomeLabMetrics/ca.pem"
+}

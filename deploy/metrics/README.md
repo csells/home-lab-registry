@@ -93,6 +93,23 @@ Precreate its private socket directory with the proper owner. Cross-compilation
 alone is not macOS runtime or overhead qualification: measure in an isolated Mac
 VM or during explicitly approved rollout before claiming that qualification.
 
+The repository includes `com.home-lab.metrics.plist.in`, `install-macos.sh`,
+and `config.macos.example.json`. Prepare a private bundle containing the approved
+`lab-metrics` binary, `config.json` based on that example, and provisioned
+`server.pem`, `server-key.pem`, and `ca.pem`. Then run:
+
+```sh
+sudo bash deploy/metrics/install-macos.sh SERVICE_USER /path/to/private-bundle
+```
+
+Use an existing unprivileged service account. The installer creates a system
+LaunchDaemon with that account as its runtime user, so GUI login is unnecessary.
+This does not bypass a FileVault preboot unlock. The installer replaces only the
+collector's files and launchd job. Validate the installed daemon and stream before
+recording rollout success. Never commit the private bundle, enrollment tokens,
+real inventory, certificates, or keys. Source and portable deployment templates
+belong here; machine-specific settings belong in the registry and encrypted backups.
+
 ## Reverse proxy, qualification and backups
 
 Disable buffering for `/api/metrics/stream` and retain dashboard authentication.

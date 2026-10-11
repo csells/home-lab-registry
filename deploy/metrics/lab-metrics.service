@@ -3,8 +3,8 @@ Description=Cached machine resource metrics
 After=local-fs.target
 [Service]
 # Root is needed only when LVM thin-pool reporting is enabled.
-# Otherwise use a dedicated unprivileged account and give its stream SSH key
-# access to that same account's Unix socket.
+# Otherwise use a dedicated unprivileged account with access to its private
+# configuration, TLS key, and Unix socket.
 User=root
 RuntimeDirectory=lab-metrics
 RuntimeDirectoryMode=0700
