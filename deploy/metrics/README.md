@@ -3,8 +3,8 @@
 The Go agent uses maintained [gopsutil](https://github.com/shirou/gopsutil) for OS
 measurements. It samples CPU and memory every five seconds, reads configured
 filesystem capacity and optional LVM thin pools every minute, and keeps 120 real
-samples in RAM. Sampling continues without viewers; nothing is transmitted without
-a subscription. There are no per-sample file writes. Restart starts a new history;
+samples in RAM. Sampling continues without viewers; resource samples are transmitted only with
+a subscription. Optional address registration sends a small heartbeat separately. There are no per-sample file writes. Restart starts a new history;
 gaps are shown honestly. Charts use explicitly labeled ranges: CPU starts at zero with a minimum 10-point
 span, RAM zooms to a minimum 10-point range, and disk capacity stays at 0–100%.
 Current values retain one decimal and the live caption shows the sample time.
@@ -92,6 +92,23 @@ launchd daemon with that `UserName`, rather than depending on interactive login.
 Precreate its private socket directory with the proper owner. Cross-compilation
 alone is not macOS runtime or overhead qualification: measure in an isolated Mac
 VM or during explicitly approved rollout before claiming that qualification.
+
+The repository includes `com.home-lab.metrics.plist.in`, `install-macos.sh`,
+and `config.macos.example.json`. Prepare a private bundle containing the approved
+`lab-metrics` binary, `config.json` based on that example, and provisioned
+`server.pem`, `server-key.pem`, and `ca.pem`. Then run:
+
+```sh
+sudo bash deploy/metrics/install-macos.sh SERVICE_USER /path/to/private-bundle
+```
+
+Use an existing unprivileged service account. The installer creates a system
+LaunchDaemon with that account as its runtime user, so GUI login is unnecessary.
+This does not bypass a FileVault preboot unlock. The installer replaces only the
+collector's files and launchd job. Validate the installed daemon and stream before
+recording rollout success. Never commit the private bundle, enrollment tokens,
+real inventory, certificates, or keys. Source and portable deployment templates
+belong here; machine-specific settings belong in the registry and encrypted backups.
 
 ## Reverse proxy, qualification and backups
 

@@ -1,4 +1,4 @@
-// lab-metrics keeps bounded local history; it never contacts another machine.
+// lab-metrics keeps bounded local history and optionally announces its LAN address.
 package main
 
 import (
@@ -49,6 +49,7 @@ type Sample struct {
 	Warnings    []string `json:"warnings,omitempty"`
 }
 type Config struct {
+ Registration *RegistrationConfig `json:"registration,omitempty"`
 	Listen   string `json:"listen"`
 	Cert     string `json:"cert"`
 	Key      string `json:"key"`
@@ -313,6 +314,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go collect(ctx, s, cfg)
+ if cfg.Registration != nil { go registerMachine(ctx, *cfg.Registration) }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream", s.stream)
 	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {

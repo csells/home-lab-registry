@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private service catalog. TLS and read/write bearer credentials are required in production."""
 from contextlib import contextmanager
+import presence
 import argparse, concurrent.futures, hmac, json, logging, re, sqlite3, ssl, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
@@ -41,6 +42,13 @@ def validate(d):
                 raise Problem(400,'Use a machine name and absolute backup path, never credentials')
         if 'notes' in b and not isinstance(b['notes'],str): raise Problem(400,'Backup notes must be a string')
     if 'resources' in d and not isinstance(d['resources'],dict): raise Problem(400,'resources must be an object')
+    resources=d.get('resources',{})
+    try:
+        if 'registration' in resources:presence.validate_policy(resources['registration'])
+        bindings=resources.get('address_bindings',[])
+        if not isinstance(bindings,list) or len(bindings)>32:raise ValueError()
+        for binding in bindings:presence.validate_policy(binding,True)
+    except ValueError:raise Problem(400,'Invalid address bindings')
     if 'probe' in d:
         p=d['probe']
         if isinstance(p,dict) and 'tcp_host' in p:
@@ -72,11 +80,12 @@ def validate(d):
 
 class Catalog:
     def __init__(self,path):
-        self.path=path
+        self.path=path;self.presence_verifier=None
         with self.db() as db:
             db.executescript('''PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS services (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, document TEXT NOT NULL, updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS history (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, revision INTEGER NOT NULL, document TEXT NOT NULL, actor TEXT NOT NULL, updated REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS presence (id TEXT PRIMARY KEY, address TEXT NOT NULL, interface TEXT NOT NULL, checked REAL NOT NULL, expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS health (id TEXT PRIMARY KEY, status TEXT NOT NULL, evidence TEXT NOT NULL, checked REAL NOT NULL, expires REAL NOT NULL);
             ''')
     @contextmanager
@@ -89,10 +98,32 @@ class Catalog:
         with self.db() as db:
             row=db.execute('SELECT * FROM services WHERE id=?',(id,)).fetchone()
             h=db.execute('SELECT * FROM health WHERE id=?',(id,)).fetchone()
+            p=db.execute('SELECT address,interface,checked,expires FROM presence WHERE id=?',(id,)).fetchone()
         if not row: raise Problem(404,'Service not found')
         health={'status':'unknown'} if not h else dict(h)
         if h and h['expires']<time.time(): health['status']='stale'
-        return {'id':id,'revision':row['revision'],'updated_at':row['updated'],'spec':json.loads(row['document']),'health':health}
+        record=presence.overlay({'id':id,'revision':row['revision'],'updated_at':row['updated'],'spec':json.loads(row['document']),'health':health},dict(p) if p else None)
+        # Service placement is explicit: the physical parent is not the guest IP.
+        bindings=record['spec'].get('resources',{}).get('address_bindings',[])
+        with self.db() as db:
+            for binding in bindings:
+                source=db.execute('SELECT p.address,p.interface,p.checked,p.expires FROM presence p JOIN services s ON p.id=s.id WHERE p.id=?',(binding['machine_id'],)).fetchone()
+                if source:
+                    presence.overlay(record,dict(source),binding)
+        return record
+    def announce(self,id,body,enrollment):
+        record=self.get(id)
+        if record['spec']['lifecycle']!='active' or 'machine' not in record['spec']['capabilities']:raise Problem(403,'Active enrolled machine required')
+        try:body=presence.validate(body,enrollment)
+        except (ValueError,TypeError,KeyError):raise Problem(400,'Invalid enrolled address announcement')
+        previous=record['spec'].get('resources',{}).get('agent_presence',{})
+        if previous.get('address')!=body['address'] and self.presence_verifier:
+            try:self.presence_verifier(body['address'],enrollment)
+            except Exception:raise Problem(409,'Collector identity not verified at announced address')
+        now=time.time()
+        with self.db() as db:
+            db.execute('INSERT OR REPLACE INTO presence VALUES(?,?,?,?,?)',(id,body['address'],body['interface'],now,now+300))
+        return {'accepted':True,'expires':now+300}
     def listing(self,query):
         with self.db() as db: ids=[r[0] for r in db.execute('SELECT id FROM services ORDER BY id')]
         result=[]
@@ -105,6 +136,7 @@ class Catalog:
             result.append(r)
         return result
     def put(self,id,doc,revision):
+        doc=json.loads(json.dumps(doc));doc.get('resources',{}).pop('agent_presence',None)
         validate(doc); now=time.time()
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -203,6 +235,10 @@ class Handler(BaseHTTPRequestHandler):
             u=urlsplit(self.path); parts=u.path.strip('/').split('/'); cat=self.server.catalog
             if self.command=='GET' and u.path=='/healthz': return self.send(200,{'ok':True})
             auth=self.headers.get('Authorization','')
+            if self.command=='POST' and len(parts)==4 and parts[:2]==['v1','machines'] and parts[3]=='presence' and ID.fullmatch(parts[2]):
+                enrollment=presence.authenticate(self.server.enrollments,parts[2],auth)
+                if enrollment is None:raise Problem(401,'Machine credential required')
+                return self.send(200,cat.announce(parts[2],self.body(),enrollment))
             writer=hmac.compare_digest(auth,'Bearer '+self.server.writer)
             reader=hmac.compare_digest(auth,'Bearer '+self.server.reader)
             if not (writer or reader): raise Problem(401,'Authentication required')
@@ -231,7 +267,7 @@ class Handler(BaseHTTPRequestHandler):
     do_GET=handle_api; do_PUT=handle_api; do_POST=handle_api
 
 def make_server(address,database,reader,writer):
-    s=ThreadingHTTPServer(address,Handler); s.catalog=Catalog(database); s.reader=reader; s.writer=writer; return s
+    s=ThreadingHTTPServer(address,Handler); s.catalog=Catalog(database); s.reader=reader; s.writer=writer; s.enrollments={}; return s
 
 def main():
     from pathlib import Path
@@ -239,6 +275,8 @@ def main():
     c=json.loads(Path(args.config).read_text())
     logging.basicConfig(level=logging.INFO)
     s=make_server((c.get('bind','0.0.0.0'),c.get('port',8443)),c['database'],c['reader_token'],c['writer_token'])
+    s.enrollments=c.get('machine_enrollments',{})
+    if s.enrollments:s.catalog.presence_verifier=presence.verifier(c['presence_tls'])
     s.catalog.probe_credentials=c.get('probe_credentials',{})
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.minimum_version=ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(c['cert'],c['key']); s.socket=context.wrap_socket(s.socket,server_side=True)

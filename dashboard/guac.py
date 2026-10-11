@@ -19,11 +19,12 @@ def connections(private,records):
         for route in s.get('resources',{}).get('management_access',[]):
             if route['id']!='os' or not (route.get('url') or '').startswith('ssh://'):continue
             address=urlparse(route['url']);hostname=address.hostname;port=address.port or 22
-            lookup=hostname if port==22 else '['+hostname+']:'+str(port)
+            lookup=route.get('host_key_alias') or (hostname if port==22 else '['+hostname+']:'+str(port))
             pinned=next((line for line in pins if line and lookup in line.split()[0].split(',')),None)
             if not pinned or not route.get('username'):continue
             result[machine]={'protocol':'ssh','parameters':{
                 'hostname':hostname,'port':str(port),'username':route['username'],
+                'host-key':(hostname if port==22 else '['+hostname+']:'+str(port))+' '+' '.join(pinned.split()[1:3]),
                 'private-key':(private/'terminal_key').read_text(),
                 'font-size':'18','scrollback':'5000','server-alive-interval':'30',
                 'color-scheme':'gray-black','backspace':'127','terminal-type':'xterm-256color',

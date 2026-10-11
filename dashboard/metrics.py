@@ -1,7 +1,7 @@
 """Demand-driven fan-out of cached, mutually authenticated TLS metrics streams."""
-import contextlib,json,logging,math,ssl,threading,time
+import contextlib,json,logging,math,re,ssl,threading,time
 from collections import deque
-from http.client import HTTPException
+from http.client import HTTPException,HTTPConnection,HTTPSConnection
 from urllib.parse import urlsplit
 from urllib.request import build_opener,HTTPSHandler,HTTPRedirectHandler,ProxyHandler,Request
 
@@ -10,16 +10,22 @@ MAX_FRAME=262144
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
 
-def connect(url,private):
+def connect(url,private,server_name=None):
     ctx=ssl.create_default_context(cafile=str(private/'stream-ca.pem'))
     ctx.minimum_version=ssl.TLSVersion.TLSv1_3
     ctx.load_cert_chain(str(private/'stream-client.pem'),str(private/'stream-client-key.pem'))
-    opener=build_opener(ProxyHandler({}),HTTPSHandler(context=ctx),NoRedirect())
+    class IdentityHTTPS(HTTPSConnection):
+        def connect(self):
+            HTTPConnection.connect(self)
+            self.sock=self._context.wrap_socket(self.sock,server_hostname=server_name or self.host)
+    class IdentityHandler(HTTPSHandler):
+        def https_open(self,request):return self.do_open(IdentityHTTPS,request,context=ctx)
+    opener=build_opener(ProxyHandler({}),IdentityHandler(context=ctx),NoRedirect())
     return opener.open(Request(url,headers={'Accept':'application/x-ndjson'}),timeout=15)
 
 class Stream:
-    def __init__(self,url,private):
-        self.url=url;self.private=private;self.cv=threading.Condition();self.stop=threading.Event()
+    def __init__(self,url,private,server_name=None):
+        self.server_name=server_name;self.url=url;self.private=private;self.cv=threading.Condition();self.stop=threading.Event()
         self.history=deque(maxlen=120);self.version=0;self.viewers=0
         self.error='Connecting to collector';self.worker=threading.Thread(target=self.run,daemon=True)
     def start(self):self.worker.start()
@@ -48,7 +54,7 @@ class Stream:
         retry=1
         while not self.stop.is_set():
             try:
-                with connect(self.url,self.private) as response:
+                with connect(self.url,self.private,self.server_name) as response:
                     if response.headers.get_content_type()!='application/x-ndjson':raise ValueError('Unexpected collector response')
                     while not self.stop.is_set():
                         raw=response.readline(MAX_FRAME+1)
@@ -64,9 +70,9 @@ class Stream:
 
 class LiveMetrics:
     def __init__(self,private):
-        self.private=private;self.lock=threading.Lock();self.targets={};self.streams={}
+        self.private=private;self.lock=threading.Lock();self.targets={};self.identities={};self.streams={}
     def configure(self,records):
-        targets={}
+        targets={};identities={}
         for record in records:
             s=record['spec'];key=record['id'];cfg=s.get('resources',{}).get('metrics_stream',{})
             if s.get('lifecycle')!='active' or not cfg.get('enabled'):continue
@@ -74,11 +80,13 @@ class LiveMetrics:
                 endpoint=cfg.get('url','');url=urlsplit(endpoint)
                 if url.scheme!='https' or not url.hostname or url.username or url.password or url.path!='/stream' or url.query or url.fragment or not url.port:continue
             except ValueError:continue
-            targets[key]=endpoint
+            identity=cfg.get("server_name")
+            if identity is not None and (not isinstance(identity,str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}",identity)):continue
+            targets[key]=endpoint;identities[key]=identity
         with self.lock:
             for key,state in list(self.streams.items()):
-                if targets.get(key)!=self.targets.get(key):state.close();del self.streams[key]
-            self.targets=targets
+                if targets.get(key)!=self.targets.get(key) or identities.get(key)!=self.identities.get(key):state.close();del self.streams[key]
+            self.targets=targets;self.identities=identities
     def readings(self):
         with self.lock:
             result={key:{'status':'waiting'} for key in self.targets}
@@ -91,7 +99,7 @@ class LiveMetrics:
             if key not in self.targets:raise KeyError(key)
             state=self.streams.get(key)
             if state is None:
-                state=Stream(self.targets[key],self.private);self.streams[key]=state;state.start()
+                state=Stream(self.targets[key],self.private,self.identities.get(key));self.streams[key]=state;state.start()
                 LOG.info('Metrics upstream opened: %s',key)
             state.viewers+=1
         try:yield state

@@ -64,3 +64,28 @@ filesystem reservation. At phone width, rendered bar-height differences were
 cleanup. The fixture ran with a 384 MiB memory cap and 120-second maximum runtime;
 its temporary file was verified removed. Desktop and phone-width overflow checks
 passed. Idle variation also passed the original failing browser check after the fix.
+
+## Address-registration candidate (2026-10-11)
+
+Isolated Debian 13 VM, 2 vCPU / 2 GiB RAM; production services were not its runtime.
+The `tests/registration_e2e.py` fixture used real TLS certificates, a systemd
+collector, an actual dummy network interface changing from one IPv4 address to
+another, and a real constrained SSH export. This tests the address-change event;
+it does not claim a router DHCP lease-renewal or physical-host reboot test.
+
+Passed: machine-scoped registration, disallowed identities/networks, stale-presence
+handling, service endpoint and probe rebinding, unchanged public URLs, mTLS stream
+reconnection with an unchanged DNS identity, rejection of the wrong TLS identity,
+system-service restart without a user login, and backup export before and after
+address change using an unchanged SSH host key. Browser-SSH connection generation
+was unit-tested with stable key aliases; full Guacamole interaction across an IP
+change remains a rollout validation item.
+
+The final no-viewer interval measured 15.60 MiB RSS (0.790% of VM RAM). CPU accrued
+no measurable ticks in 60 seconds (below the counter resolution, not proof of zero
+CPU). These figures qualify this VM; verify actual fleet overhead after rollout.
+The separate address heartbeat runs regardless of viewers; resource streams do not.
+
+The candidate is not fleet deployment evidence. Production enrollment, dependent
+bindings, appliance discovery/reservations, boot verification, and configuration
+backup remain deployment requirements. Offline nodes cannot be marked complete.
