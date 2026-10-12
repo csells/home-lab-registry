@@ -37,6 +37,7 @@ type Disk struct {
 	MetadataPercent *float64 `json:"metadata_percent,omitempty"`
 }
 type Sample struct {
+	GPU         GPU      `json:"gpu"`
 	Status      string   `json:"status"`
 	Checked     float64  `json:"checked"`
 	Expires     float64  `json:"expires"`
@@ -49,12 +50,12 @@ type Sample struct {
 	Warnings    []string `json:"warnings,omitempty"`
 }
 type Config struct {
- Registration *RegistrationConfig `json:"registration,omitempty"`
-	Listen   string `json:"listen"`
-	Cert     string `json:"cert"`
-	Key      string `json:"key"`
-	ClientCA string `json:"client_ca"`
-	Paths    []struct {
+	Registration *RegistrationConfig `json:"registration,omitempty"`
+	Listen       string              `json:"listen"`
+	Cert         string              `json:"cert"`
+	Key          string              `json:"key"`
+	ClientCA     string              `json:"client_ca"`
+	Paths        []struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
 	} `json:"disks"`
@@ -164,6 +165,8 @@ func disks(cfg Config) ([]Disk, []string) {
 	return result, warnings
 }
 func collect(ctx context.Context, s *store, cfg Config) {
+	readGPU, closeGPU := newGPUReader()
+	defer closeGPU()
 	// Prime the CPU delta before emitting a first reading.
 	_, _ = cpu.Percent(0, false)
 	tick := time.NewTicker(5 * time.Second)
@@ -201,6 +204,7 @@ func collect(ctx context.Context, s *store, cfg Config) {
 				cachedDisks, diskWarnings = disks(cfg)
 				diskAt = time.Now()
 			}
+			x.GPU = readGPU(ctx)
 			x.Disks = cachedDisks
 			x.Warnings = append(x.Warnings, diskWarnings...)
 			s.add(x)
@@ -314,7 +318,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go collect(ctx, s, cfg)
- if cfg.Registration != nil { go registerMachine(ctx, *cfg.Registration) }
+	if cfg.Registration != nil {
+		go registerMachine(ctx, *cfg.Registration)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream", s.stream)
 	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {

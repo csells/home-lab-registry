@@ -53,7 +53,7 @@ function trend(history,value,label){
  for(const sample of history){const v=sample.status==='available'?value(sample):null;if(v==null||sample.checked<start||sample.checked>end)continue;const i=Math.min(29,Math.floor((sample.checked-start)/20));if(!buckets.has(i)||v>buckets.get(i).v)buckets.set(i,{v,sample})}
  // Keep CPU anchored at zero. Zoom RAM around its observed range; disk is capacity.
  const values=[...buckets.values()].map(x=>x.v);let low=0,high=100;
- if(values.length&&label==='CPU')high=Math.min(100,Math.max(10,Math.ceil(Math.max(...values)/10)*10));
+ if(values.length&&(label==='CPU'||label==='GPU'))high=Math.min(100,Math.max(10,Math.ceil(Math.max(...values)/10)*10));
  if(values.length&&label==='RAM'){low=Math.max(0,Math.floor(Math.min(...values)/5)*5);high=Math.min(100,Math.max(low+10,Math.ceil(Math.max(...values)/5)*5));low=Math.min(low,high-10)}
  svg.dataset.range=low+'–'+high+'%';svg.setAttribute('aria-label',label+' usage history: last 10 minutes, scale '+low+' to '+high+' percent');
  for(let i=0;i<30;i++){const entry=buckets.get(i),n=document.createElementNS(svg.namespaceURI,'rect');n.setAttribute('x',i*8);n.setAttribute('width',5);n.setAttribute('rx',1);const h=entry?Math.max(1,Math.min(1,Math.max(0,(entry.v-low)/(high-low)))*50):1;n.setAttribute('y',53-h);n.setAttribute('height',h);n.setAttribute('class',entry?'history-bar':'history-empty');const title=document.createElementNS(svg.namespaceURI,'title');title.textContent=entry?label+' '+entry.v.toFixed(1)+'% · '+new Date(entry.sample.checked*1000).toLocaleTimeString():'No sample';n.append(title);svg.append(n)}return svg;
@@ -78,9 +78,19 @@ function metricsPanel(r){
  const box=el('section','metrics-panel telemetry-strip'),m=liveReadings.get(r.id)||r.metrics||{},fresh=m.status==='available'&&(!m.expires||m.expires>now()),live=liveReadings.has(r.id)&&fresh;
  box.setAttribute('aria-label',r.host+' resource history');
  const disk=x=>{const ds=(x.disks||[]).filter(d=>d.total&&(!d.checked||x.checked-d.checked<=120));return ds.length?Math.max(...ds.map(d=>100*d.used/d.total)):null};
- const series=[['CPU',x=>x.cpu_percent],['RAM',x=>x.memory_total?100*x.memory_used/x.memory_total:null],['DISK',disk]];
+ const series=[['CPU',x=>x.cpu_percent],['RAM',x=>x.memory_total?100*x.memory_used/x.memory_total:null],['GPU',x=>x.gpu?.status==='available'&&Number.isFinite(x.gpu.percent)?x.gpu.percent:null],['DISK',disk]];
  const history=m.history||[],grid=el('div','telemetry-charts');
- for(const [label,value] of series){const cell=el('div','telemetry-cell '+label.toLowerCase()),head=el('div','telemetry-label');const current=fresh?value(m):null;head.append(el('span','',label),el('span','telemetry-value',current==null?'—':current.toFixed(1)+'%'));const chart=trend(history,value,label);cell.append(head,chart,el('div','telemetry-range',chart.dataset.range+' scale'));if(label==='DISK')cell.title='Most-used storage pool · '+(m.disks||[]).map(d=>d.name+': '+(100*d.used/d.total).toFixed(1)+'%').join(' · ');grid.append(cell)}
+ for(const [label,value] of series){const cell=el('div','telemetry-cell '+label.toLowerCase()),head=el('div','telemetry-label');const current=fresh?value(m):null;head.append(el('span','',label),el('span','telemetry-value',current==null?'—':current.toFixed(1)+'%'));const chart=trend(history,value,label);const wrap=el('div','telemetry-plot');wrap.append(chart);
+ if(label==='GPU'){
+  const state=fresh?m.gpu?.status:null;
+  cell.title=m.gpu?.note||'GPU monitoring requires an updated collector';
+  if(state!=='available'){
+   const absent=state==='not_applicable',overlay=el('div','telemetry-overlay',absent?'N/A':'Unavailable');
+   overlay.setAttribute('role','status');overlay.setAttribute('aria-label',absent?'GPU: no accelerator available':'GPU: utilization unavailable');
+   wrap.append(overlay);chart.setAttribute('aria-hidden','true');
+  }
+ }
+ cell.append(head,wrap,el('div','telemetry-range',label==='GPU'&&(!fresh||m.gpu?.status!=='available')?(fresh&&m.gpu?.status==='not_applicable'?'No GPU':'No reading'):chart.dataset.range+' scale'));if(label==='DISK')cell.title='Most-used storage pool · '+(m.disks||[]).map(d=>d.name+': '+(100*d.used/d.total).toFixed(1)+'%').join(' · ');grid.append(cell)}
  const caption=el('div','telemetry-caption');caption.append(el('span','telemetry-state'+(live?' is-live':''),live?'Live · '+new Date(m.checked*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):fresh?'Cached history':m.status==='waiting'?'Connecting stream':m.status==='unconfigured'?'Monitoring not configured':'Readings unavailable'),el('span','','10 min → now'));if(m.warnings?.length){caption.firstChild.textContent+=' · warning';caption.title=m.warnings.join('; ')}box.append(grid,caption);return box;
 }
 function backup(r){const b=r.config_backup||{},label=b.status==='scheduled'?'Scheduled':b.status==='manual'?'Manual copy':'Not recorded';const d=details(r.id+':backup','backup','Configuration backup · '+label);for(const l of b.locations||[])d.append(el('p','backup-location',l.host+' / '+l.path));if(!(b.locations||[]).length)d.append(el('p','','No configuration backup location recorded.'));if(b.notes)d.append(el('p','',b.notes));d.append(el('p','',r.health?.evidence||'No health evidence.'));const checked=el('p','','Last health check: ');if(r.health?.checked)checked.append(el('time','',new Date(r.health.checked*1000).toLocaleString()));else checked.append('Not recorded');d.append(checked);if(health(r)==='stale')d.append(el('p','','The last report expired. Current health is unverified.'));return d}
