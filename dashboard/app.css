@@ -27,3 +27,8 @@
 .telemetry-plot{position:relative}
 .telemetry-overlay{position:absolute;inset:0;display:grid;place-items:center;font-size:14px;font-weight:650;letter-spacing:.04em;color:#d5e5e4;background:rgba(16,43,43,.88);border-radius:4px}
 @media(max-width:600px){.telemetry-charts{gap:8px}.telemetry-label{letter-spacing:0}.telemetry-value{font-size:10px}.telemetry-overlay{font-size:10px}.telemetry-range{font-size:9px}}
+/* Keep all inventory views usable on a phone. */
+nav{flex-wrap:wrap;column-gap:20px;row-gap:0}.badge.stopped{background:#edf0ee;color:#526362}
+@media(max-width:540px){nav{column-gap:14px}nav button{font-size:15px}}
+
+@media(max-width:540px){.machine-card .card-head{flex-wrap:wrap}.machine-card .identity{min-width:190px}.machine-card .health-block{margin-left:auto}.machine-card .identity h3{overflow-wrap:normal}}

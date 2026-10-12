@@ -66,3 +66,21 @@ node --check dashboard/app.js
 ```
 
 Browser qualification should include real clipboard comparison without printing values, real terminal commands, phone-width layouts, live sampling, anonymous/cross-origin rejection and stale/failure states. Desktop emulation does not prove physical mobile keyboard behavior.
+
+### Dashboard inventory categories
+
+`spec.resources.kind` distinguishes `machine`, `virtual-machine`, `container`,
+`backup-job`, and `historical-evidence`. Backup jobs appear in **Backups**; guest
+and physical machine records appear in **Machines**; archives and retired records
+are excluded. Other records appear in **Services**. These are catalog counts,
+not counts of running processes.
+
+Set a service's `resources.machine_id` to its actual guest record when hosted in
+a VM. Without that relationship the dashboard groups it under its physical host.
+`resources.runtime = {"state": "stopped", "checked": <Unix timestamp>}` records
+an observed stop. The dashboard labels it **Stopped · recorded**, shows the
+observation age, and hides live charts. Legacy `resources.state` values beginning
+with `stopped` also display as recorded stops. This is last-known state, not an
+inferred live power check; provisioning and monitoring must update the registry
+when the environment changes. A healthy service probe does not prove process or
+machine runtime state.

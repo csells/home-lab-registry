@@ -6,7 +6,7 @@ from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
 from access import credential
 from guac import launch
-BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'error':'Loading registry','fetched_at':None};LIVE=None
+BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None
 def reconcile():
     global STATE
     cfg=json.loads((PRIVATE/'reader.json').read_text())
@@ -67,7 +67,7 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:self.send_error(404)
             except (BrokenPipeError,ConnectionResetError,TimeoutError):pass
             return
-        elif path in ['/api/inventory','/api/machines','/api/services']:
+        elif path in ['/api/inventory','/api/machines','/api/services','/api/backups']:
             with LOCK:data=dict(STATE)
             data['server_time']=time.time()
             if path!='/api/inventory':key=path.rsplit('/',1)[1];data={key:data[key],'error':data['error'],'fetched_at':data['fetched_at']}
