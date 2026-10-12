@@ -6,6 +6,8 @@ The registry is the sole source of information about available machines and thei
 
 Resolve the registry URL, TLS CA and credentials from private `~/.config/home-lab/registry.json`, `LAB_REGISTRY_CONFIG`, or the client's `--config PATH`. The private config contains `url`, `ca_file`, `reader_token` and optionally `writer_token`. Protect it with mode 0600. Give consumers reader access only; never print tokens or put secrets in catalog records, command arguments or Git. Do not hardcode a registry host/address in this skill.
 
+Direct API requests must send `User-Agent: HomeLabRegistry/1` along with the bearer credential. The public access layer can reject Python’s default User-Agent with HTTP 403 / Cloudflare error 1010 before the registry sees the request. This is distinct from the registry’s 403 `Write credential required`, which requires a writer credential. Do not disable TLS verification or remove authentication to work around either error.
+
 Resolve the installed skill directory and invoke its `scripts/registry.py` client. Examples below use `registry.py` as shorthand for that resolved command:
 
 ```sh

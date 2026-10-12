@@ -4,7 +4,7 @@ import argparse, json, os, pathlib, ssl, sys, urllib.request, urllib.error, urll
 
 def request(config,method,path,body=None,revision=None):
     token=config['reader_token'] if method=='GET' else config['writer_token']
-    headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+    headers={'Authorization':'Bearer '+token,'Content-Type':'application/json','User-Agent':'HomeLabRegistry/1'}
     if revision is not None: headers['If-Match']=str(revision)
     context=ssl.create_default_context(cafile=os.path.expanduser(config['ca_file']))
     req=urllib.request.Request(config['url'].rstrip('/')+path,headers=headers,method=method,data=None if body is None else json.dumps(body).encode())
