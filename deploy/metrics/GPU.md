@@ -11,8 +11,10 @@ The `gpu` object has `status`, nullable `percent`, and a short `note`:
 - `unavailable`: detection/counter failure, unsupported driver, missing privileges,
   or an older collector with no GPU field. Show Unavailable, never invented zero or N/A.
 
-GPU passthrough must be visible in the guest to count as that guest's GPU. A
-virtual display adapter alone (QXL/Bochs/simple framebuffer) does not count.
+A GPU must be exposed to the guest to provide utilization. A virtual display
+adapter alone (QXL/Bochs/simple framebuffer) does not count. In an explicitly
+authorized LXC sharing a render device, GPU utilization is host-wide; CPU, RAM
+and disk readings remain container-scoped. Label this distinction in staging.
 
 ## Sources and permissions
 
@@ -47,10 +49,34 @@ References: [AMD sysfs](https://kernel.org/doc/html/latest/gpu/amdgpu/thermal.ht
 - Disposable Linux VM: actual collector -> mTLS stream -> dashboard -> rendered
   mobile card passed. Four charts, advancing samples and N/A for the guest with
   no GPU. Fixture readings are not presented as measurements of a physical GPU.
+- An approved disposable unprivileged LXC sharing an AMD render node passed a
+  real headless rendering test: utilization rose from 0% to 87–95%, then returned
+  to 0%. The host remained reachable. The actual collector -> mTLS -> dashboard
+  VM -> Chromium flow passed at 393px and 1440px, including cached load history.
+- A one-minute idle measurement of that collector used 0.022% of one CPU core
+  and 9.44 MiB of memory. This is a measured idle case, not an overhead guarantee
+  across hardware, platforms or workloads.
 - Apple parser was exercised against captured real IOAccelerator output; Intel
   PMU event/type/unit availability and AMD sysfs availability were observed on
   the lab hosts. The candidate collectors have NOT been run on those physical
-  hosts yet. Hardware-specific overhead and under-load validation remain pending.
+  hosts yet. Native macOS and Intel PMU under-load validation remain pending.
 
 No production promotion has occurred. GPU collection on Windows/NVIDIA is not
 implemented. Do not claim the <1% overhead target until hardware measurements pass.
+
+## Repeatable bounded GPU load
+
+On an authorized disposable Linux GPU test environment with Mesa EGL/GLES2
+development packages and access to its render device:
+
+```sh
+cc -O2 tests/gpu_load.c -lEGL -lGLESv2 -o /tmp/gpu-load
+timeout --kill-after=3 30 /tmp/gpu-load 20
+```
+
+The test rejects Mesa software renderers and runs for at most 60 seconds
+(default 20). Observe utilization before, during and after the load through the
+actual dashboard stream. Preserve output and verify host reachability. Do not
+reattempt failed PCI passthrough merely to run this test; a shared render device
+in an explicitly approved disposable LXC is an alternative with different
+isolation and measurement scope.
