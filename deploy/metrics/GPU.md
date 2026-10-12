@@ -40,7 +40,17 @@ References: [AMD sysfs](https://kernel.org/doc/html/latest/gpu/amdgpu/thermal.ht
 
 ## Candidate validation
 
-Pending disposable-VM runtime and rendered-browser checks. Lab hosts became
-unreachable during development; no fleet deployment or production promotion has
-occurred. Do not interpret the presence of this document as a passing validation.
-Hardware-specific CPU/RAM overhead must be measured before claiming the <1% target.
+- CI passed Go race tests, Linux build tests, Apple Silicon cross-build,
+  registry/dashboard regressions, and actual Chromium rendering at393px/1440px.
+- Browser fixtures verified changing GPU bars, genuine0%, N/A, failed counters,
+  and backward compatibility with collectors that omit GPU data.
+- Disposable Linux VM: actual collector -> mTLS stream -> dashboard -> rendered
+  mobile card passed. Four charts, advancing samples and N/A for the guest with
+  no GPU. Fixture readings are not presented as measurements of a physical GPU.
+- Apple parser was exercised against captured real IOAccelerator output; Intel
+  PMU event/type/unit availability and AMD sysfs availability were observed on
+  the lab hosts. The candidate collectors have NOT been run on those physical
+  hosts yet. Hardware-specific overhead and under-load validation remain pending.
+
+No production promotion has occurred. GPU collection on Windows/NVIDIA is not
+implemented. Do not claim the <1% overhead target until hardware measurements pass.
