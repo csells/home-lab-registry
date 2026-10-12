@@ -36,6 +36,12 @@ Use existing shared services only when the operator has authorized their use for
 
 Discover endpoints, supported authentication, capacity and reservations through the registry. Follow the service's lease or concurrency protocol, keep test work identifiable, export evidence, remove test credentials from disposable guests, and release reservations when finished. Leave shared services running. Provision a separate dependency only when the test needs a modified version or the shared service cannot support the test safely or within available capacity.
 
+## Promotion includes staging cleanup
+
+Approval to promote a staged service to stable also authorizes and requires cleanup of that service's disposable staging environment, without a separate confirmation. After verifying the promoted production service end to end and preserving needed source, evidence and recoverable rollback/configuration backups outside staging, stop and permanently delete the staging service, its dedicated VM or container and disks, temporary credentials, relays, shares and routes. Release reservations, retire registry records and verify that allocated resources were returned to the pool. A stopped VM still consumes disk; stopping alone is not completed cleanup.
+
+Recheck the exact host, guest identity and task ownership before deletion. Preserve shared dependencies, templates, unrelated environments and user data. If a concrete dependency or an explicit retention instruction prevents cleanup, record the reason, owner and expiry in the registry and finish all independent cleanup. Do not retain staging merely as an extra rollback copy when the required recovery artifacts are already preserved.
+
 ## Service configuration backups
 
 For persistent-service deployment, migration, configuration changes or retirement, follow the [backup SOP](references/backups.md). Google Drive is the sole retained backup destination. Use the registered central backup service for scheduling, encrypted versioned storage and restore verification; do not create independent machine timers or another retained backup destination. Discover destinations and record actual coverage through the registry; a backup policy is not evidence that a service has a working backup.
