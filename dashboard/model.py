@@ -30,6 +30,6 @@ def inventory(records,metrics):
             item.update(kind='backup',machine_id=res.get('machine_id') or names.get(item['host']))
             backups.append(item)
         else:
-            item.update(kind='service',machine_id=res.get('machine_id') or names.get(item['host']),deployment=r['spec'].get('deployment',''))
+            item.update(access=public_access(r),kind='service',machine_id=res.get('machine_id') or names.get(item['host']),deployment=r['spec'].get('deployment',''))
             services.append(item)
     return {'machines':machines,'services':services,'backups':backups}
