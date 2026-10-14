@@ -24,12 +24,16 @@ and disk readings remain container-scoped. Label this distinction in staging.
   render, copy and video engines are included. Uses the busiest engine rather
   than summing overlapping engines. Access depends on the kernel's perf policy;
   root/CAP_PERFMON may be required. Do not weaken global perf policy to hide an error.
+- Linux NVIDIA: persistent NVML library calls (`libnvidia-ml.so.1`) read the
+  busiest accessible GPU. Install the matching NVIDIA driver/userspace library;
+  no CUDA toolkit or per-sample `nvidia-smi` process is required. Initialization
+  failures retry every 30 seconds and remain Unavailable until successful.
 - macOS: bounded, two-second-timeout `ioreg` inspection of IOAccelerator device
   utilization. Uses the maximum reported device percentage. This property is an
   observed Apple-driver interface, not a promised stable public API; missing
   statistics explicitly show Unavailable.
 - Other drivers/platforms: explicit Unavailable until implemented and verified.
-  NVIDIA/Windows monitoring is not implemented in this candidate.
+  Windows monitoring is not implemented.
 
 These are vendor utilization measures, not a cross-vendor benchmark. GPU memory
 is not included. Linux descriptors stay open until collector exit; hardware or
@@ -61,8 +65,10 @@ References: [AMD sysfs](https://kernel.org/doc/html/latest/gpu/amdgpu/thermal.ht
   the lab hosts. The candidate collectors have NOT been run on those physical
   hosts yet. Native macOS and Intel PMU under-load validation remain pending.
 
-No production promotion has occurred. GPU collection on Windows/NVIDIA is not
-implemented. Do not claim the <1% overhead target until hardware measurements pass.
+The earlier validation above describes the original GPU release. Linux NVIDIA
+support was added subsequently and validated with real CUDA load, idle recovery,
+and the authenticated dashboard stream. Windows GPU collection remains
+unimplemented. Measure overhead on the actual target before claiming the <1% target.
 
 ## Repeatable bounded GPU load
 

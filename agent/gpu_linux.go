@@ -46,6 +46,10 @@ func newGPUReader() (func(context.Context) GPU, func()) {
 	cards, _ := filepath.Glob("/sys/class/drm/card*")
 	physical := 0
 	intel := false
+	nvidia := false
+	if _, err := os.Stat("/dev/nvidiactl"); err == nil {
+		nvidia = true
+	}
 	for _, card := range cards {
 		if !cardName.MatchString(filepath.Base(card)) {
 			continue
@@ -58,6 +62,8 @@ func newGPUReader() (func(context.Context) GPU, func()) {
 		physical++
 		if driver == "amdgpu" {
 			paths = append(paths, card+"/device/gpu_busy_percent")
+		} else if driver == "nvidia" {
+			nvidia = true
 		} else if driver == "i915" {
 			intel = true
 		} else {
@@ -106,23 +112,44 @@ func newGPUReader() (func(context.Context) GPU, func()) {
 					continue
 				}
 				physical++
+				if readText(filepath.Dir(p)+"/vendor") == "0x10de" {
+					nvidia = true
+					continue
+				}
 				problems = append(problems, "Display hardware detected without supported GPU counters")
 			}
 		}
 	}
+	var nvidiaRead func() GPU
+	var nvidiaClose func()
+	if nvidia {
+		nvidiaRead, nvidiaClose = newNVMLReader()
+	}
 	close := func() {
+		if nvidiaClose != nil {
+			nvidiaClose()
+		}
 		for _, e := range engines {
 			unix.Close(e.fd)
 		}
 	}
 	return func(context.Context) GPU {
-		if physical == 0 {
+		if physical == 0 && !nvidia {
 			return GPU{Status: "not_applicable", Note: "No GPU accelerator exposed by this OS"}
 		}
 		if len(problems) > 0 {
 			return GPU{Status: "unavailable", Note: problems[0]}
 		}
 		max := -1.0
+		note := ""
+		if nvidiaRead != nil {
+			g := nvidiaRead()
+			if g.Status != "available" {
+				return g
+			}
+			max = *g.Percent
+			note = "; " + g.Note
+		}
 		for _, p := range paths {
 			raw, e := os.ReadFile(p)
 			if e != nil {
@@ -148,6 +175,9 @@ func newGPUReader() (func(context.Context) GPU, func()) {
 		if max < 0 {
 			return GPU{Status: "unavailable", Note: "GPU utilization unavailable"}
 		}
-		return gpuValue(max, fmt.Sprintf("Busiest GPU engine/device (%d measured)", len(paths)+len(engines)))
+		if len(paths)+len(engines) == 0 && nvidiaRead != nil {
+			return gpuValue(max, strings.TrimPrefix(note, "; "))
+		}
+		return gpuValue(max, fmt.Sprintf("Busiest GPU engine/device (%d measured)", len(paths)+len(engines))+note)
 	}, close
 }
