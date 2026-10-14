@@ -1,6 +1,33 @@
 # Home Lab Registry
 
-A small, self-hosted machine and service catalog with an authenticated dashboard. Machines and services have separate views. Machine cards put compact CPU, RAM and disk history bars above browser SSH, hypervisor, KVM and AMT access. Device and host-console credentials are separate; copy confirmation stays inside the button. Services show health freshness, placement and configuration-backup locations.
+A small, self-hosted machine and service catalog with an authenticated dashboard. Machines and services have separate views. Machine cards put compact CPU, RAM, GPU and disk history bars above browser SSH, hypervisor, KVM and AMT access. Device and host-console credentials are separate; copy confirmation stays inside the button. Services show health freshness, placement and configuration-backup locations.
+
+## Screenshots
+
+Captured from the running dashboard. Usernames, network addresses and identifying
+configuration details are covered with opaque redactions. Health and resource
+readings reflect the time of capture.
+
+### Machines
+
+Live resource history and browser-based access on one card.
+
+![Machine card with CPU, RAM, GPU and disk history, plus redacted login details](docs/screenshots/machine-detail.png)
+
+[View the Machines overview](docs/screenshots/machines-overview.png).
+
+### Services
+
+Service health, endpoints, configuration backups and optional login credentials.
+
+<img src="docs/screenshots/home-assistant-mobile.png" alt="Home Assistant service card on mobile with a redacted username and Copy password button" width="360">
+
+<details>
+<summary>View the full Services dashboard</summary>
+
+![Services dashboard with health, placement, endpoints and backup status; sensitive details redacted](docs/screenshots/services-overview.png)
+
+</details>
 
 ## Components
 
@@ -11,7 +38,7 @@ A small, self-hosted machine and service catalog with an authenticated dashboard
 - `deploy/guacamole/`: pinned official containers and an example authenticated proxy.
 - `skills/home-lab/`: portable copy of the operating skill, including registry discovery, Proxmox/community-script practices and backup procedures. Inventory belongs in the registry, never in the skill.
 
-This repository contains source and examples only: no real catalog, machine identities, addresses, credentials, private keys, certificates, screenshots or operational backup archives.
+This repository contains source, examples and the redacted screenshots above. Private catalog exports, network addresses, credentials, private keys, certificates and operational backup archives are not included.
 
 ## Deployment
 
@@ -29,7 +56,7 @@ Dashboard `private/` files (never committed):
 | `stream-client.pem`, `stream-client-key.pem` | Dashboard client identity for mutually authenticated agent streams |
 | `terminal_key`, `guacamole_known_hosts` | Dedicated interactive SSH key and verified host pins |
 | `guacamole-key` | Same signing key as private Guacamole `.env` |
-| `machine-passwords.json` | Map of machine IDs to login IDs and passwords |
+| `machine-passwords.json` | Map of machine or service IDs to login IDs and passwords |
 
 Install and qualify collectors using [the metrics deployment guide](deploy/metrics/README.md). Agent endpoints are discovered from machine records, never a second static host list. The browser never receives agent keys or certificates.
 
