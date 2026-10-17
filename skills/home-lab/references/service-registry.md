@@ -6,6 +6,12 @@ The registry is the sole source of information about available machines and thei
 
 Resolve the registry URL, TLS CA and credentials from private `~/.config/home-lab/registry.json`, `LAB_REGISTRY_CONFIG`, or the client's `--config PATH`. The private config contains `url`, `ca_file`, `reader_token` and optionally `writer_token`. Protect it with mode 0600. Give consumers reader access only; never print tokens or put secrets in catalog records, command arguments or Git. Do not hardcode a registry host/address in this skill.
 
+The client requires Python 3 and curl. It reads credentials privately and sends curl configuration through stdin; credentials are not placed in command arguments or temporary files. Keep the sandbox proxy enabled and allow only the registry hostname reported by its network denial. A denied hostname, HTTP authorization error and interrupted response are different failures.
+
+The curl transport avoids an upstream sandbox CONNECT-proxy tail-loss bug triggered by urllib's connection-close behavior ([upstream issue](https://github.com/anthropics/sandbox-runtime/issues/606)). It verifies TLS, refuses redirects, validates the complete JSON response and retries transient GET failures at most twice. Writes are never automatically replayed: after an ambiguous write failure, fetch the record and compare its revision/state before deciding what remains necessary. Do not extract tokens manually or disable TLS/sandbox restrictions to troubleshoot.
+
+If an agent tool truncates *displayed output* while the client exits successfully, save stdout to a task-owned file and select the required JSON fields. An `IncompleteRead`, curl transfer error, nonzero exit or empty file is an actual fetch failure, not display truncation. Preserve stderr and report the failing path; repeating a deterministic failure indefinitely is not recovery.
+
 Direct API requests must send `User-Agent: HomeLabRegistry/1` along with the bearer credential. The public access layer can reject Python’s default User-Agent with HTTP 403 / Cloudflare error 1010 before the registry sees the request. This is distinct from the registry’s 403 `Write credential required`, which requires a writer credential. Do not disable TLS verification or remove authentication to work around either error.
 
 Resolve the installed skill directory and invoke its `scripts/registry.py` client. Examples below use `registry.py` as shorthand for that resolved command:

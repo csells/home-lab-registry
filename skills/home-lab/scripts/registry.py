@@ -2,13 +2,64 @@
 """Home-lab registry client. Credentials are read from a private config, never CLI arguments."""
 import argparse, json, os, pathlib, ssl, sys, urllib.request, urllib.error, urllib.parse
 
-def request(config,method,path,body=None,revision=None):
-    token=config['reader_token'] if method=='GET' else config['writer_token']
-    headers={'Authorization':'Bearer '+token,'Content-Type':'application/json','User-Agent':'HomeLabRegistry/1'}
-    if revision is not None: headers['If-Match']=str(revision)
-    context=ssl.create_default_context(cafile=os.path.expanduser(config['ca_file']))
-    req=urllib.request.Request(config['url'].rstrip('/')+path,headers=headers,method=method,data=None if body is None else json.dumps(body).encode())
-    with urllib.request.urlopen(req,context=context,timeout=15) as r: return json.load(r)
+class RegistryTransportError(RuntimeError):
+    """A complete authenticated registry response could not be obtained."""
+
+
+def _curl_value(value):
+    # curl config quoting; secrets travel on stdin, never argv or a temp file.
+    return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t') + '"'
+
+
+def request(config, method, path, body=None, revision=None):
+    import subprocess
+    import time
+    token = config['reader_token'] if method == 'GET' else config['writer_token']
+    url = config['url'].rstrip('/') + path
+    if urllib.parse.urlsplit(url).scheme != 'https':
+        raise RegistryTransportError('Registry URL must use HTTPS')
+    headers = ['Authorization: Bearer ' + token, 'Content-Type: application/json',
+               'User-Agent: HomeLabRegistry/1']
+    if revision is not None:
+        headers.append('If-Match: ' + str(revision))
+    options = [('url', url), ('cacert', os.path.expanduser(config['ca_file'])),
+               ('request', method)] + [('header', h) for h in headers]
+    if body is not None:
+        options.append(('data-binary', json.dumps(body)))
+    curl_config = ''.join(key + ' = ' + _curl_value(value) + '\n' for key, value in options)
+    # Keep the sandbox proxy environment intact. Do not follow redirects with a token.
+    command = ['curl', '--disable', '--silent', '--show-error', '--proto', '=https',
+               '--connect-timeout', '10', '--max-time', '15', '--config', '-',
+               '--write-out', '\n%{http_code}']
+    attempts = 3 if method == 'GET' else 1
+    for attempt in range(attempts):
+        try:
+            result = subprocess.run(command, input=curl_config.encode(), capture_output=True, timeout=20)
+        except FileNotFoundError:
+            raise RegistryTransportError('Registry client requires curl on PATH') from None
+        except subprocess.TimeoutExpired:
+            raise RegistryTransportError('Registry request timed out; no complete response accepted') from None
+        if result.returncode:
+            # Retry only reads; a failed write may already have reached the server.
+            if result.returncode in (18, 28, 52, 56) and attempt + 1 < attempts:
+                print('Registry transport interrupted; retrying read (%d/%d)' % (attempt + 2, attempts), file=sys.stderr)
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            detail = result.stderr.decode(errors='replace').replace(token, '[REDACTED]').strip()
+            raise RegistryTransportError('Registry transport failed (curl %d): %s; no partial response accepted' % (result.returncode, detail))
+        try:
+            data, status = result.stdout.rsplit(b'\n', 1)
+            code = int(status)
+        except (ValueError, TypeError):
+            raise RegistryTransportError('Registry transport returned no HTTP status') from None
+        if not 200 <= code < 300:
+            # Never echo arbitrary response bodies, which could reflect credentials.
+            raise RegistryTransportError('Registry HTTP %d; redirects are not followed; verify endpoint and access permissions' % code)
+        try:
+            return json.loads(data)
+        except (ValueError, UnicodeError):
+            raise RegistryTransportError('Registry response was not complete valid JSON') from None
+
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -44,4 +95,4 @@ def main():
 if __name__=='__main__':
     try: main()
     except urllib.error.HTTPError as e: print('Registry HTTP '+str(e.code)+': '+e.read().decode(),file=sys.stderr); sys.exit(1)
-    except (OSError,ValueError,KeyError) as e: print(str(e),file=sys.stderr); sys.exit(1)
+    except (OSError,ValueError,KeyError,RegistryTransportError) as e: print(str(e),file=sys.stderr); sys.exit(1)
