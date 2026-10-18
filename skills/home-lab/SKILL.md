@@ -54,6 +54,14 @@ Investigate each warning for impact, urgency and the vendor's recommended remedy
 
 Record actionable warnings in the affected registry record with evidence, affected components, deadline when known, remediation, owner and next check. If blocked by credentials, consent or a consequential user decision, request the specific missing input promptly and continue independent work. Any deferral needs a concrete reason and follow-up date before the risk materializes; a confirmed benign warning needs its rationale recorded. Report unresolved risks separately from current availability, and close them only after verification. Keep this live tracking in the registry, never in the skill.
 
+## LAN IPv4 authority
+
+Eero is the sole authority for home-LAN IPv4 allocation. Prefer DHCP, with an eero reservation when a stable endpoint is needed. A static address is permitted only when eero has reserved that exact address for the interface's own MAC. A remembered lease, a reachable address or an eero device's seen-address list is not a reservation. Never convert a DHCP lease to static without verifying its reservation first. Apply this to hosts, VMs, LXCs, aliases, KVMs and AMT; distinguish isolated NAT, Docker, VPN and loopback networks from the household LAN.
+
+Before provisioning or changing networking, read live eero devices/reservations using the eero skill, check for another owner, and verify an independent console recovery path. Read back every reservation change. Inspect persistent and live configuration, including pending Proxmox network files; update consumers, host-key aliases and TLS identities when an endpoint moves. Verify after a network reload or reboot without disrupting unrelated work. Never reclaim another device's lease or alter that device to accommodate a lab host.
+
+Include this comparison in recurring fleet health and after network changes. Inspect guest configuration as well as hypervisor metadata. Record each machine's MAC, all LAN addresses, assignment method, reservation name, timestamp and evidence in the registry; read the records back. Warn on unreserved static addresses, duplicate claims, stale reservations and incomplete coverage. Offline or inaccessible systems remain explicitly unverified. Resolve active conflicts first, retain incident evidence, and verify the old address no longer resolves to the offending MAC from another LAN host. Keep audit schedules, outcomes and exceptions in the registry, not this skill.
+
 ## Changes and verification
 
 Apply the current conversation's authorization to its identified machines. An authorization to repave one host does not authorize erasing the other hosts or migrating live services. Preserve an already-authorized action across turns rather than asking again.
