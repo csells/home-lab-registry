@@ -94,3 +94,21 @@ def collect_appliance(target,private,credentials):
     except Exception as exc:
         logging.exception('Appliance read failed: %s',target['id'])
         return [{'machine':target['id'],'status':'unverified','reason':'Appliance settings read failed: '+type(exc).__name__}]
+
+
+def collect_via_ssh(target, private, credentials, gateway):
+    """Read AMT from a different physical NIC when the host cannot reach its own ME."""
+    import subprocess
+    from network_audit import ssh_command
+    if target['type'] != 'amt':raise ValueError('SSH appliance reader supports AMT only')
+    source=pathlib.Path(__file__).read_text()
+    script=source+'\nprint(json.dumps(collect_appliance('+repr(target)+', pathlib.Path("."), '+repr(credentials)+')))\n'
+    try:
+        p=subprocess.run(ssh_command(gateway,private)+['python3 -'],input=script.encode(),capture_output=True,timeout=90)
+        if p.returncode:raise RuntimeError('Remote appliance reader failed')
+        rows=json.loads(p.stdout)
+        for row in rows:row['vantage']=gateway['id']
+        return rows
+    except Exception:
+        logging.exception('Remote appliance read failed: %s',target['id'])
+        return [{'machine':target['id'],'status':'unverified','reason':'Authenticated appliance read vantage unavailable'}]

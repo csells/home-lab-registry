@@ -67,3 +67,9 @@ minutes. Observations expire after fifteen minutes; inaccessible or missing gues
 become unknown rather than retaining an old power state. Guest power state does
 not override application service health. This lightweight check does not run the
 IP audit and never starts an inference session. The full audit remains click-only.
+
+AMT may be unreachable from a VM on the same physical NIC as its management
+engine. An AMT adapter can set `via_machine` to a configured, pinned SSH target
+on another physical host. The read-only AMT request then runs there, with its
+credentials sent over SSH stdin (never command arguments or a remote file).
+Results record the vantage, and failure remains unverified.

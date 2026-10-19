@@ -92,3 +92,20 @@ class CertificatePinTests(unittest.TestCase):
   with patch('http.client.HTTPSConnection.connect'):
    with self.assertRaises(ssl.SSLCertVerificationError):connection.connect()
   connection.close.assert_called_once()
+
+class RemoteApplianceTests(unittest.TestCase):
+ def test_credentials_travel_on_stdin_not_process_arguments(self):
+  from appliance_network import collect_via_ssh
+  from unittest.mock import Mock
+  with patch('network_audit.ssh_command',return_value=['ssh','reader@host']),patch('subprocess.run',return_value=Mock(returncode=0,stdout=b'[{"machine":"host/amt","assignment":"dhcp"}]')) as run:
+   rows=collect_via_ssh({'id':'host/amt','type':'amt'},pathlib.Path('/private'),{'password':'test-secret'},{'id':'gateway'})
+  args=run.call_args
+  self.assertNotIn('test-secret',' '.join(args.args[0]))
+  self.assertIn(b'test-secret',args.kwargs['input'])
+  self.assertEqual(rows[0]['vantage'],'gateway')
+ def test_remote_failure_stays_unverified(self):
+  from appliance_network import collect_via_ssh
+  from unittest.mock import Mock
+  with patch('network_audit.ssh_command',return_value=['ssh','host']),patch('subprocess.run',return_value=Mock(returncode=1)),self.assertLogs(level='ERROR'):
+   rows=collect_via_ssh({'id':'host/amt','type':'amt'},pathlib.Path('/private'),{}, {'id':'gateway'})
+  self.assertEqual(rows[0]['status'],'unverified')

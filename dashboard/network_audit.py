@@ -142,7 +142,7 @@ class NetworkAudit:
                 for kind in ('kvm', 'amt'):
                     if kind in audit:
                         rows.append({'machine': record['id'] + '/' + kind, 'reason': 'Appliance configuration not refreshed by this collector; last recorded audit: ' + str(audit[kind].get('at', audit.get('at', 'unknown'))) if isinstance(audit[kind], dict) else 'Appliance configuration not freshly verified', 'status': 'unverified'})
-            from appliance_network import collect_appliance
+            from appliance_network import collect_appliance,collect_via_ssh
             appliance_credentials=json.loads((self.private/'appliance-credentials.json').read_text())
             for target in cfg.get('appliances',[]):
                 machine,kind=target['id'].rsplit('/',1)
@@ -153,7 +153,10 @@ class NetworkAudit:
                 if not endpoint:raise ValueError('Appliance endpoint missing from registry')
                 target['url']=endpoint
                 rows=[r for r in rows if r['machine']!=target['id']]
-                rows.extend(collect_appliance(target,self.private,appliance_credentials[target['id']]))
+                if target.get('via_machine'):
+                    gateway=next(t for t in cfg['targets'] if t['id']==target['via_machine'])
+                    rows.extend(collect_via_ssh(target,self.private,appliance_credentials[target['id']],gateway))
+                else:rows.extend(collect_appliance(target,self.private,appliance_credentials[target['id']]))
             result = compare(rows, reservations, cfg['lan_cidrs'])
             result=list({json.dumps(row,sort_keys=True):row for row in result}.values())
             violations = sum(r['status'] == 'violation' for r in result)
