@@ -34,3 +34,7 @@ nav{flex-wrap:wrap;column-gap:20px;row-gap:0}.badge.stopped{background:#edf0ee;c
 @media(max-width:540px){.machine-card .card-head{flex-wrap:wrap}.machine-card .identity{min-width:190px}.machine-card .health-block{margin-left:auto}.machine-card .identity h3{overflow-wrap:normal}}
 
 .service-card .username-value{font-size:20px;line-height:1.4}
+
+.network-audit{margin:1rem 0 2rem;padding:1.25rem;border:1px solid var(--border,#cad6d1);border-radius:12px}.audit-details{margin:.75rem 0}.audit-row{display:grid;gap:.25rem;overflow-wrap:anywhere;padding:.6rem 0;border-bottom:1px solid #cad6d1}.network-audit summary{cursor:pointer;font-weight:600}
+
+.network-audit p{margin:.75rem 0;line-height:1.5}.network-audit small{opacity:.8}

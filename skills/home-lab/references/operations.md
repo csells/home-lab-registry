@@ -16,7 +16,7 @@ For authorized OS installation, use official images with verified checksums, con
 
 Read [deployment practices](proxmox-deployments.md) before provisioning applications. Prefer the maintained community recipe that fits the vendor's supported model. Keep the hypervisor focused on host duties.
 
-Verify virtualization, CPU/RAM, disk health and capacity, networking, hostname/time, repository compatibility, storage, authenticated administration and reboot recovery. Use reserved addressing or explicitly record temporary arrangements. Choose storage for the actual disk count and network; do not add distributed storage or clustering without a demonstrated requirement. Follow the [backup SOP](backups.md).
+Verify virtualization, CPU/RAM, disk health and capacity, networking, hostname/time, repository compatibility, storage, authenticated administration and reboot recovery. Use DHCP, or first verify and read back an eero reservation for the exact static address and interface MAC. Temporary installations, aliases and staging have no exemption. Choose storage for the actual disk count and network; do not add distributed storage or clustering without a demonstrated requirement. Follow the [backup SOP](backups.md).
 
 ## Disposable test environments
 

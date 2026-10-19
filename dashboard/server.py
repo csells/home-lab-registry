@@ -6,7 +6,8 @@ from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
 from access import credential
 from guac import launch
-BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None
+from network_audit import NetworkAudit
+BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;AUDIT=NetworkAudit(PRIVATE)
 def reconcile():
     global STATE
     cfg=json.loads((PRIVATE/'reader.json').read_text())
@@ -25,8 +26,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(401);return
         # Reject cross-origin requests and form submissions before reading any secret.
         allowed=json.loads((PRIVATE/'origins.json').read_text())
-        if self.headers.get('Origin') not in allowed or self.headers.get('X-Lab-Action')!='copy-password' or self.headers.get('Content-Type')!='application/json':
+        action={'/api/network-audit':'network-audit','/api/copy-password':'copy-password'}.get(self.path)
+        if not action or self.headers.get('Origin') not in allowed or self.headers.get('X-Lab-Action')!=action or self.headers.get('Content-Type')!='application/json':
             self.send_error(403);return
+        if self.path=='/api/network-audit':
+            raw=json.dumps(AUDIT.start()).encode();self.send_response(202);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/api/copy-password':self.send_error(404);return
         try:
             length=int(self.headers.get('Content-Length','0'))
@@ -67,6 +71,8 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:self.send_error(404)
             except (BrokenPipeError,ConnectionResetError,TimeoutError):pass
             return
+        elif path=='/api/network-audit':
+            raw=json.dumps(AUDIT.snapshot()).encode();kind='application/json'
         elif path in ['/api/inventory','/api/machines','/api/services','/api/backups']:
             with LOCK:data=dict(STATE)
             data['server_time']=time.time()

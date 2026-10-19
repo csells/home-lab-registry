@@ -112,3 +112,19 @@ function render(){
 }
 async function refresh(){if(busy||document.hidden)return;busy=true;$('refresh').disabled=true;try{const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});if(!response.ok)throw Error('failed');data=await response.json();if(data.server_time)offset=data.server_time-Date.now()/1000;$('error').hidden=!data.error;$('error').textContent=data.error||'';if(!copying&&!$('cards').contains(document.activeElement))render();}catch{$('error').hidden=false;$('error').textContent='Unable to refresh. Displayed readings may be stale.';}finally{busy=false;$('refresh').disabled=false}}
 $('machines-tab').onclick=()=>switchView('machines');$('services-tab').onclick=()=>switchView('services');$('backups-tab').onclick=()=>switchView('backups');$('search').oninput=render;$('host').onchange=render;$('refresh').onclick=refresh;document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';refresh();setInterval(refresh,30000);setInterval(()=>{if(!document.hidden&&!copying&&!$('cards').contains(document.activeElement))render()},15000);
+
+function showNetworkAudit(result){
+ $('network-status').textContent=result.message+(result.checked_at?' · '+new Date(result.checked_at*1000).toLocaleString():'');
+ $('network-check').disabled=result.status==='running';
+ const root=$('network-results');root.replaceChildren();
+ if(result.scope)root.append(el('p','',result.scope));
+ const groups=[['violation','Violations'],['unverified','Unverified'],['pass','Verified addresses']];
+ for(const [status,label] of groups){const rows=(result.rows||[]).filter(r=>r.status===status);if(!rows.length)continue;
+  const section=el('details','audit-details');section.open=status==='violation';section.append(el('summary','',label+' ('+rows.length+')'));
+  for(const r of rows){const item=el('p','audit-row');item.append(el('strong','',r.machine||'Unknown machine'),el('span','', [r.address,r.mac,r.assignment].filter(Boolean).join(' · ')),el('span','',r.reason||''));if(r.source)item.append(el('small','',r.source));section.append(item)}root.append(section);
+ }
+}
+async function readNetworkAudit(){try{const r=await fetch('api/network-audit',{cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error();const value=await r.json();showNetworkAudit(value);if(value.status==='running')setTimeout(readNetworkAudit,2000)}catch{$('network-status').textContent='Cannot retrieve audit. No clean result established.';$('network-check').disabled=false}}
+$('network-check').onclick=async()=>{$('network-check').disabled=true;$('network-status').textContent='Starting read-only audit…';try{const r=await fetch('api/network-audit',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'network-audit'},body:'{}',signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error();showNetworkAudit(await r.json());setTimeout(readNetworkAudit,1000)}catch{$('network-status').textContent='Could not start audit. No clean result established.';$('network-check').disabled=false}};
+
+readNetworkAudit(); // Restore results only; GET never starts an audit.
