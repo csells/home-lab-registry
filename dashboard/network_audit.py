@@ -18,9 +18,13 @@ def compare(rows, reservations, networks):
         row = dict(item)
         address = row.get('address')
         if not address:
+            if row.get('scope')=='offline' and row.get('profile_verified') and row.get('mac') and row.get('assignment')=='dhcp':
+                row.update(status='offline-config-verified',reason='Saved DHCP configuration read without booting');results.append(row);continue
             row.update(status='unverified'); results.append(row); continue
         try:
             if not any(ipaddress.ip_address(address) in n for n in nets):
+                if row.get('scope')=='offline':
+                    row.update(status='not-applicable',reason='Saved address is outside the home LAN; eero reservation not applicable');results.append(row)
                 continue
         except ValueError:
             row.update(status='unverified', reason='Invalid address evidence'); results.append(row); continue
@@ -32,6 +36,7 @@ def compare(rows, reservations, networks):
             row.update(status='pass', reason='Reservation matches this interface MAC' if match else 'DHCP; reservation optional')
         else:
             row.update(status='unverified', reason='Assignment method not verified')
+        if row.get('scope')=='offline' and row['status']=='pass':row['status']='offline-config-verified'
         results.append(row)
     return results
 
@@ -48,18 +53,33 @@ def eero_get(config, resource):
     return data['data']
 
 
-def collect(target, private):
-    # Target definitions are operator-owned files, never browser parameters.
-    source = pathlib.Path(__file__).with_name('network_collect.py').read_text()
-    script = ('GUEST_SOURCE = ' + repr('GUEST_ONLY = True\n' + source) + '\n' + source).encode()
+def guest_identity(spec):
+    r=spec.get('resources',{});audit=r.get('network_authority_audit',{})
+    gid=r.get('guest_id',r.get('vmid',audit.get('guest_id')))
+    if gid is None:gid=r.get('vm_name')
+    parent=r.get('parent_machine')
+    if not parent and gid is not None:parent='machine-'+audit.get('host',spec.get('host',''))
+    return parent,str(gid) if gid is not None else None
+
+
+def ssh_command(target,private):
+    import shlex
     command = ['ssh', '-T', '-i', str(private / target['key_file']), '-o', 'BatchMode=yes',
                '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
                '-o', 'UserKnownHostsFile=' + str(private / target['known_hosts_file'])]
-    if target.get('host_key_alias'):
-        command += ['-o', 'HostKeyAlias=' + target['host_key_alias']]
-    command += [target['destination'], 'sudo -n python3 -' if target.get('sudo') else 'python3 -']
+    if target.get('host_key_alias'):command += ['-o','HostKeyAlias='+target['host_key_alias']]
+    if target.get('jump'):
+        jump=ssh_command(target['jump'],private)
+        command += ['-o','ProxyCommand='+shlex.join(jump[:-1]+['-W','%h:%p',jump[-1]])]
+    return command+[target['destination']]
+
+
+def collect(target, private):
+    source = pathlib.Path(__file__).with_name('network_collect.py').read_text()
+    script = ('TART_NAMES = '+repr(target.get('tart_names',[]))+'\nGUEST_SOURCE = ' + repr('GUEST_ONLY = True\n' + source) + '\n' + source).encode()
+    command=ssh_command(target,private)+['sudo -n python3 -' if target.get('sudo') else 'python3 -']
     try:
-        p = subprocess.run(command, input=script, capture_output=True, timeout=110)
+        p = subprocess.run(command, input=script, capture_output=True, timeout=240)
         if p.returncode: raise ValueError('Collector failed')
         rows = json.loads(p.stdout)
         for row in rows: row['machine'] = target['id'] + row.get('suffix', '')
@@ -102,6 +122,8 @@ class NetworkAudit:
                 if address:
                     ipaddress.ip_address(address)  # no shell or SSH-option interpretation
                     target['destination'] = target['destination'].split('@')[0] + '@' + address
+            for target in cfg['targets']:
+                target['tart_names']=[s['spec']['resources']['vm_name'] for s in catalog if s['spec'].get('host')==target['id'].removeprefix('machine-') and s['spec'].get('resources',{}).get('vm_name')]
             rows = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
                 for found in pool.map(lambda t: collect(t, self.private), cfg['targets']): rows.extend(found)
@@ -112,22 +134,35 @@ class NetworkAudit:
                 spec = record['spec']
                 if spec.get('lifecycle') != 'active': continue
                 resources = spec.get('resources', {})
-                parent = resources.get('parent_machine'); guest_id = resources.get('guest_id', resources.get('vmid'))
-                if not parent and guest_id: parent = 'machine-' + spec.get('host', '')
-                guest_covered = any(f'{parent}/{kind}/{guest_id}' in observations for kind in ('qemu', 'lxc'))
+                parent,guest_id = guest_identity(spec)
+                guest_covered = any(f'{parent}/{kind}/{guest_id}' in observations for kind in ('qemu', 'lxc','tart'))
                 if (resources.get('kind') in ('machine', 'virtual-machine', 'container') or 'machine' in spec.get('capabilities', [])) and record['id'] not in covered and not guest_covered:
                     rows.append({'machine': record['id'], 'reason': 'No direct live collector; guest observations may appear under its hypervisor', 'status': 'unverified'})
                 audit = resources.get('network_authority_audit', {})
                 for kind in ('kvm', 'amt'):
                     if kind in audit:
                         rows.append({'machine': record['id'] + '/' + kind, 'reason': 'Appliance configuration not refreshed by this collector; last recorded audit: ' + str(audit[kind].get('at', audit.get('at', 'unknown'))) if isinstance(audit[kind], dict) else 'Appliance configuration not freshly verified', 'status': 'unverified'})
+            from appliance_network import collect_appliance
+            appliance_credentials=json.loads((self.private/'appliance-credentials.json').read_text())
+            for target in cfg.get('appliances',[]):
+                machine,kind=target['id'].rsplit('/',1)
+                spec=by_id.get(machine,{}).get('spec',{})
+                access=spec.get('resources',{}).get('access',{})
+                entry=access.get('console' if kind=='kvm' else kind,{})
+                endpoint=spec.get('endpoints',{}).get(kind) or (entry.get('url') if isinstance(entry,dict) else entry)
+                if not endpoint:raise ValueError('Appliance endpoint missing from registry')
+                target['url']=endpoint
+                rows=[r for r in rows if r['machine']!=target['id']]
+                rows.extend(collect_appliance(target,self.private,appliance_credentials[target['id']]))
             result = compare(rows, reservations, cfg['lan_cidrs'])
+            result=list({json.dumps(row,sort_keys=True):row for row in result}.values())
             violations = sum(r['status'] == 'violation' for r in result)
             unknown = sum(r['status'] == 'unverified' for r in result)
+            warnings=sum(bool(r.get('warning')) for r in result)
             value = {'status': 'violations' if violations else 'incomplete' if unknown else 'passed',
-                     'rows': result, 'violations': violations, 'unverified': unknown, 'checked_at': time.time(),
-                     'message': f'{violations} violations · {unknown} unverified checks',
-                     'scope': 'Fresh router reservations and live/saved host configuration. Read-only. Unreachable, stopped, unsupported and appliance coverage is explicitly unverified.'}
+                     'rows': result, 'violations': violations, 'unverified': unknown, 'warnings':warnings, 'checked_at': time.time(),
+                     'message': f'{violations} violations · {unknown} unverified checks · {warnings} warnings',
+                     'scope': 'Fresh router reservations, live host/guest and appliance settings, plus read-only saved configuration for stopped guests. Offline verification is distinct from live verification; inaccessible configurations remain unverified.'}
         except Exception:
             logging.exception('Read-only address audit failed')
             value = {'status': 'error', 'rows': [], 'checked_at': time.time(), 'message': 'Audit failed; no clean result established. Check server access to router and registry.'}

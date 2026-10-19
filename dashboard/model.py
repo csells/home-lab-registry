@@ -18,7 +18,7 @@ def inventory(records,metrics):
         item=public_record(r)
         res=r['spec'].get('resources',{})
         runtime=res.get('runtime',{})
-        item['runtime']={k:runtime[k] for k in ('state','checked') if k in runtime}
+        item['runtime']={k:runtime[k] for k in ('state','checked','expires','evidence') if k in runtime}
         item['recorded_state']=res.get('state')
         item['deployment']=r['spec'].get('deployment','')
         if kind=='machine':

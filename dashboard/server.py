@@ -7,13 +7,14 @@ from urllib.parse import urlsplit,parse_qs
 from access import credential
 from guac import launch
 from network_audit import NetworkAudit
-BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;AUDIT=NetworkAudit(PRIVATE)
+from machine_runtime import RuntimeMonitor
+BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;AUDIT=NetworkAudit(PRIVATE);RUNTIME=RuntimeMonitor(PRIVATE)
 def reconcile():
     global STATE
     cfg=json.loads((PRIVATE/'reader.json').read_text())
     while True:
         try:
-            records=request(cfg,'GET','/v1/services')['services'];LIVE.configure(records);value=inventory(records,LIVE.readings());value['fetched_at']=time.time();value['error']=None
+            records=request(cfg,'GET','/v1/services')['services'];RUNTIME.refresh(records);records=RUNTIME.apply(records);LIVE.configure(records);value=inventory(records,LIVE.readings());value['fetched_at']=time.time();value['error']=None
             with LOCK:STATE=value
         except Exception:
             logging.exception('Reconciliation failed')
