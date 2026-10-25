@@ -56,7 +56,7 @@ def overlay(records,states,now=None):
     return result
 
 class RuntimeMonitor:
-    INTERVAL=60
+    INTERVAL=30
     def __init__(self,private):
         self.private=private;self.lock=threading.Lock();self.states={};self.started=0;self.running=False
     def refresh(self,endpoints):

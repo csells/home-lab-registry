@@ -66,6 +66,11 @@ class GuestRuntimeTests(unittest.TestCase):
    with patch('machine_runtime.connect',return_value=Response(value,kind)),self.assertLogs(level='WARNING'):
     self.assertIn('error',read_guests('https://192.0.2.5:9911/guests',None,None))
 
+ def test_report_survives_the_display_pipeline(self):
+  now=time.time();state={'checked':now-150,'expires':now+150,'guests':{'101':'running'}}
+  self.assertEqual(overlay([vm()],{'machine-pve':state},now=now)[0]['spec']['resources']['runtime']['state'],'running')
+  self.assertLessEqual(RuntimeMonitor.INTERVAL,30)
+
  def test_refresh_is_single_flight_and_bounded(self):
   monitor=RuntimeMonitor(pathlib.Path('/private'))
   with patch('machine_runtime.threading.Thread') as worker:

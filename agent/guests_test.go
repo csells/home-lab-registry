@@ -115,8 +115,17 @@ func TestProxmoxCollectionUsesScopedTokenAndVerifiedTLS(t *testing.T) {
 	if report.Status != "available" || report.Source != "proxmox" || len(report.Guests) != 3 || len(report.Warnings) != 0 {
 		t.Fatalf("got %+v", report)
 	}
-	if report.Expires-report.Checked != 90 {
-		t.Fatalf("expiry must be three collection intervals: %+v", report)
+	// The dashboard's poll, refresh and browser cadence add up to about two
+	// minutes, so a report must outlive that pipeline to avoid false unknowns.
+	if report.Expires-report.Checked != 300 {
+		t.Fatalf("expiry must be five minutes at the default interval: %+v", report)
+	}
+	slow, err := newGuestCollector(GuestConfig{Source: "tart", Binary: "/bin/false", IntervalSeconds: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := slow(context.Background()); r.Expires-r.Checked != 600 {
+		t.Fatalf("expiry must cover three slow intervals: %+v", r)
 	}
 }
 

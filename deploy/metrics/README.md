@@ -90,7 +90,8 @@ dashboard uses for VM and container badges. Add a `guests` object to the private
 configuration. The agent reads the local inventory every `interval_seconds`
 (default 30, allowed 10–300) and serves the latest report at `/guests` on the
 local socket and the mutually authenticated listener (`-mode guests` prints it
-locally). A report expires after three intervals. A failed read, missing
+locally). A report expires after three intervals or five minutes, whichever is
+longer, so it outlives the dashboard's polling and refresh cycle. A failed read, missing
 permission or malformed inventory is an explicit `unavailable` report with a
 warning, never an empty guest list. Without a `guests` object, `/guests` returns
 404.

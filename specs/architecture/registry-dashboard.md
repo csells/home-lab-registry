@@ -81,7 +81,7 @@ Health observations expire independently of resource metrics. Each machine's
 collector reads its own hypervisor inventory (Proxmox API with a read-only token,
 or `tart list`) and serves it on the same mutually authenticated listener.
 [`machine_runtime.py`](../../dashboard/machine_runtime.py) polls those reports
-every minute; states expire with the report, never later than fifteen minutes.
+every 30 seconds; states expire with the report, never later than fifteen minutes.
 The dashboard holds no hypervisor SSH credentials.
 Runtime, reachability, application function and available capacity are different facts.
 

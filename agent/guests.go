@@ -126,10 +126,11 @@ func newGuestCollector(cfg GuestConfig) (guestCollector, error) {
 	if cfg.IntervalSeconds != 0 && (cfg.IntervalSeconds < 10 || cfg.IntervalSeconds > 300) {
 		return nil, errors.New("guest interval must be 10-300 seconds")
 	}
-	interval := cfg.interval()
+	// Outlive both missed collections and the dashboard's display pipeline.
+	lifetime := max(3*cfg.interval().Seconds(), 300)
 	report := func(source string, guests []Guest, err error) GuestReport {
 		checked := timestamp()
-		r := GuestReport{Status: "available", Source: source, Checked: checked, Expires: checked + 3*interval.Seconds(), Guests: guests}
+		r := GuestReport{Status: "available", Source: source, Checked: checked, Expires: checked + lifetime, Guests: guests}
 		if err != nil {
 			log.Printf("guest inventory: %v", err)
 			r.Status, r.Guests, r.Warnings = "unavailable", nil, []string{err.Error()}
