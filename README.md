@@ -33,6 +33,11 @@ Service health, endpoints, configuration backups and optional login credentials.
 
 ## Components
 
+For project direction, read the [home-lab vision](specs/vision/home-lab.md).
+For implemented boundaries, read the [current architecture](specs/architecture/current.md).
+The [renewable test-environment service plan](specs/plans/0001-renewable-test-environments.md)
+describes proposed work; it is not an available service yet.
+
 - `registry/`: Python standard-library HTTPS API, SQLite catalog, revisions, health observations, probes and export/restore.
 - `dashboard/`: read-only dashboard, cached streaming measurements, credential-copy endpoint, and Apache Guacamole session integration.
 - `agent/`: small Go collector using gopsutil, bounded local history and mutually authenticated TLS streams.
