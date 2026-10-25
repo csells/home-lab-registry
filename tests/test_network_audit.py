@@ -1,4 +1,4 @@
-import pathlib,sys,unittest,threading
+import json,pathlib,sys,unittest,threading
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'dashboard'))
 from network_audit import compare,NetworkAudit
@@ -17,6 +17,10 @@ class AddressAuditTests(unittest.TestCase):
   with patch('network_audit.threading.Thread') as worker:
    audit=NetworkAudit('/missing');self.assertEqual(audit.snapshot()['status'],'idle');worker.assert_not_called()
    audit.start();audit.start();self.assertEqual(worker.call_count,1)
+ def test_on_demand_cli_fails_loudly_without_private_material(self):
+  import subprocess,sys
+  p=subprocess.run([sys.executable,str(pathlib.Path(__file__).resolve().parents[1]/'dashboard'/'network_audit.py'),'/missing'],capture_output=True,text=True)
+  self.assertEqual(p.returncode,1);self.assertEqual(json.loads(p.stdout)['status'],'error')
  def test_missing_config_is_error(self):
   a=NetworkAudit('/missing')
   with self.assertLogs(level='ERROR'):a._run()

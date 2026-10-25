@@ -170,3 +170,12 @@ class NetworkAudit:
             logging.exception('Read-only address audit failed')
             value = {'status': 'error', 'rows': [], 'checked_at': time.time(), 'message': 'Audit failed; no clean result established. Check server access to router and registry.'}
         with self.lock: self.state = value
+
+
+if __name__ == '__main__':
+    # On-demand audit from an operator machine (orca); the dashboard no longer runs one.
+    import sys
+    if len(sys.argv) != 2: sys.exit('usage: network_audit.py PRIVATE_DIRECTORY')
+    audit = NetworkAudit(sys.argv[1]); audit._run(); result = audit.snapshot()
+    print(json.dumps(result, indent=1))
+    sys.exit(1 if result['status'] == 'error' else 0)

@@ -33,3 +33,11 @@ def inventory(records,metrics):
             item.update(access=public_access(r),kind='service',machine_id=res.get('machine_id') or names.get(item['host']),deployment=r['spec'].get('deployment',''))
             services.append(item)
     return {'machines':machines,'services':services,'backups':backups}
+
+def address_audit_summary(records):
+    """Latest on-demand IPv4 audit published to the registry; the dashboard never runs one."""
+    for r in records:
+        run=r.get('spec',{}).get('resources',{}).get('fleet_address_audit',{}).get('latest_run')
+        if isinstance(run,dict) and run.get('at'):
+            return {'status':run.get('status','unknown'),'at':run['at'],'warnings':len(run.get('warnings') or []),'unreserved_static':run.get('verified_unreserved_static_count'),'record':r['id']}
+    return None

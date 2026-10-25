@@ -1,20 +1,19 @@
 import base64,hmac,json,pathlib,threading,time,logging
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 from client import request
-from model import inventory
+from model import inventory,address_audit_summary
 from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
 from access import credential
 from guac import launch
-from network_audit import NetworkAudit
 from machine_runtime import RuntimeMonitor
-BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;AUDIT=NetworkAudit(PRIVATE);RUNTIME=RuntimeMonitor(PRIVATE)
+BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;RUNTIME=RuntimeMonitor(PRIVATE)
 def reconcile():
     global STATE
     cfg=json.loads((PRIVATE/'reader.json').read_text())
     while True:
         try:
-            records=request(cfg,'GET','/v1/services')['services'];RUNTIME.refresh(records);records=RUNTIME.apply(records);LIVE.configure(records);value=inventory(records,LIVE.readings());value['fetched_at']=time.time();value['error']=None
+            records=request(cfg,'GET','/v1/services')['services'];LIVE.configure(records);RUNTIME.refresh(LIVE.endpoints());records=RUNTIME.apply(records);value=inventory(records,LIVE.readings());value['address_audit']=address_audit_summary(records);value['fetched_at']=time.time();value['error']=None
             with LOCK:STATE=value
         except Exception:
             logging.exception('Reconciliation failed')
@@ -27,11 +26,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(401);return
         # Reject cross-origin requests and form submissions before reading any secret.
         allowed=json.loads((PRIVATE/'origins.json').read_text())
-        action={'/api/network-audit':'network-audit','/api/copy-password':'copy-password'}.get(self.path)
+        action={'/api/copy-password':'copy-password'}.get(self.path)
         if not action or self.headers.get('Origin') not in allowed or self.headers.get('X-Lab-Action')!=action or self.headers.get('Content-Type')!='application/json':
             self.send_error(403);return
-        if self.path=='/api/network-audit':
-            raw=json.dumps(AUDIT.start()).encode();self.send_response(202);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/api/copy-password':self.send_error(404);return
         try:
             length=int(self.headers.get('Content-Length','0'))
@@ -72,8 +69,6 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:self.send_error(404)
             except (BrokenPipeError,ConnectionResetError,TimeoutError):pass
             return
-        elif path=='/api/network-audit':
-            raw=json.dumps(AUDIT.snapshot()).encode();kind='application/json'
         elif path in ['/api/inventory','/api/machines','/api/services','/api/backups']:
             with LOCK:data=dict(STATE)
             data['server_time']=time.time()

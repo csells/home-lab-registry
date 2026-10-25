@@ -10,7 +10,7 @@ MAX_FRAME=262144
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
 
-def connect(url,private,server_name=None):
+def connect(url,private,server_name=None,accept='application/x-ndjson'):
     ctx=ssl.create_default_context(cafile=str(private/'stream-ca.pem'))
     ctx.minimum_version=ssl.TLSVersion.TLSv1_3
     ctx.load_cert_chain(str(private/'stream-client.pem'),str(private/'stream-client-key.pem'))
@@ -21,7 +21,7 @@ def connect(url,private,server_name=None):
     class IdentityHandler(HTTPSHandler):
         def https_open(self,request):return self.do_open(IdentityHTTPS,request,context=ctx)
     opener=build_opener(ProxyHandler({}),IdentityHandler(context=ctx),NoRedirect())
-    return opener.open(Request(url,headers={'Accept':'application/x-ndjson'}),timeout=15)
+    return opener.open(Request(url,headers={'Accept':accept}),timeout=15)
 
 class Stream:
     def __init__(self,url,private,server_name=None):
@@ -87,6 +87,8 @@ class LiveMetrics:
             for key,state in list(self.streams.items()):
                 if targets.get(key)!=self.targets.get(key) or identities.get(key)!=self.identities.get(key):state.close();del self.streams[key]
             self.targets=targets;self.identities=identities
+    def endpoints(self):
+        with self.lock:return {key:(url,self.identities.get(key)) for key,url in self.targets.items()}
     def readings(self):
         with self.lock:
             result={key:{'status':'waiting'} for key in self.targets}
