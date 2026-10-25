@@ -59,7 +59,8 @@ type Config struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
 	} `json:"disks"`
-	ThinPools bool `json:"lvm_thin_pools"`
+	ThinPools bool         `json:"lvm_thin_pools"`
+	Guests    *GuestConfig `json:"guests,omitempty"`
 }
 type store struct {
 	mu       sync.Mutex
@@ -260,12 +261,12 @@ func (s *store) stream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func main() {
-	mode := flag.String("mode", "serve", "serve, stream or snapshot")
+	mode := flag.String("mode", "serve", "serve, stream, snapshot or guests")
 	socket := flag.String("socket", "/run/lab-metrics/agent.sock", "local Unix socket")
 	config := flag.String("config", "/etc/lab-metrics.json", "private host configuration")
 	flag.Parse()
 	if *mode != "serve" {
-		if *mode != "stream" && *mode != "snapshot" {
+		if *mode != "stream" && *mode != "snapshot" && *mode != "guests" {
 			log.Fatal("invalid mode")
 		}
 		client := http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -318,11 +319,21 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go collect(ctx, s, cfg)
+	var guests *guestState
+	if cfg.Guests != nil {
+		collector, err := newGuestCollector(*cfg.Guests)
+		if err != nil {
+			log.Fatal(err)
+		}
+		guests = &guestState{}
+		go runGuests(ctx, guests, cfg.Guests.interval(), collector)
+	}
 	if cfg.Registration != nil {
 		go registerMachine(ctx, *cfg.Registration)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream", s.stream)
+	mux.HandleFunc("/guests", guests.serve)
 	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		h, _, seq := s.snapshot()
 		s.mu.Lock()
@@ -344,6 +355,7 @@ func main() {
 		}
 		networkMux := http.NewServeMux()
 		networkMux.HandleFunc("/stream", s.stream)
+		networkMux.HandleFunc("/guests", guests.serve)
 		networkServer = &http.Server{Addr: cfg.Listen, Handler: networkMux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 4096, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots}}
 		go func() {
 			if err := networkServer.ListenAndServeTLS(cfg.Cert, cfg.Key); err != nil && err != http.ErrServerClosed {

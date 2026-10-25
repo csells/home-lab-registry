@@ -83,6 +83,51 @@ lab-metrics -mode snapshot -socket /run/lab-metrics/agent.sock
 It includes cached samples, a sequence number and active collector subscriptions.
 It is not exposed over the network.
 
+## Guest inventory
+
+Hypervisor hosts can report their guests' running/stopped state, which the
+dashboard uses for VM and container badges. Add a `guests` object to the private
+configuration. The agent reads the local inventory every `interval_seconds`
+(default 30, allowed 10–300) and serves the latest report at `/guests` on the
+local socket and the mutually authenticated listener (`-mode guests` prints it
+locally). A report expires after three intervals. A failed read, missing
+permission or malformed inventory is an explicit `unavailable` report with a
+warning, never an empty guest list. Without a `guests` object, `/guests` returns
+404.
+
+Proxmox VE: use the local API with a read-only token, not root or `pvesh`:
+
+```sh
+pveum user add lab-metrics@pve --comment "lab-metrics guest inventory (read-only)"
+pveum acl modify /vms --users lab-metrics@pve --roles PVEAuditor
+pveum user token add lab-metrics@pve guests --privsep 0 --output-format json
+```
+
+Store `lab-metrics@pve!guests=SECRET` (one line, mode 0600, owned by the agent's
+account) and configure:
+
+```json
+"guests": {"source": "proxmox", "url": "https://127.0.0.1:8006",
+           "token_file": "/etc/lab-metrics/pve-token",
+           "ca_file": "/etc/pve/pve-root-ca.pem", "server_name": "localhost"}
+```
+
+The agent verifies the node certificate against the cluster CA and requires
+`VM.Audit` on `/vms` before trusting the guest list, because the API silently omits
+guests a token cannot see. The token can read inventory only; it cannot start,
+stop or configure guests. The agent re-reads the token and CA on each collection,
+so rotation needs no restart.
+
+macOS Tart: the agent runs `tart list --format json` as its service account. Set
+`tart_home` when that account's Tart directory is not its default:
+
+```json
+"guests": {"source": "tart", "binary": "/opt/homebrew/bin/tart",
+           "tart_home": "/Users/SERVICE_USER/.tart"}
+```
+
+Only `local` Tart VMs are reported; cached OCI images are not guests.
+
 ## macOS
 
 Cross-build with `GOOS=darwin GOARCH=arm64 go build` for Apple Silicon (amd64 for
