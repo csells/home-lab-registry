@@ -112,6 +112,12 @@ account) and configure:
            "ca_file": "/etc/pve/pve-root-ca.pem", "server_name": "localhost"}
 ```
 
+`/etc/pve/pve-root-ca.pem` is readable by root only. An agent running as root
+(needed for thin-pool reporting) can use it directly; an unprivileged agent needs
+a copy of that public certificate in its own configuration directory. If the node
+serves a custom `pveproxy-ssl.pem`, point `ca_file` and `server_name` at that
+certificate's issuer and name instead.
+
 The agent verifies the node certificate against the cluster CA and requires
 `VM.Audit` on `/vms` before trusting the guest list, because the API silently omits
 guests a token cannot see. The token can read inventory only; it cannot start,
