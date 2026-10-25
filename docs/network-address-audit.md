@@ -1,11 +1,18 @@
 # On-demand network address audit
 
-The dashboard's **Check IP reservations** button starts a read-only deterministic
-job. Loading the page never starts a job. Concurrent clicks share the running
-job; a 30-second cooldown prevents accidental duplicate scans. Status polling
-ends when that job finishes. No model or recurring agent session is involved.
+The audit is a read-only deterministic job run on demand from an operator
+machine, not from the internet-facing dashboard:
 
-`dashboard/private/network-audit.json` contains operator-owned configuration:
+```sh
+python3 dashboard/network_audit.py PRIVATE_DIRECTORY
+```
+
+It prints the result as JSON and exits nonzero when no result could be
+established. The dashboard holds no audit credentials; it only displays the
+latest run published to the registry. No model or recurring agent session is
+involved.
+
+`PRIVATE_DIRECTORY/network-audit.json` contains operator-owned configuration:
 
 - `network_id`: router network identifier.
 - `session_file`: protected eero session file, never delivered to the browser.
@@ -25,9 +32,8 @@ address/MAC match. Unsupported profiles and unavailable configuration are explic
 passing fleet audit. A passing address
 is not proof that every configuration path on its machine was examined.
 
-Backend private configuration must be mode 0600, and its containing directory
-0700. Retain dashboard authentication and origin checks. Audit responses expose
-addresses only to authenticated dashboard users, never credentials or raw files.
+Private configuration must be mode 0600, and its containing directory 0700.
+Results contain addresses, never credentials or raw files.
 Candidate work and tests run in a disposable VM; production promotion still
 requires approval.
 
@@ -62,11 +68,9 @@ Host Python needs PyYAML when inspecting netplan YAML offline. Appliance readers
 need cryptography in the dashboard environment. SSH access is pinned; restricted
 Mac access can use a pinned SSH jump host without relaxing authorized-key rules.
 
-A separate deterministic runtime reader queries hypervisor guest state every ten
-minutes. Observations expire after fifteen minutes; inaccessible or missing guests
-become unknown rather than retaining an old power state. Guest power state does
-not override application service health. This lightweight check does not run the
-IP audit and never starts an inference session. The full audit remains click-only.
+Guest power state on the dashboard comes from each machine's metrics agent
+(`/guests` on its mutually authenticated listener), not from this audit or SSH.
+See [guest inventory](../deploy/metrics/README.md#guest-inventory).
 
 AMT may be unreachable from a VM on the same physical NIC as its management
 engine. An AMT adapter can set `via_machine` to a configured, pinned SSH target

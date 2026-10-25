@@ -2,7 +2,7 @@
 
 A small, self-hosted machine and service catalog with an authenticated dashboard. Machines and services have separate views. Machine cards put compact CPU, RAM, GPU and disk history bars above browser SSH, hypervisor, KVM and AMT access. Device and host-console credentials are separate; copy confirmation stays inside the button. Services show health freshness, placement and configuration-backup locations.
 
-Use **Check IP reservations** for an on-demand, read-only router/host audit. It uses ordinary code, not scheduled inference, and separates violations from unverified coverage. See [network address audit setup and scope](docs/network-address-audit.md).
+The IP reservation audit is an on-demand, read-only router/host check run from an operator machine; the dashboard shows the latest result published to the registry. It uses ordinary code, not scheduled inference, and separates violations from unverified coverage. See [network address audit setup and scope](docs/network-address-audit.md).
 
 ## Screenshots
 

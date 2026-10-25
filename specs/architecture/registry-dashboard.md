@@ -17,9 +17,9 @@ flowchart LR
   Dashboard --> Registry[Registry HTTPS API / SQLite]
   Agent[Agent CLI] --> Registry
   Collector[Machine collector] -->|Address announcements| Registry
-  Dashboard -->|On-demand mTLS stream| Collector
+  Dashboard -->|On-demand mTLS stream, guest inventory| Collector
   Dashboard -->|Session launch| Terminal[Guacamole / pinned SSH]
-  Dashboard -->|Read-only audit / runtime reads| Infra[Router / hypervisors / appliances]
+  Operator2[Operator machine] -->|On-demand read-only audit| Infra[Router / hypervisors / appliances]
   Backup[Central backup controller] -->|Resolve sources| Registry
   Backup -->|Constrained SSH export| Sources[Service configuration sources]
   Backup --> Drive[Encrypted Google Drive backups]
@@ -77,13 +77,17 @@ The stream is not a durable task-evidence archive. Collection overhead has speci
 qualification evidence in [`deploy/metrics/`](../../deploy/metrics/), not a universal
 zero-overhead guarantee.
 
-Health observations expire independently of resource metrics. The dashboard's
-[`machine_runtime.py`](../../dashboard/machine_runtime.py) performs bounded,
-deterministic hypervisor reads at ten-minute intervals with fifteen-minute freshness.
+Health observations expire independently of resource metrics. Each machine's
+collector reads its own hypervisor inventory (Proxmox API with a read-only token,
+or `tart list`) and serves it on the same mutually authenticated listener.
+[`machine_runtime.py`](../../dashboard/machine_runtime.py) polls those reports
+every minute; states expire with the report, never later than fifteen minutes.
+The dashboard holds no hypervisor SSH credentials.
 Runtime, reachability, application function and available capacity are different facts.
 
-The IP audit is an authenticated, on-demand, read-only operation implemented in
-[`network_audit.py`](../../dashboard/network_audit.py) and its collectors. It compares
+The IP audit is an on-demand, read-only operation run from an operator machine,
+implemented in [`network_audit.py`](../../dashboard/network_audit.py) and its
+collectors. The dashboard displays only the latest result published to the registry. It compares
 router authority with host/guest/appliance configuration and distinguishes violations
 from incomplete verification. It detects problems; it is not an admission controller.
 
