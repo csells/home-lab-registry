@@ -6,14 +6,14 @@ from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
 from access import credential
 from guac import launch
-from machine_runtime import RuntimeMonitor
+from machine_runtime import RuntimeMonitor,guest_endpoints
 BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;RUNTIME=RuntimeMonitor(PRIVATE)
 def reconcile():
     global STATE
     cfg=json.loads((PRIVATE/'reader.json').read_text())
     while True:
         try:
-            records=request(cfg,'GET','/v1/services')['services'];LIVE.configure(records);RUNTIME.refresh(LIVE.endpoints());records=RUNTIME.apply(records);value=inventory(records,LIVE.readings());value['address_audit']=address_audit_summary(records);value['fetched_at']=time.time();value['error']=None
+            records=request(cfg,'GET','/v1/services')['services'];LIVE.configure(records);RUNTIME.refresh(guest_endpoints(LIVE.endpoints(),json.loads((PRIVATE/'guest-endpoints.json').read_text()) if (PRIVATE/'guest-endpoints.json').exists() else None));records=RUNTIME.apply(records);value=inventory(records,LIVE.readings());value['address_audit']=address_audit_summary(records);value['fetched_at']=time.time();value['error']=None
             with LOCK:STATE=value
         except Exception:
             logging.exception('Reconciliation failed')

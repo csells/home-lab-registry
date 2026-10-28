@@ -88,4 +88,13 @@ class NetworkAuditRemovalTests(unittest.TestCase):
   self.assertEqual(address_audit_summary(records),{'status':'warning','at':'2026-10-19T13:20:49Z','warnings':1,'unreserved_static':0,'record':'router'})
   self.assertIsNone(address_audit_summary([]))
 
+ def test_private_guest_endpoints_override_only_listed_machines(self):
+  # A private mapping lets an operator read guest state from a different agent
+  # (e.g. staging) without a registry write; unlisted machines keep their stream agent.
+  endpoints={'machine-a':('https://192.0.2.5:9911/stream','a'),'machine-b':('https://192.0.2.6:9911/stream','b')}
+  private={'machine-a':{'url':'https://127.0.0.1:9921/stream','server_name':'stage-a'},'machine-z':{'url':'https://127.0.0.1:9929/stream','server_name':'z'}}
+  self.assertEqual(machine_runtime.guest_endpoints(endpoints,private),{'machine-a':('https://127.0.0.1:9921/stream','stage-a'),'machine-b':('https://192.0.2.6:9911/stream','b'),'machine-z':('https://127.0.0.1:9929/stream','z')})
+  self.assertEqual(machine_runtime.guest_endpoints(endpoints,None),endpoints)
+  with self.assertRaises(ValueError):machine_runtime.guest_endpoints(endpoints,{'machine-a':{'url':'http://127.0.0.1:9921/stream','server_name':'x'}})
+
 if __name__=='__main__':unittest.main()

@@ -11,6 +11,18 @@ def guests_url(stream_url):
     u=urlsplit(stream_url)
     return urlunsplit((u.scheme,u.netloc,'/guests','',''))
 
+def guest_endpoints(endpoints,private=None):
+    """Apply an optional private machine -> {url,server_name} mapping for guest inventory.
+
+    Lets an operator read guest state from a different agent (for example a staging
+    candidate) without writing the registry; unlisted machines keep their stream agent."""
+    result=dict(endpoints)
+    for key,cfg in (private or {}).items():
+        url=cfg.get('url') if isinstance(cfg,dict) else None
+        if not isinstance(url,str) or urlsplit(url).scheme!='https' or not isinstance(cfg.get('server_name'),str):raise ValueError('Invalid guest endpoint override for '+str(key))
+        result[key]=(url,cfg['server_name'])
+    return result
+
 def read_guests(url,private,server_name):
     """Return {'guests','checked','expires'} or {'error','checked'}; failures never look like an empty host."""
     now=time.time()
