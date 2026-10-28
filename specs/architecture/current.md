@@ -1,7 +1,7 @@
 # Current home-lab architecture
 
-As of 2026-10-19. This describes the whole lab's architectural roles and relationships,
-using the current registry records and registry/dashboard source at `4663673`.
+As of 2026-10-28. This describes the whole lab's architectural roles and relationships,
+using the current registry records and registry/dashboard source through `1f70fb1`.
 Reading a deployment record is not a fresh end-to-end health check. Private machine
 names, addresses, placements, capacities, credentials and dated operational evidence
 remain exclusively in the registry; this document is not a second inventory.
@@ -169,12 +169,17 @@ is still fresh or a desired configuration has been applied.
 
 The dashboard separates machines, services and backups, provides browser access,
 and displays low-overhead CPU/RAM/GPU/disk history. Collectors retain bounded local
-history and stream while viewed. Health checks, runtime reads and address presence
-are separate from resource streaming; some run independently of viewers. Cached
+history and stream while viewed. Collectors also serve local guest inventory over
+mutually authenticated TLS; the dashboard polls these reports and expires stale
+states. Background runtime collection no longer uses SSH. Browser terminals keep
+their separate SSH identity. Health checks, guest inventory and address presence
+remain separate from resource streaming; some run independently of viewers. Cached
 metrics history is not a durable experiment archive.
 
-A user-triggered IP audit compares router authority with actual configuration and
-reports violations separately from unverified coverage. It is read-only detection,
+An operator-triggered IP audit runs from an operator machine and compares router
+authority with actual configuration. The dashboard displays the latest published
+result and holds no audit credentials. The audit reports violations separately
+from unverified coverage. It is read-only detection,
 not preventive admission control. Routine monitoring is deterministic code, not
 scheduled agent inference. Warnings and incomplete verification remain visible work.
 
