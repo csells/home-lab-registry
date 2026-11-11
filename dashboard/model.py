@@ -19,10 +19,13 @@ def inventory(records,metrics):
         res=r['spec'].get('resources',{})
         runtime=res.get('runtime',{})
         item['runtime']={k:runtime[k] for k in ('state','checked','expires','evidence') if k in runtime}
+        item['dependencies']=list(r['spec'].get('dependencies',[]))
         item['recorded_state']=res.get('state')
         item['deployment']=r['spec'].get('deployment','')
         if kind=='machine':
             res=r['spec'].get('resources',{});hw=res.get('hardware',{})
+            item['machine_type']=res.get('kind') if res.get('kind') in ('container','virtual-machine') else 'machine'
+            item['machine_id']=res.get('machine_id') if item['machine_type']!='machine' else None
             item['display_name']=r['spec']['name'] if res.get('kind') in ('virtual-machine','container') else r['spec']['host']
             item.update(access=public_access(r),console_login=res.get('console_login'),kind='machine',model=res.get('model'),cpu=hw.get('cpu'),cores=hw.get('cores'),ram_mib=hw.get('memory_mib'),os=res.get('os',{}).get('name'),metrics=metrics.get(r['id'],{'status':'unconfigured'}))
             machines.append(item)

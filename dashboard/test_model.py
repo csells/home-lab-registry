@@ -27,4 +27,26 @@ class Separation(unittest.TestCase):
  def test_services_are_not_assigned_to_arbitrary_guest_on_same_host(self):
   physical=self.record('physical','machine');guest=self.record('guest','virtual-machine');app=self.record('app')
   self.assertEqual(inventory([physical,guest,app],{})['services'][0]['machine_id'],'physical')
+ def test_map_placement_is_explicit_and_physical_hosts_are_peers(self):
+  host=self.record('host','machine');peer=self.record('peer','machine')
+  peer['spec']['host']='other';peer['spec']['resources']['machine_id']='host'
+  guest=self.record('guest','container');guest['spec']['resources']['machine_id']='host'
+  app=self.record('app');app['spec']['resources']['machine_id']='guest'
+  orphan=self.record('orphan','virtual-machine')
+  out=inventory([host,peer,guest,app,orphan],{})
+  machines={r['id']:r for r in out['machines']}
+  self.assertEqual(machines['host']['machine_type'],'machine')
+  self.assertIsNone(machines['peer']['machine_id'])
+  self.assertEqual(machines['guest']['machine_type'],'container')
+  self.assertEqual(machines['guest']['machine_id'],'host')
+  self.assertIsNone(machines['orphan']['machine_id'])
+  self.assertEqual(out['services'][0]['machine_id'],'guest')
+ def test_declared_connections_preserve_direction_without_exposing_notes(self):
+  app=self.record('caller');app['spec']['dependencies']=['backend']
+  app['spec']['notes']='private notes'
+  backend=self.record('backend')
+  out=inventory([app,backend],{})
+  self.assertEqual(out['services'][0]['dependencies'],['backend'])
+  self.assertEqual(out['services'][1]['dependencies'],[])
+  self.assertNotIn('private notes',str(out))
 if __name__=='__main__':unittest.main(verbosity=2)

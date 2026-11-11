@@ -2,6 +2,12 @@
 
 A small, self-hosted machine and service catalog with an authenticated dashboard. Machines and services have separate views. Machine cards put compact CPU, RAM, GPU and disk history bars above browser SSH, hypervisor, KVM and AMT access. Device and host-console credentials are separate; copy confirmation stays inside the button. Services show health freshness, placement and configuration-backup locations.
 
+The **Resources** tab (`#map`) is a read-only picture of the catalog: physical
+machines side by side, with their VMs, containers and application services nested
+inside, and dashed arrows for declared dependencies. ELK.js lays it out
+automatically; it renders at actual size, so use browser zoom to rescale it. See
+the [layout-library research](specs/research/graph-layout.md).
+
 Use **Check IP reservations** for an on-demand, read-only router/host audit. It uses ordinary code, not scheduled inference, and separates violations from unverified coverage. See [network address audit setup and scope](docs/network-address-audit.md).
 
 ## Screenshots
@@ -96,6 +102,8 @@ Take a SQLite-consistent export and back up private configuration, proxy, servic
 (cd registry && python3 -m unittest -v)
 (cd dashboard && python3 -m unittest -v)
 node --check dashboard/app.js
+node --check dashboard/resource-graph.js
+node tests/test_resource_graph.cjs
 (cd agent && go test -race ./...)
 ```
 

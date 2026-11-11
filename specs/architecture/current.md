@@ -167,7 +167,8 @@ reusable procedures. Public source carries implementations and examples. The
 registry is authoritative operational information, not proof that an observation
 is still fresh or a desired configuration has been applied.
 
-The dashboard separates machines, services and backups, provides browser access,
+The dashboard adds a graphical machine/guest/service map alongside separate
+machine, service and backup views, provides browser access,
 and displays low-overhead CPU/RAM/GPU/disk history. Collectors retain bounded local
 history and stream while viewed. Health checks, runtime reads and address presence
 are separate from resource streaming; some run independently of viewers. Cached

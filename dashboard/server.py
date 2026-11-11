@@ -79,8 +79,8 @@ class Handler(BaseHTTPRequestHandler):
             data['server_time']=time.time()
             if path!='/api/inventory':key=path.rsplit('/',1)[1];data={key:data[key],'error':data['error'],'fetched_at':data['fetched_at']}
             raw=json.dumps(data).encode();kind='application/json'
-        elif path in ['/','/app.js','/app.css']:
-            file={'/':'index.html','/app.js':'app.js','/app.css':'app.css'}[path];raw=(BASE/file).read_bytes();kind={'/':'text/html','/app.js':'text/javascript','/app.css':'text/css'}[path]
+        elif path in ['/','/app.js','/app.css','/resource-graph.js','/resource-graph.css','/vendor/elk-api.js','/vendor/elk-worker.min.js']:
+            file='index.html' if path=='/' else path.lstrip('/');raw=(BASE/file).read_bytes();kind='text/html' if path=='/' else 'text/css' if path.endswith('.css') else 'text/javascript'
         else:self.send_error(404);return
         self.send_response(200);self.send_header('Content-Type',kind+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");self.end_headers();self.wfile.write(raw)
 if __name__=='__main__':
