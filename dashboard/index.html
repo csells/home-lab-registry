@@ -9,13 +9,13 @@
 <section class="network-audit" aria-label="IP reservation audit"><p id="address-audit" role="status">IP reservation audit: not published yet. Audits run on demand from orca.</p></section>
 <section class="inventory-accuracy" aria-label="Inventory accuracy">
 <div class="accuracy-heading"><div><h2>Inventory accuracy</h2><p id="accuracy-summary" role="status">Waiting for verified inventory…</p></div><button id="reconcile" class="button secondary">Reconcile now</button></div>
-<p id="reconcile-status" role="status"></p><details id="accuracy-details"><summary>Discrepancies and observed guests</summary><p id="accuracy-scope"></p><ul id="accuracy-findings"></ul><div id="observed-guests"></div></details>
+<p id="reconcile-status" role="status"></p><details id="accuracy-details"><summary>Discrepancies and observed guests</summary><p id="accuracy-scope"></p><div id="accuracy-findings"></div><div id="observed-guests"></div></details>
 </section>
 <nav aria-label="Inventory views"><button id="machines-tab" aria-pressed="true">Machines <span id="machine-count">—</span></button><button id="services-tab" aria-pressed="false">Services <span id="service-count">—</span></button><button id="backups-tab" aria-pressed="false">Backups <span id="backup-count">—</span></button><button id="map-tab" aria-pressed="false">Resources</button></nav>
 <div id="error" role="alert" hidden></div>
 <section class="inventory-tools" aria-label="Inventory controls"><div class="inventory-title"><h2 id="title">Machines</h2><p id="view-description">Your hardware, with every way in.</p></div><div class="search-tools"><label class="search-field"><span class="sr-only">Search</span><input id="search" type="search" placeholder="Find a machine…" autocomplete="off"></label><label><span class="sr-only">Filter by host</span><select id="host"><option value="">All hosts</option></select></label></div></section>
 <section id="health-filters" aria-label="Health filters"></section><p id="summary" class="inventory-summary" aria-live="polite">Loading inventory…</p>
 <section id="cards" class="machines" aria-label="Machines"></section>
-<footer><strong>Home lab</strong><span>Live charts while viewing · Inventory changes stream automatically.</span></footer>
+<footer><strong>Home lab</strong><span>Live charts while viewing · Guest inventory changes stream automatically.</span></footer>
 <div id="toast" role="status" class="sr-only"></div>
 </main></body></html>

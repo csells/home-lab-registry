@@ -40,3 +40,8 @@ nav{flex-wrap:wrap;column-gap:20px;row-gap:0}.badge.stopped{background:#edf0ee;c
 .network-audit p{margin:0;line-height:1.5}
 
 .inventory-accuracy{border:1px solid var(--border,#bccac6);border-radius:16px;padding:20px;margin:16px 0}.accuracy-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.accuracy-heading h2{font-size:1.25rem;margin:0}.inventory-accuracy li{margin:.5rem 0;overflow-wrap:anywhere}.inventory-accuracy details{margin-top:12px}.observed-host{margin:16px 0}.inventory-accuracy #reconcile-status{min-height:1.5em;margin:8px 0}@media(max-width:600px){.accuracy-heading{align-items:flex-start;flex-direction:column}}
+
+.host-inventory{padding:10px 24px;border-top:1px solid var(--border,#ccd6d2);font-size:.875rem}
+.host-inventory details{margin-top:6px}
+.host-inventory li,.accuracy-group li{overflow-wrap:anywhere}
+.accuracy-group h3,.observed-host h3{font-size:1rem;margin:16px 0 6px}

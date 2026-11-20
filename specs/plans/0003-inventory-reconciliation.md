@@ -82,3 +82,29 @@ approval, preserve rollback evidence, upgrade enrolled collectors, verify
 coverage and authenticated production behavior, then remove the staging
 guest, routes and dedicated credentials. Confirm the deployed source in
 the registry and update the architecture after verification.
+
+
+## Coverage and cutover qualification
+
+The revised candidate separates confirmed guest mismatches, records needing
+review, and unverified collectors. The manual comparison reports verified
+coverage and the oldest verified observation. Machine cards show the
+collector state. The API reports coverage independently from findings and
+tags each finding with its category.
+
+A real mobile browser verified partial coverage, the grouped report and
+manual comparison. Stopping the dedicated staging collector dropped the
+verified count to zero. Restarting it restored coverage in the open browser.
+The production collectors responded to authenticated snapshot requests but
+returned 404 on the new stream route. Fleet streaming remains a cutover check.
+
+After approval, capture and verify a recoverable pre-cutover configuration
+backup. Preserve the existing dashboard files and each installed collector
+binary, with digests and service definitions, in the approved rollback path.
+Build the candidate for each enrolled OS and architecture. Upgrade collectors
+one at a time and verify both existing metrics and guest snapshots as well as
+a real authenticated stream before proceeding to the next host. Restore the
+previous binary and verify its endpoints if a host regresses. Deploy the
+dashboard after the collectors pass. If dashboard verification fails, restore
+its previous files and verify the stable views and access paths. Confirm fleet
+coverage and authenticated browser behavior before removing staging.

@@ -6,6 +6,8 @@ from model import entity_type
 from network_audit import guest_identity
 
 MAX_AGE = 900
+GUEST_MISMATCHES = {'missing-guest', 'unregistered-guest'}
+
 
 def binding(spec):
     resources = spec.get('resources', {})
@@ -32,7 +34,9 @@ def reconcile(records, observations, now=None):
     hosts = {r['id']: r for r in active if entity_type(r) == 'machine' and not binding(r['spec'])[1]}
     claims, findings, reports = {}, [], []
     def issue(code, target, message, **fields):
-        findings.append(dict(code=code, target=target, message=message, **fields))
+        category = ('guest-mismatch' if code in GUEST_MISMATCHES else
+                    'coverage' if code == 'collector-unverified' else 'record-review')
+        findings.append(dict(code=code, category=category, target=target, message=message, **fields))
     for record in active:
         spec, key = record['spec'], record['id']
         resources = spec.get('resources', {})
@@ -90,7 +94,9 @@ def reconcile(records, observations, now=None):
     for (parent, guest), linked in claims.items():
         if parent not in hosts:
             for r in linked: issue('parent-unregistered', r['id'], 'Deployment parent is not an active registered host.', machine_id=parent, guest_id=guest)
-    return dict(checked=now, status='attention' if findings else ('verified' if expected else 'unverified'),
+    coverage_status = 'unverified' if not verified else 'partial' if verified < expected else 'verified'
+    return dict(checked=now, coverage_status=coverage_status,
+                status='attention' if findings else coverage_status,
                 coverage=dict(verified=verified, expected=expected, unconfigured=len(hosts)-expected),
                 findings=findings, hosts=reports,
                 scope='Guest presence and registration metadata. Native/cloud service presence and application health are separate checks.')

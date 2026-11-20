@@ -97,7 +97,7 @@ function metricsPanel(r){
 }
 function backup(r){const b=r.config_backup||{},label=b.status==='scheduled'?'Scheduled':b.status==='manual'?'Manual copy':'Not recorded';const d=details(r.id+':backup','backup','Configuration backup · '+label);for(const l of b.locations||[])d.append(el('p','backup-location',l.host+' / '+l.path));if(!(b.locations||[]).length)d.append(el('p','','No configuration backup location recorded.'));if(b.notes)d.append(el('p','',b.notes));d.append(el('p','',r.health?.evidence||'No health evidence.'));const checked=el('p','','Last health check: ');if(r.health?.checked)checked.append(el('time','',new Date(r.health.checked*1000).toLocaleString()));else checked.append('Not recorded');d.append(checked);if(health(r)==='stale')d.append(el('p','','The last report expired. Current health is unverified.'));return d}
 function cardHeader(r,machine){const head=el('header','card-head');if(machine)head.append(symbol());const identity=el('div','identity');identity.append(el('h3','',machine?(r.display_name||r.host):r.name));if(machine)identity.append(el('p','',[r.model,r.os].filter(Boolean).join(' · ')));else identity.append(el('p','','Hosted on '+r.host));const hb=el('div','health-block'),s=health(r),labels=machine?{healthy:'Reachable',unhealthy:'Check failed',unknown:'Unknown',running:'Running',stale:'Stale'}:{healthy:'Healthy',unhealthy:'Unhealthy',unknown:'Unknown',running:'Running',stale:'Stale'};hb.append(el('span','badge '+s,s==='stopped'?'Stopped':labels[s]||s));const ago=el('p','check-age');ago.append(timeElement(['stopped','running'].includes(s)?r.runtime?.checked:r.health?.checked));hb.append(ago);head.append(identity,hb);return head}
-function machineCard(r){const c=el('article','card machine-card');c.dataset.id=r.id;c.append(cardHeader(r,true));if(hasMetrics(r))c.append(metricsPanel(r));if(r.access?.length)c.append(accessPanel(r));const foot=el('div','card-foot'),hosted=data.services.filter(s=>s.machine_id===r.id),b=el('button','text-button',hosted.length+' services on this machine →');b.onclick=()=>{switchView('services');$('host').value=r.host;render()};foot.append(b);c.append(foot,backup(r));return c}
+function machineCard(r){const c=el('article','card machine-card');c.dataset.id=r.id;c.append(cardHeader(r,true));const check=hostInventory(r);if(check)c.append(check);if(hasMetrics(r))c.append(metricsPanel(r));if(r.access?.length)c.append(accessPanel(r));const foot=el('div','card-foot'),hosted=data.services.filter(s=>s.machine_id===r.id),b=el('button','text-button',hosted.length+' services on this machine →');b.onclick=()=>{switchView('services');$('host').value=r.host;render()};foot.append(b);c.append(foot,backup(r));return c}
 function serviceCard(r){const c=el('article','card service-card');c.dataset.id=r.id;c.append(cardHeader(r,false));const body=el('div','service-body');if(r.deployment)body.append(el('p','service-description',r.deployment));const links=el('div','service-links');for(const [label,value]of Object.entries(r.endpoints||{})){const u=safeUrl(value);if(!u)continue;if(['localhost','127.0.0.1','[::1]'].includes(u.hostname)){links.append(el('p','no-endpoint',label+' is local to '+r.host));continue}links.append(link('Open '+label+' ↗',u.href,'button secondary'))}if(!links.children.length)links.append(el('p','no-endpoint','No browser endpoint registered.'));body.append(links);for(const a of r.access||[]){const credentials=el('div','credential-line'),user=el('div','username');user.append(el('span','username-label','Username'),el('div','username-value',a.username||(a.username_required===false?'Not required':'Not recorded')));credentials.append(user);if(a.password_available)credentials.append(copyPassword(r,a,el('span')));body.append(credentials)}const tags=el('div','capabilities');for(const t of r.capabilities||[])tags.append(el('span','capability',t));body.append(tags);c.append(body);const foot=el('div','card-foot'),b=el('button','text-button','View '+r.host+' →');b.onclick=()=>{switchView('machines');$('host').value=r.host;render()};foot.append(b);c.append(foot);if(r.kind!=='backup')c.append(backup(r));else c.append(el('p','service-body',r.health?.evidence||'No backup result recorded.'));return c}
 function render(){
  disposeGraph();
@@ -118,17 +118,82 @@ $('machines-tab').onclick=()=>switchView('machines');$('services-tab').onclick=(
 function showAddressAudit(a){$('address-audit').textContent=a?'Last IP reservation audit: '+a.status+' · '+a.warnings+' warning'+(a.warnings===1?'':'s')+' · '+new Date(a.at).toLocaleString()+' · runs on demand from orca':'IP reservation audit: not published yet. Audits run on demand from orca.'}
 
 let reconcileRequested=0;
+const findingGroups=[
+ ['guest-mismatch','Confirmed guest mismatches'],
+ ['record-review','Records to review'],
+ ['coverage','Collectors we could not verify']
+];
+function findingItem(f){
+ return el('li','',f.target+(f.guest_id?' / '+f.guest_id:'')+' — '+f.message+(f.name?' ('+f.name+')':''));
+}
+function hostInventory(machine){
+ const report=data.inventory_accuracy;
+ const host=report?.hosts.find(h=>h.machine_id===machine.id);
+ if(!host)return null;
+ const verified=host.status==='verified'&&host.expires>now()&&!data.error;
+ const label=verified?'Guest inventory verified':host.status==='unconfigured'?'Guest inventory collector not configured':'Guest inventory unverified';
+ const panel=el('div','host-inventory');
+ panel.append(el('strong','',label));
+ if(verified){panel.append(document.createTextNode(' · '),timeElement(host.checked))}
+ const issues=report.findings.filter(f=>
+  (f.machine_id===machine.id||f.target===machine.id)&&
+  (f.category!=='guest-mismatch'||verified));
+ if(issues.length){
+  const list=details('reconciliation:'+machine.id,'',issues.length+' inventory '+(issues.length===1?'item':'items')+' to review');
+  const rows=el('ul');for(const f of issues)rows.append(findingItem(f));
+  list.append(rows);panel.append(list);
+ }
+ return panel;
+}
 function showAccuracy(a){
- if(!a){$('accuracy-summary').textContent='Inventory verification unavailable.';return}
- const c=a.coverage,stale=now()-a.checked>90;
- $('accuracy-summary').textContent=(stale?'Stale observation · ':'')+c.verified+' / '+c.expected+' collectors verified · '+a.findings.length+' discrepancies · '+age(a.checked);
- $('accuracy-scope').textContent=a.scope+' '+c.unconfigured+' machines have no configured guest collector.';
- const findings=$('accuracy-findings');findings.replaceChildren();
- for(const f of a.findings)findings.append(el('li','',f.target+(f.guest_id?' / '+f.guest_id:'')+' — '+f.message+(f.name?' ('+f.name+')':'')));
- const hosts=$('observed-guests');hosts.replaceChildren();
- for(const h of a.hosts){const section=el('section','observed-host');section.append(el('h3','',h.machine_id+' · '+h.status+' · '+age(h.checked)));
-  const list=el('ul');for(const g of h.guests)list.append(el('li','',g.id+' · '+(g.name||g.id)+' · '+g.state+(g.template?' · template':'')+' · '+(g.records.join(', ')||'No service binding')));section.append(list);hosts.append(section)}
- if(reconcileRequested&&!a.pending&&a.checked>=reconcileRequested){reconcileRequested=0;$('reconcile-status').textContent='Reconciliation complete.';$('reconcile').disabled=false}
+ const summary=$('accuracy-summary');
+ const scope=$('accuracy-scope');
+ const findings=$('accuracy-findings');
+ const hosts=$('observed-guests');
+ findings.replaceChildren();hosts.replaceChildren();
+ if(!a){
+  summary.textContent='Inventory verification unavailable.';
+  scope.textContent='';
+  return;
+ }
+ const stale=Boolean(data.error)||now()-a.checked>90||
+  a.hosts.some(h=>h.status==='verified'&&h.expires<=now());
+ const c=a.coverage;
+ const label=stale?'Stale coverage':a.pending?'Checking coverage':
+  a.coverage_status==='partial'?'Partial coverage':a.coverage_status==='verified'?'Coverage verified':'Inventory unverified';
+ const coverage=c.verified+' of '+c.expected+' configured hosts verified';
+ const visibleFindings=a.findings.filter(f=>!stale||f.category!=='guest-mismatch');
+ const mismatches=visibleFindings.filter(f=>f.category==='guest-mismatch').length;
+ const reviews=visibleFindings.filter(f=>f.category==='record-review').length;
+ summary.textContent=label+' · '+coverage+' · '+(stale?'Refresh required':mismatches+' confirmed guest mismatches')+' · '+reviews+' records to review';
+ scope.textContent=a.scope+' '+c.unconfigured+' hosts have no configured guest collector.';
+ for(const [category,title] of findingGroups){
+  const items=visibleFindings.filter(f=>f.category===category);
+  if(!items.length)continue;
+  const group=el('section','accuracy-group');
+  group.append(el('h3','',title+' ('+items.length+')'));
+  const list=el('ul');for(const f of items)list.append(findingItem(f));
+  group.append(list);findings.append(group);
+ }
+ for(const h of a.hosts){
+  const section=el('section','observed-host');
+  const verified=h.status==='verified'&&!stale;
+  const state=verified?'verified':h.status==='unconfigured'?'no collector configured':'unverified';
+  section.append(el('h3','',h.machine_id+' · '+state+(verified?' · '+age(h.checked):'')));
+  if(verified){
+   const list=el('ul');
+   for(const g of h.guests)list.append(el('li','',g.id+' · '+(g.name||g.id)+' · '+g.state+(g.template?' · template':'')+' · '+(g.records.join(', ')||'No service binding')));
+   section.append(list);
+  }
+  hosts.append(section);
+ }
+ if(reconcileRequested&&!a.pending&&!stale&&a.checked>=reconcileRequested){
+  reconcileRequested=0;
+  const checks=a.hosts.filter(h=>h.status==='verified').map(h=>h.checked);
+  const oldest=checks.length?' · Oldest verified report: '+age(Math.min(...checks)):'';
+  $('reconcile-status').textContent='Comparison finished · '+coverage+oldest;
+  $('reconcile').disabled=false;
+ }
 }
 $('reconcile').onclick=async()=>{
  const button=$('reconcile');button.disabled=true;reconcileRequested=now();$('reconcile-status').textContent='Checking registered deployments against current host inventories…';

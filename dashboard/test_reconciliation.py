@@ -7,13 +7,17 @@ class ReconciliationTests(unittest.TestCase):
   service={'id':'web','spec':{'host':'h','owner':'team','capabilities':['web'],'resources':{'guest_id':7},'lifecycle':'active'}}
   result=reconcile([host,service],{'machine-h':{'error':'offline','checked':100}},now=110)
   self.assertEqual(result['coverage']['verified'],0)
+  self.assertEqual(result['coverage_status'],'unverified')
+  self.assertEqual([f['category'] for f in result['findings']],['coverage'])
   self.assertNotIn('missing-guest',[i['code'] for i in result['findings']])
  def test_real_inventory_comparison_and_lease(self):
   host={'id':'machine-h','spec':{'host':'h','owner':'team','capabilities':['machine'],'resources':{'kind':'machine','metrics_stream':{'enabled':True}}}}
   service={'id':'web','spec':{'host':'h','owner':'team','capabilities':['web'],'resources':{'guest_id':7,'expires_at':'1970-01-01T00:01:00Z'},'lifecycle':'active'}}
   sample={'checked':100,'expires':300,'entries':[{'id':'8','name':'unexpected','state':'running','type':'qemu'}]}
   result=reconcile([host,service],{'machine-h':sample},now=110)
-  self.assertTrue({'missing-guest','unregistered-guest','expired-lease'}<=set(i['code'] for i in result['findings']))
+  self.assertEqual(result['coverage_status'],'verified')
+  self.assertEqual({f['code']:f['category'] for f in result['findings']},{
+   'missing-guest':'guest-mismatch','unregistered-guest':'guest-mismatch','expired-lease':'record-review'})
  def test_old_and_future_observations_are_not_truth(self):
   host={'id':'machine-h','spec':{'host':'h','owner':'team','capabilities':['machine'],'resources':{'kind':'machine','metrics_stream':{'enabled':True}}}}
   for checked in [1,2000]:
