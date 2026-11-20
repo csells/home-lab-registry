@@ -108,3 +108,17 @@ previous binary and verify its endpoints if a host regresses. Deploy the
 dashboard after the collectors pass. If dashboard verification fails, restore
 its previous files and verify the stable views and access paths. Confirm fleet
 coverage and authenticated browser behavior before removing staging.
+
+
+## Production rollout (2026-11-20)
+
+Approved implementation `51631f7` is live. The installed collectors served
+authenticated metrics, guest snapshots and guest streams for all six configured
+hosts. The production dashboard returned 6/6 through SSE and after a manual
+comparison. An authenticated mobile browser rendered the coverage panel, host
+cards and Resources graph. Previous binaries and dashboard code were retained
+outside staging and checked for readability. The dedicated staging VM and disks,
+audit account and review route were removed.
+
+Remaining follow-up: registry metadata change delivery, OS-native lifecycle
+events, native/cloud presence discovery and deployment-tool registration.

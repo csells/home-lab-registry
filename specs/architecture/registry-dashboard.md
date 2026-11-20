@@ -59,7 +59,9 @@ addresses while preserving stable machine identity and pinned SSH host keys.
 ### Dashboard, access and observations
 
 [`dashboard/server.py`](../../dashboard/server.py) serves the UI and authenticated
-APIs behind a reverse proxy. It refreshes registry-derived inventory every 30 seconds.
+APIs behind a reverse proxy. It reads the catalog at startup and on **Reconcile now**,
+and streams current inventory results to the browser over SSE. The registry
+metadata change feed remains follow-up work.
 [`dashboard/model.py`](../../dashboard/model.py) separates machines, services,
 backup jobs and historical records. Catalog counts are not process counts.
 
@@ -102,8 +104,10 @@ zero-overhead guarantee.
 Health observations expire independently of resource metrics. Each machine's
 collector reads its own hypervisor inventory (Proxmox API with a read-only token,
 or `tart list`) and serves it on the same mutually authenticated listener.
-[`machine_runtime.py`](../../dashboard/machine_runtime.py) polls those reports
-every 30 seconds; states expire with the report, never later than fifteen minutes.
+[`machine_runtime.py`](../../dashboard/machine_runtime.py) subscribes to one inventory
+stream per configured collector. Each stream sends a cached first report, change
+events and freshness heartbeats. Local hypervisor sampling continues; the
+dashboard expires state with the report, never later than fifteen minutes.
 The dashboard holds no hypervisor SSH credentials.
 Runtime, reachability, application function and available capacity are different facts.
 

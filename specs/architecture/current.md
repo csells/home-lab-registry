@@ -1,6 +1,6 @@
 # Current home-lab architecture
 
-As of 2026-10-28. This describes the whole lab's architectural roles and relationships,
+Baseline 2026-10-28, with the inventory rollout verified 2026-11-20. This describes the whole lab's architectural roles and relationships,
 using the current registry records and registry/dashboard source through `1f70fb1`.
 Reading a deployment record is not a fresh end-to-end health check. Private machine
 names, addresses, placements, capacities, credentials and dated operational evidence
@@ -171,8 +171,10 @@ The dashboard adds a graphical machine/guest/service map alongside separate
 machine, service and backup views, provides browser access,
 and displays low-overhead CPU/RAM/GPU/disk history. Collectors retain bounded local
 history and stream while viewed. Collectors also serve local guest inventory over
-mutually authenticated TLS; the dashboard polls these reports and expires stale
-states. Background runtime collection no longer uses SSH. Browser terminals keep
+mutually authenticated TLS; the dashboard receives an initial cached report,
+then changes and freshness heartbeats, and expires stale states. Collector-side
+hypervisor sampling continues at its configured interval. Registry record edits
+are loaded at startup or by Reconcile now. Background runtime collection no longer uses SSH. Browser terminals keep
 their separate SSH identity. Health checks, guest inventory and address presence
 remain separate from resource streaming; some run independently of viewers. Cached
 metrics history is not a durable experiment archive.

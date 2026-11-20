@@ -59,7 +59,7 @@ reconcile again. Never retire records merely because a host failed to report.
   sharing a guest are valid.
 
 Observed guest lists and their timestamps are the current runtime view. Historical
-`guest_snapshot` and task notes are evidence only, never runtime authority. The candidate
+`guest_snapshot` and task notes are evidence only, never runtime authority. Reconciliation
 is read-only: it does not overwrite registry intent or erase historical observations.
 Native process discovery, cloud inventory and hardware changes are outside guest-report
 coverage and must not be advertised as verified by this report.
@@ -74,4 +74,4 @@ workload deletion.
 
 The staged agent reads a real hypervisor through its own read-only audit token. The
 private endpoint override changes guest discovery only; it does not misrepresent the
-staging VM's CPU/RAM as the physical host's metrics. Fleet rollout awaits promotion.
+staging VM's CPU/RAM as the physical host's metrics. Production verification covered all six configured collectors on 2026-11-20.
