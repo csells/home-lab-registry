@@ -1,7 +1,7 @@
 # Renewable test environments as a home-lab service
 
-Status: proposed implementation plan; documentation requested, implementation and
-production promotion not performed. Created 2026-10-19.
+Status: proposed. The first implementation target is one bounded Linux pool.
+Created 2026-10-19.
 
 Context: [vision](../vision/home-lab.md), [current architecture](../architecture/current.md).
 
@@ -212,3 +212,19 @@ disk/resource count and controller overhead. Require zero protected-service
 mutations, zero cross-owner cleanup and zero unreserved static LAN assignments in
 qualification. A matching-environment claim requires a real restored workload,
 not just a successful clone command.
+
+
+## First implementation slice
+
+Use the existing Proxmox API and a dedicated pool-scoped service identity for
+Linux guest lifecycle. Qualify the template and clone, start, stop, task-status
+and delete permissions against an isolated staging pool. Keep the controller's
+durable operation journal separate from guest storage, and publish registry
+records after each verified transition. The central encrypted backup system is
+the existing destination to qualify for checkpoint export and restore.
+
+Start with explicit release and an overdue state that queues owner review.
+Enable automatic reclamation only after the retention, export-failure and
+delegation policy has been selected and verified. No policy decision is
+required to prototype acquire, renew, explicit release and interrupted
+operation recovery in the dedicated test pool.

@@ -45,12 +45,9 @@ mobile layout, the report API and rejection of cross-origin mutation requests.
 The comparison initially failed under sandbox-limited macOS process visibility;
 a direct permitted host query resolved that discrepancy without changing workloads.
 
-Stable is unchanged. Promotion is pending operator review. Review-link exposure is
-pending explicit permission after automatic approval review rejected that browser
-check; the temporary BB share was removed. Private evidence, credential cleanup and
-staging ownership are recorded in the registry. Native/cloud presence discovery and
-mandatory deployment-tool registration remain separate follow-up work, not completed
-features of this candidate.
+The initial snapshot candidate was superseded by the streaming candidate below.
+Native/cloud presence discovery and mandatory deployment-tool registration remain
+separate follow-up work.
 
 ## Push correction
 
@@ -68,3 +65,20 @@ browser without another inventory GET. A 65-second idle/heartbeat window retaine
 one browser subscription with no polling, followed by successful manual reconciliation.
 The runtime source samples at its existing interval; this is change-only network
 delivery, not yet an OS-native hypervisor lifecycle event source.
+
+
+## Integrated staging review (2026-11-20)
+
+The staged build combines the Resources graph with inventory streaming and the
+already deployed operator-run address audit. It connects to the real registry
+and one of six configured collectors through the staging stream endpoint.
+The other five remain unverified in this candidate. The browser rendered the
+graph and completed a manual reconciliation with one inventory GET during
+the session. Dashboard (37 tests), registry (20 tests), Go race and graph
+tests passed. The review endpoint and expiry are recorded in the registry.
+
+Production promotion requires approval of this integrated build. After
+approval, preserve rollback evidence, upgrade enrolled collectors, verify
+coverage and authenticated production behavior, then remove the staging
+guest, routes and dedicated credentials. Confirm the deployed source in
+the registry and update the architecture after verification.
