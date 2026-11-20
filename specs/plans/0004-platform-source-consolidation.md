@@ -1,7 +1,8 @@
 # Reusable platform source and deployment boundaries
 
-Status: proposed follow-up, 2026-11-20. Documentation migration only; no service source,
-deployment definition or runtime has been imported, changed or promoted by this plan.
+Status: in progress, 2026-11-20. Reviewed operator-specific integration source has
+been captured in the operator's private deployment repository. No public service
+source import, runtime change or promotion is claimed by this documentation update.
 
 ## Outcome
 
@@ -41,7 +42,25 @@ repository pointer is unknown ownership, not permission to relocate code.
 - [ ] Verify service code changes in a disposable VM against actual lab interfaces,
   preserve stable state, and obtain explicit staged-candidate promotion approval.
 
-## Completion
+## Verified private-source progress (2026-11-20)
+
+The operator's private workspace now maintains reviewed Plex sync code/units, Alook
+service/startup definitions, mail-ddclient unit and selected backup exporters/playbooks.
+An initial 19 files were source/hash checked; seven additional integration definitions
+or address/identity templates followed the dedicated-exporter review. Secrets, runtime
+inventory and archives were excluded. Registry source pointers identify the private
+source revision. This completes the bounded private source-home slice, not every
+reusable component import or service recovery requirement above.
+
+Controller/public collector drift remains open. The old manifest uses static SSH
+destinations; the public collector requires enrolled target identities and current
+SSH presence. Guest export targets must not be replaced with physical-hypervisor IDs.
+Real-registry resolver preflight exposed identity/freshness gaps. Staging admission,
+secret access, full export/recovery and promotion remain unqualified; stable is unchanged.
+Track current blockers in the central-backup registry record and private deployment
+plan rather than duplicating live fleet inventory here.
+
+## Completion criteria
 
 A fresh agent can locate the correct source revision and reproduce a bounded
 component without mining transcripts or committing credentials. Published source
