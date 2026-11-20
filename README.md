@@ -1,6 +1,13 @@
 # Home Lab Registry
 
-A small, self-hosted machine and service catalog with an authenticated dashboard. Machines and services have separate views. Machine cards put compact CPU, RAM, GPU and disk history bars above browser SSH, hypervisor, KVM and AMT access. Device and host-console credentials are separate; copy confirmation stays inside the button. Services show health freshness, placement and configuration-backup locations.
+A self-hosted home-lab platform for discovering machines and services, understanding
+their capabilities, and acquiring suitable environments. The implemented foundation
+is an authenticated machine/service catalog and dashboard; the expanded charter adds
+shared environment allocation, lifecycle management and Apple workers through the
+[proposed environment-service plan](specs/plans/0001-renewable-test-environments.md).
+The allocator and Mac-worker lifecycle are not implemented by this documentation change.
+
+Machines and services have separate views. Machine cards put compact CPU, RAM, GPU and disk history bars above browser SSH, hypervisor, KVM and AMT access. Device and host-console credentials are separate; copy confirmation stays inside the button. Services show health freshness, placement and configuration-backup locations.
 
 The **Resources** tab (`#map`) is a read-only picture of the catalog: physical
 machines side by side, with their VMs, containers and application services nested
@@ -42,7 +49,12 @@ Service health, endpoints, configuration backups and optional login credentials.
 For project direction, read the [home-lab vision](specs/vision/home-lab.md).
 For implemented boundaries, read the [current architecture](specs/architecture/current.md).
 The [renewable test-environment service plan](specs/plans/0001-renewable-test-environments.md)
-describes proposed work; it is not an available service yet.
+describes proposed work; it is not an available service yet. The
+[usage research](specs/research/2026-11-20-bb-home-lab-usage-audit.md) explains the
+Proxmox/Cloudpods and Mac-worker recommendations; the
+[source-consolidation plan](specs/plans/0004-platform-source-consolidation.md) defines
+which reusable components belong here. Deployment policy, inventory, credentials
+and personal integration values remain operator-controlled.
 
 - `registry/`: Python standard-library HTTPS API, SQLite catalog, revisions, health observations, probes and export/restore.
 - `dashboard/`: read-only dashboard, cached streaming measurements, credential-copy endpoint, and Apache Guacamole session integration.
