@@ -63,6 +63,28 @@ APIs behind a reverse proxy. It refreshes registry-derived inventory every 30 se
 [`dashboard/model.py`](../../dashboard/model.py) separates machines, services,
 backup jobs and historical records. Catalog counts are not process counts.
 
+The read-only Resources (`#map`) tab uses the same inventory and filters as the
+Machines, Services and Backups tabs. Machine items retain `kind: machine` and add
+`machine_type` (`machine`, `virtual-machine`, or `container`) and `machine_id`;
+items also expose declared dependency IDs as `dependencies`. Physical machines have
+a null parent. Guests use explicit `resources.machine_id`; hostname coincidence never
+places a guest. No new registry schema, collector or discovery source is introduced.
+
+[`resource-graph.js`](../../dashboard/resource-graph.js) builds a compound graph and
+lays it out with locally vendored ELK.js 0.12.1 Layered in a Web Worker, rendering
+ELK's orthogonal edge sections. Stable input and a fixed seed make layout repeatable;
+cached geometry avoids relayout on status-only refreshes. The graph renders at actual
+size with no internal pan, zoom or click actions. Filters keep ancestors for context;
+missing parents and cycles appear under Unplaced. Relationships are declarations,
+not monitored traffic. The static-route allowlist adds only the named graph assets
+and Worker, without widening CSP. The [research decision](../research/graph-layout.md)
+records alternatives, license and version pin.
+
+Validation: `tests/test_resource_graph.cjs` covers hierarchy, ancestor/cyclic edges,
+stable ordering, filtering and orthogonal routes; `dashboard/test_model.py` covers
+placement metadata; `tests/check_map_browser.py` renders the tab through the real
+static routes/CSP at desktop and phone widths.
+
 Protected credential-copy controls and Guacamole session launch use private
 configuration outside source control. Host-console credentials are distinct from
 KVM credentials. This is a trusted operator interface with privileged access, not
