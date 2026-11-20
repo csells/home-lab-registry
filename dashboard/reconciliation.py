@@ -1,0 +1,96 @@
+"""Read-only inventory comparison. Observations never authorize deletion."""
+from datetime import datetime
+import math
+import time
+from model import entity_type
+from network_audit import guest_identity
+
+MAX_AGE = 900
+
+def binding(spec):
+    resources = spec.get('resources', {})
+    explicit = resources.get('runtime_binding', {})
+    if not isinstance(explicit, dict): explicit = {}
+    if explicit.get('kind') == 'guest':
+        return explicit.get('machine_id'), str(explicit['guest_id']) if explicit.get('guest_id') is not None else None
+    parent, guest = guest_identity(spec)
+    if guest is None:
+        deployment = resources.get('deployment', {})
+        if isinstance(deployment, dict) and deployment.get('vmid') is not None:
+            return 'machine-' + spec.get('host', ''), str(deployment['vmid'])
+    return parent, guest
+
+def fresh(sample, now):
+    checked, expires = sample.get('checked'), sample.get('expires')
+    return (not sample.get('error') and isinstance(sample.get('entries'), list)
+            and all(isinstance(v, (int, float)) and math.isfinite(v) for v in (checked, expires))
+            and checked <= now + 5 and checked <= expires and now < min(expires, checked + MAX_AGE))
+
+def reconcile(records, observations, now=None):
+    now = time.time() if now is None else now
+    active = [r for r in records if r['spec'].get('lifecycle') != 'retired' and entity_type(r) != 'archive']
+    hosts = {r['id']: r for r in active if entity_type(r) == 'machine' and not binding(r['spec'])[1]}
+    claims, findings, reports = {}, [], []
+    def issue(code, target, message, **fields):
+        findings.append(dict(code=code, target=target, message=message, **fields))
+    for record in active:
+        spec, key = record['spec'], record['id']
+        resources = spec.get('resources', {})
+        parent, guest = binding(spec)
+        if parent and guest:
+            claims.setdefault((parent, guest), []).append(record)
+        elif entity_type(record) == 'service' and not (isinstance(resources.get('runtime_binding'), dict) and resources['runtime_binding'].get('kind') in ('native', 'external')):
+            issue('deployment-unmapped', key, 'Deployment has no structured runtime binding; presence is unverified.')
+        if not spec.get('owner'):
+            issue('owner-missing', key, 'Record has no owner.')
+        expiry = resources.get('expires_at')
+        if expiry:
+            try:
+                date = datetime.fromisoformat(expiry.replace('Z', '+00:00'))
+                if date.tzinfo is None: raise ValueError('Timezone required')
+                if date.timestamp() < now:
+                    issue('expired-lease', key, 'Recorded lease expired; review or renew it. No automatic teardown.', expires_at=expiry)
+            except (ValueError, TypeError, AttributeError):
+                issue('invalid-lease', key, 'Lease expiry must be an ISO timestamp with timezone.')
+    verified = 0
+    expected = 0
+    for key, host in hosts.items():
+        configured = host['spec'].get('resources', {}).get('metrics_stream', {}).get('enabled')
+        sample = observations.get(key, {})
+        if not configured and not sample:
+            reports.append(dict(machine_id=key, status='unconfigured', guests=[], checked=None))
+            continue
+        expected += 1
+        if not fresh(sample, now):
+            issue('collector-unverified', key, sample.get('error') or 'Guest report absent, expired or invalid; missing guests cannot be inferred.')
+            reports.append(dict(machine_id=key, status='unverified', checked=sample.get('checked'), guests=[]))
+            continue
+        verified += 1
+        entries = sample['entries']
+        observed = {g['id']: g for g in entries}
+        report = dict(machine_id=key, status='verified', checked=sample['checked'], expires=min(sample['expires'], sample['checked']+MAX_AGE), guests=[])
+        templates = host['spec'].get('resources', {}).get('templates', [])
+        if isinstance(templates, dict): template_ids = set(templates)
+        else: template_ids = {str(t.get('id', t.get('vmid', t.get('name')))) for t in templates}
+        for guest in entries:
+            linked = claims.get((key, guest['id']), [])
+            template = guest.get('template', False) or guest['id'] in template_ids
+            report['guests'].append({**guest, 'records': [r['id'] for r in linked], 'template': template})
+            if not linked and not template:
+                issue('unregistered-guest', key, 'Observed guest has no registered deployment.', guest_id=guest['id'], name=guest.get('name', guest['id']))
+        reports.append(report)
+        for (parent, gid), linked in claims.items():
+            if parent != key: continue
+            if gid not in observed:
+                for record in linked:
+                    issue('missing-guest', record['id'], 'Registered guest absent from a fresh complete host inventory; verify before retirement.', machine_id=key, guest_id=gid)
+            machines = [r for r in linked if entity_type(r) == 'machine']
+            if len(machines) > 1:
+                issue('duplicate-machine', key, 'Multiple machine records claim the same guest.', guest_id=gid, records=[r['id'] for r in machines])
+    for (parent, guest), linked in claims.items():
+        if parent not in hosts:
+            for r in linked: issue('parent-unregistered', r['id'], 'Deployment parent is not an active registered host.', machine_id=parent, guest_id=guest)
+    return dict(checked=now, status='attention' if findings else ('verified' if expected else 'unverified'),
+                coverage=dict(verified=verified, expected=expected, unconfigured=len(hosts)-expected),
+                findings=findings, hosts=reports,
+                scope='Guest presence and registration metadata. Native/cloud service presence and application health are separate checks.')

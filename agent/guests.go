@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -256,14 +257,23 @@ func proxmoxReader(cfg GuestConfig) (func(context.Context) ([]Guest, error), err
 }
 
 type guestState struct {
-	mu     sync.Mutex
-	report GuestReport
+	mu      sync.Mutex
+	report  GuestReport
+	changed chan struct{}
 }
 
 func (s *guestState) set(r GuestReport) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	different := s.report.Status != r.Status || s.report.Source != r.Source || !reflect.DeepEqual(s.report.Guests, r.Guests) || !reflect.DeepEqual(s.report.Warnings, r.Warnings)
 	s.report = r
+	if s.changed == nil {
+		s.changed = make(chan struct{})
+	}
+	if different {
+		close(s.changed)
+		s.changed = make(chan struct{})
+	}
 }
 func (s *guestState) get() GuestReport {
 	s.mu.Lock()
@@ -297,6 +307,51 @@ func runGuests(ctx context.Context, s *guestState, interval time.Duration, colle
 		select {
 		case <-ctx.Done():
 			return
+		case <-tick.C:
+		}
+	}
+}
+
+// stream delivers a cached initial report, content changes, and low-frequency
+// freshness heartbeats. It does not trigger hypervisor reads per subscriber.
+func (s *guestState) stream(w http.ResponseWriter, r *http.Request) {
+	if s == nil {
+		http.Error(w, "guest inventory not configured", 404)
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	f, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unavailable", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	tick := time.NewTicker(60 * time.Second)
+	defer tick.Stop()
+	for {
+		s.mu.Lock()
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		report, changed := s.report, s.changed
+		s.mu.Unlock()
+		if report.Status == "" {
+			report.Status = "waiting"
+		}
+		controller := http.NewResponseController(w)
+		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if err := json.NewEncoder(w).Encode(report); err != nil {
+			return
+		}
+		f.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-changed:
 		case <-tick.C:
 		}
 	}

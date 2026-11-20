@@ -334,6 +334,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream", s.stream)
 	mux.HandleFunc("/guests", guests.serve)
+	mux.HandleFunc("/guests/stream", guests.stream)
 	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		h, _, seq := s.snapshot()
 		s.mu.Lock()
@@ -356,6 +357,7 @@ func main() {
 		networkMux := http.NewServeMux()
 		networkMux.HandleFunc("/stream", s.stream)
 		networkMux.HandleFunc("/guests", guests.serve)
+		networkMux.HandleFunc("/guests/stream", guests.stream)
 		networkServer = &http.Server{Addr: cfg.Listen, Handler: networkMux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 4096, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: roots}}
 		go func() {
 			if err := networkServer.ListenAndServeTLS(cfg.Cert, cfg.Key); err != nil && err != http.ErrServerClosed {
