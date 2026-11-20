@@ -1,7 +1,8 @@
 # Renewable test environments as a home-lab service
 
-Status: proposed implementation plan; documentation requested, implementation and
-production promotion not performed. Created 2026-10-19.
+Status: proposed. The first implementation target is one bounded Linux pool.
+Created 2026-10-19; expanded 2026-11-20 with heterogeneous placement, Apple workers
+and the usage audit. No allocator or provider migration is claimed deployed.
 
 Context: [vision](../vision/home-lab.md), [current architecture](../architecture/current.md).
 
@@ -42,6 +43,27 @@ environment lifetime. Later adapters cover flexible placement, GPU, Windows and
 Apple-hosted testing separately. Production services are outside disposable deletion
 scope. Existing authorized shared-service interfaces remain usable by test guests.
 
+## Placement and component choice
+
+The current recommendation is one allocation/lifecycle authority over existing
+Proxmox APIs and a first-class Apple worker. Native Proxmox clustering is a separate
+management/migration decision, not a prerequisite for acquiring environments.
+Evaluate maintained components before writing lifecycle machinery. Cloudpods should
+replace custom work if its actual OSS deployment satisfies the same contract more simply.
+See the [usage audit and architecture comparison](../research/2026-11-20-bb-home-lab-usage-audit.md).
+
+Requests describe OS/architecture, isolation, versioned toolchain, CPU/guaranteed
+memory/disk, qualified hardware access mode, dependencies, ownership and lifetime.
+A request may span complementary Linux and Apple environments. Return actual
+capabilities, ready access, dependency bindings, artifact location and lease status.
+Prefer qualified Linux workers for ordinary Linux work to preserve Apple capacity.
+
+Keep reusable controller/provider source here, with deployment policy and credentials
+supplied privately. Registry catalog writes do not authorize provider mutations.
+Workload frameworks consume this authority or a bounded delegated pool, rather than
+maintaining competing physical-capacity ledgers. Account for out-of-band guests and
+stopped disks; stale or unavailable observations do not establish free capacity.
+
 ## Durable records
 
 | Record | Required meaning |
@@ -76,7 +98,9 @@ Names below describe semantics; they are not existing routes or commands.
 Return structured error codes, retryability, operation IDs and safe next actions.
 Retries with the same idempotency key must not create duplicate allocations. Auth
 identifies the task principal, not a shared generic writer. A replacement gets a
-new environment identity and credentials. Ownership transfer is explicit.
+new environment identity and credentials. Ownership transfer is explicit. A user-approved cleanup override must expose affected
+consumers and data disposition. Existing workloads do not retroactively acquire a
+destructive expiry policy.
 
 ## Renewal, interruption and expiry
 
@@ -161,6 +185,48 @@ retention and deletion dates must be visible, not implied to last forever.
 7. A delayed delete for E/G is rejected and cannot target E2. An in-flight old task
    must already have reached a verified terminal state before any slot reuse.
 
+## Mac worker delivery
+
+Use an authenticated host-side executor for authoritative inventory and qualified clone/start/stop/delete/console operations. Begin with existing verified Tart images and concurrency constraints; increase concurrency only after measured real simultaneous workloads. Orchard or another maintained backend may supply worker functions; its resource accounting must have a clear authority boundary. Qualify Lume separately if strict OSS is required.
+
+Offer Apple build/test guests, GUI-test guests, and explicitly exclusive native/device sessions. A macOS VM does not imply real audio, camera, USB or physical-device support. Keep Linux builds and ordinary test infrastructure on qualified Linux workers and bind authorized shared voice/model services.
+
+Maintain versioned Xcode/simulator/Metal recipes and stable signed automation identities. Where an existing stable signing identity and scoped service helper are installed,
+verify and reuse that boundary; new deployments must establish their own identities. Validate actual console capture/input and the requested app test on fresh clones; permission flags alone do not prove operation. Prefer a qualified virtual-console path where appropriate to avoid per-agent screen-capture permissions on the physical host.
+
+Target routine acquisition without fresh infrastructure-consent dialogs after deliberate worker/image setup. Preserve explicit consent testing as a separate app-test case. Evaluate MDM only for supported policy/app/OS combinations; macOS 27 AppKit permission defaults still require consent and do not silently grant every CLI or screen-capture permission. Host GUI login, physical-device access and cold recovery remain separately qualified capabilities.
+
+## Inventory integration carried from October
+
+Reuse authenticated collector guest identity/state with observation times and expiry. Bind services/environments to exact host and guest identities; preserve legacy structured IDs during transition. Distinguish health, inventory, readiness and admitted capacity.
+
+Report unregistered/missing guests, stale collectors, expired leases, missing bindings and duplicate identities without inferring deletion or purpose from process names. Multiple services may legitimately share a guest. Keep historical snapshots as evidence rather than a competing current view.
+
+Use cached initial reports, change events and freshness heartbeats through the existing stream/SSE work. Avoid recurring central fleet polling or inference-based housekeeping. Local sampling versus OS-native event sources and registry metadata-change feeds must be described honestly. Manual reconciliation refreshes intent/observations without silently retiring workloads.
+
+The existing streamed-inventory candidate has validation history but its fleet rollout
+and promotion must be checked live. Preserve its task ownership. Its separate
+[reconciliation plan](https://github.com/csells/home-lab-registry/blob/277fbda89da4dcd1002d37665e3477ae93ad937e/specs/plans/0003-inventory-reconciliation.md)
+retains the rollout work; this plan does not assume that candidate is stable.
+
+## Apple and cross-provider acceptance
+
+The bounded Linux lifecycle is the first delivery, not the whole project charter.
+Follow it with one Apple recipe through the same task/operation/lease contract.
+Two tasks contending for the Mac must receive owned execution and an actionable
+queue without disturbing an unrelated VM. Review holds survive nominal expiry;
+controller restarts preserve ownership and pending operations.
+
+A fresh clone must complete a real Apple build and actual GUI interaction without
+repeating infrastructure consent setup. Report unqualified physical audio/device
+access separately. Preserve shared services and existing host sessions. Qualify
+concurrency using simultaneous real workloads, not nominal host capacity alone.
+
+Return approved shared voice/model/build bindings rather than duplicating runtimes.
+Exercise uncommitted-work recovery and evidence retrieval after guest deletion.
+Native clustering or hypervisor replacement needs a separate guest-data preservation
+and authorized cutover plan. Windows/GPU/device adapters remain explicit later work.
+
 ## Implementation sequence and acceptance
 
 - [ ] **Contract and recovery policy.** Select maintained components/adapters;
@@ -212,3 +278,19 @@ disk/resource count and controller overhead. Require zero protected-service
 mutations, zero cross-owner cleanup and zero unreserved static LAN assignments in
 qualification. A matching-environment claim requires a real restored workload,
 not just a successful clone command.
+
+
+## First implementation slice
+
+Use the existing Proxmox API and a dedicated pool-scoped service identity for
+Linux guest lifecycle. Qualify the template and clone, start, stop, task-status
+and delete permissions against an isolated staging pool. Keep the controller's
+durable operation journal separate from guest storage, and publish registry
+records after each verified transition. The central encrypted backup system is
+the existing destination to qualify for checkpoint export and restore.
+
+Start with explicit release and an overdue state that queues owner review.
+Enable automatic reclamation only after the retention, export-failure and
+delegation policy has been selected and verified. No policy decision is
+required to prototype acquire, renew, explicit release and interrupted
+operation recovery in the dedicated test pool.
