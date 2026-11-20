@@ -21,11 +21,11 @@ The pool respects the qualities that make machines useful: operating system and 
 Support Bazel builds, GPU workloads and testing across Linux, Windows, macOS, iOS
 and Android while preserving personal desktop and gaming use.
 
-Capacity is admitted safely or work queues with an understandable reason. Household headroom, existing workloads and specialist capacity are protected. Ordinary Linux work moves to appropriate Linux workers so Apple hardware remains available for Apple-specific work.
+The lab admits work when it has safe capacity and rejects requests it cannot fulfill with a specific reason. Household headroom, existing workloads and specialist capacity are protected. Ordinary Linux work moves to appropriate Linux workers so Apple hardware remains available for Apple-specific work.
 
 ## Shared Apple resources without repeated setup
 
-The Mac is a managed worker with authoritative host-side state, ownership, queueing and prepared execution environments. Routine jobs should reuse qualified images and stable signed automation components instead of repeatedly asking the operator to resolve infrastructure dialogs.
+The Mac is a managed worker with authoritative host-side state, ownership, admission and prepared execution environments. Routine jobs should reuse qualified images and stable signed automation components instead of repeatedly asking the operator to resolve infrastructure dialogs.
 
 Apple builds, GUI tests and native host/device sessions have different capabilities and isolation. A simulator or VM does not imply physical microphone, camera, USB or device access. Consent and GUI-session requirements remain visible and are prepared deliberately. Application tests of permission behavior use the appropriate fresh state; infrastructure automation keeps a consistent identity.
 
