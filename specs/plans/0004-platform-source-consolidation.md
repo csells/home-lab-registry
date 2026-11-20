@@ -55,8 +55,14 @@ reusable component import or service recovery requirement above.
 Controller/public collector drift remains open. The old manifest uses static SSH
 destinations; the public collector requires enrolled target identities and current
 SSH presence. Guest export targets must not be replaced with physical-hypervisor IDs.
-Real-registry resolver preflight exposed identity/freshness gaps. Staging admission,
-secret access, full export/recovery and promotion remain unqualified; stable is unchanged.
+Real-registry resolver preflight exposed identity/freshness gaps. Dragon management
+was repaired and actual-source collector staging passed restore/integrity, repeat
+and failure checks with authorized reader-only access and a dedicated export key.
+Fleet-wide identity/transport qualification, complete recovery and promotion remain
+open; the stable collector is unchanged. Several private SSH profiles require
+explicit tunnel and host-key-alias preservation; direct endpoint substitution alone
+is insufficient. Disabled historical plans retain their archives and are distinct
+from active backup sources.
 Track current blockers in the central-backup registry record and private deployment
 plan rather than duplicating live fleet inventory here.
 
