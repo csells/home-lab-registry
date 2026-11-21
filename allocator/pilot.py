@@ -22,6 +22,13 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+PROVIDER_TASK_TYPES = {
+    'starting': 'qmstart',
+    'stopping': 'qmshutdown',
+    'resetting': 'qmrollback',
+}
+
+
 class Proxmox:
     def __init__(self, config):
         self.base = config['url'].rstrip('/') + '/api2/json'
@@ -30,8 +37,12 @@ class Proxmox:
                 url.password or url.path not in ('', '/') or url.query or url.fragment):
             raise ValueError('Proxmox requires HTTPS')
         self.node = config['node']
-        self.guest = f'/nodes/{self.node}/qemu/{int(config["guest_id"])}'
+        self.guest_id = str(int(config['guest_id']))
+        self.guest = f'/nodes/{self.node}/qemu/{self.guest_id}'
         self.token = Path(config['token_file']).read_text().strip()
+        self.identity = self.token.split('=', 1)[0]
+        if '!' not in self.identity:
+            raise ValueError('Use a dedicated API token for the pilot slot')
         self.context = ssl.create_default_context(cafile=config['ca_file'])
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=self.context), NoRedirect())
@@ -61,6 +72,19 @@ class Proxmox:
     def reset(self):
         snap = urllib.parse.quote(self.snapshot, safe='')
         return self.call(self.guest + '/snapshot/' + snap + '/rollback', {'start': 0})
+
+    def matches_task(self, upid, phase):
+        parts = upid.split(':') if isinstance(upid, str) else []
+        return (len(parts) == 9 and parts[0] == 'UPID' and parts[1] == self.node
+                and parts[5:8] == [PROVIDER_TASK_TYPES[phase], self.guest_id, self.identity])
+
+    def recent_tasks(self, phase):
+        query = urllib.parse.urlencode({
+            'source': 'all', 'vmid': self.guest_id,
+            'typefilter': PROVIDER_TASK_TYPES[phase], 'limit': 50,
+        })
+        tasks = self.call(f'/nodes/{self.node}/tasks?{query}')
+        return {row['upid'] for row in tasks if self.matches_task(row.get('upid'), phase)}
 
     def task(self, upid):
         path = f'/nodes/{self.node}/tasks/{urllib.parse.quote(upid, safe="")}/status'
@@ -96,13 +120,17 @@ class Pilot:
         )''')
         self.db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_reserved_slot
             ON lease ((1)) WHERE phase != 'released'""")
+        columns = {row['name'] for row in self.db.execute('PRAGMA table_info(lease)')}
+        if 'prior_tasks' not in columns:
+            with self.db:
+                self.db.execute('ALTER TABLE lease ADD COLUMN prior_tasks TEXT')
         self.provider = Proxmox(config['proxmox'])
         self.user = config['guest_user']
 
-    def update(self, lease, phase, upstream=None, address=None):
+    def update(self, lease, phase, upstream=None, address=None, prior_tasks=None):
         with self.db:
-            self.db.execute('UPDATE lease SET phase=?, upstream=?, address=? WHERE id=?',
-                            (phase, upstream, address, lease))
+            self.db.execute('UPDATE lease SET phase=?, upstream=?, address=?, prior_tasks=? WHERE id=?',
+                            (phase, upstream, address, prior_tasks, lease))
         return self.get(lease)
 
     def get(self, lease):
@@ -111,23 +139,36 @@ class Pilot:
             raise Rejected('unknown_lease', 'No lease has this identifier.', 404)
         return dict(row)
 
-    def dispatch(self, lease, phase, operation):
-        self.update(lease, phase)
-        # Persist intent before dispatch. A lost response leaves the slot held
-        # and requires operator reconciliation. Never replay an ambiguous write.
+    def dispatch(self, lease, phase, operation, *, recorded=False):
+        if not recorded:
+            prior = json.dumps(sorted(self.provider.recent_tasks(phase)))
+            self.update(lease, phase, prior_tasks=prior)
+        # Dispatch once. Recovery can only attach a newly observed, matching
+        # provider task to this intent. With zero or multiple matches, hold.
         task = operation()
-        if not isinstance(task, str) or not task.startswith('UPID:'):
-            raise Rejected('operation_outcome_unknown', 'Proxmox returned no task identifier. The slot remains held.')
+        if not self.provider.matches_task(task, phase):
+            raise Rejected('operation_outcome_unknown', 'Proxmox returned no matching task identifier. The slot remains held.')
         return self.update(lease, phase, upstream=task)
+
+    def recover_task(self, row):
+        if row['prior_tasks'] is None:
+            return row
+        prior = set(json.loads(row['prior_tasks']))
+        new = self.provider.recent_tasks(row['phase']) - prior
+        if len(new) != 1:
+            return row
+        return self.update(row['id'], row['phase'], upstream=new.pop())
 
     def inspect(self, lease):
         row = self.get(lease)
         phase = row['phase']
         if phase in ('starting', 'stopping', 'resetting'):
             if not row['upstream']:
-                return {**row, 'status': 'outcome-unknown'}
+                row = self.recover_task(row)
+                if not row['upstream']:
+                    return self.public(row, 'outcome-unknown')
             if not self.provider.task(row['upstream']):
-                return {**row, 'status': phase}
+                return self.public(row, phase)
         if phase == 'starting':
             if self.provider.status() != 'running':
                 raise Rejected('unexpected_guest_state', 'The provider completed start but the guest is not running.')
@@ -138,7 +179,7 @@ class Pilot:
                     raise
                 address = None
             if not address:
-                return {**row, 'status': 'waiting-for-guest-ip'}
+                return self.public(row, 'waiting-for-guest-ip')
             row = self.update(lease, 'ready', address=address)
         elif phase == 'stopping':
             if self.provider.status() != 'stopped':
@@ -151,7 +192,11 @@ class Pilot:
         status = row['phase']
         if status == 'ready' and time.time() >= row['deadline']:
             status = 'overdue'
-        result = {**row, 'status': status}
+        return self.public(row, status)
+
+    def public(self, row, status=None):
+        result = {key: value for key, value in row.items() if key != 'prior_tasks'}
+        result['status'] = status or row['phase']
         if row['address']:
             result['ssh'] = {'host': row['address'], 'user': self.user}
         return result
@@ -173,10 +218,13 @@ class Pilot:
         if self.provider.status() != 'stopped':
             raise Rejected('slot_unavailable', 'The pilot guest is already running outside the controller.')
         lease = uuid.uuid4().hex
+        prior = json.dumps(sorted(self.provider.recent_tasks('starting')))
         with self.db:
-            self.db.execute('INSERT INTO lease VALUES (?,?,?,?,?,?,?,?)',
-                            (lease, key, task, seconds, 'starting', time.time()+seconds, None, None))
-        return self.dispatch(lease, 'starting', self.provider.start)
+            self.db.execute('''INSERT INTO lease
+                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks)
+                VALUES (?,?,?,?,?,?,?)''',
+                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior))
+        return self.public(self.dispatch(lease, 'starting', self.provider.start, recorded=True))
 
     @staticmethod
     def check_duration(seconds):
@@ -203,8 +251,8 @@ class Pilot:
         if data.get('discard_disposable_data') is not True:
             raise Rejected('release_requires_disposition', 'Confirm discard of the pilot workspace after saving any required data.', 400)
         if self.provider.status() == 'stopped':
-            return self.dispatch(lease, 'resetting', self.provider.reset)
-        return self.dispatch(lease, 'stopping', self.provider.shutdown)
+            return self.public(self.dispatch(lease, 'resetting', self.provider.reset))
+        return self.public(self.dispatch(lease, 'stopping', self.provider.shutdown))
 
 
 def main():

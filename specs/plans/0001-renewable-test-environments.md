@@ -317,6 +317,14 @@ A missed renewal marked the lease overdue and kept the guest available for
 renewal. An unauthenticated request and a read of a protected guest were denied.
 
 Remaining for the Linux slice: task-scoped guest credentials, live admission
-and registry projection, automatic verification of uncertain provider outcomes,
-and incremental export and restore. The agreed grace, retention and hold policy
+and registry projection, and incremental export and restore. The agreed grace, retention and hold policy
 still needs to be implemented and exercised before automatic reclamation.
+
+The pilot now journals a pre-dispatch view of recent tasks. When the provider
+reply is lost, it attaches only a unique new task for the same dedicated token,
+node, guest and operation type. Staging discarded accepted replies for real
+start, shutdown and rollback tasks before recording their IDs. Independent
+controller processes recovered each task from Proxmox and verified that each
+mutation executed once. An intent without a unique match keeps its reservation
+for operator review. Broader provider and multi-slot recovery qualification
+remain open.

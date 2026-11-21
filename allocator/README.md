@@ -24,12 +24,15 @@ following configuration keys:
 | POST /v1/leases/{id}/release | An explicit `discard_disposable_data: true` for pilot data. Stops the owned slot and restores its clean snapshot. Poll inspect until released. |
 
 An expired lease is overdue and keeps the slot reserved. Provider intent is
-saved before issuing a mutation. When a response is lost before the provider
-task ID can be saved, the journal holds the slot for operator investigation.
-The controller will not issue the same mutation again.
+saved before issuing a mutation, together with recent task IDs of the same
+kind. If the reply is lost, inspection can recover the exact task from
+Proxmox history. A recovery match must be new and unique, and belong to the
+dedicated token, node, guest and operation type. With no unique match the slot
+stays held. The controller does not reissue the write. Reserve the provider
+token exclusively for this controller.
 
 This pilot uses one trusted operator principal and an existing operator SSH
 identity. Task-scoped guest credentials, registry projection, policy-driven
-headroom across hosts, checkpoint export, automatic expiry cleanup and
-automated recovery of lost provider task IDs remain open. Use only disposable
+headroom across hosts, checkpoint export and automatic expiry cleanup remain
+open. Lost provider task recovery is qualified for the single dedicated slot. Use only disposable
 qualification data in the slot.
