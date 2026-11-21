@@ -28,7 +28,7 @@ Before cloning, check live guest allocations, available memory, storage consumpt
 
 Choose an unused guest ID on the verified host. Use that machine's registered template ID, clone mode, access user and initialization instructions. Wait for initialization and guest-agent readiness, retrieve the guest address from the guest/hypervisor, then exercise the requested workload. Export logs and artifacts outside the guest before deleting it. Recheck exact host, guest ID, name and ownership before teardown; never delete a template, persistent guest or shared dependency as job cleanup.
 
-A provisioning API is not a scheduler. Discover whether admission control, queues, reservations, expiry cleanup and scoped credentials actually exist. Report missing capabilities instead of assuming them.
+Discover the authorized allocator and its supported operations through the registry. Respect task ownership, review holds and production headroom. When no eligible slot is available, report why immediately and let the requester decide whether to retry; do not queue, auto-retry or oversubscribe. Use a staging-only allocator only for its recorded qualification. An expired registry date is an owner-review signal unless that guest was admitted under a verified automatic reclamation policy.
 
 ## Platform and migration validation
 
