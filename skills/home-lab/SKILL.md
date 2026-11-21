@@ -38,6 +38,14 @@ This is an explicit exception to the global restriction on using stable runtimes
 
 Discover endpoints, supported authentication, capacity and reservations through the registry. Follow the service's lease or concurrency protocol, keep test work identifiable, export evidence, remove test credentials from disposable guests, and release reservations when finished. Leave shared services running. Provision a separate dependency only when the test needs a modified version or the shared service cannot support the test safely or within available capacity.
 
+## Stage the whole application
+
+Deploy the full updated application in the disposable VM. Use stable as the baseline for sign-in, navigation, actions, background work and live data. Connect existing features and the proposed change to their real dependencies with staging-scoped credentials. Obtain explicit approval before copying an existing secret.
+
+Verify the app through the same review URL and sign-in the reviewer will use. Exercise each main workflow, including existing ones. Follow actions through the relay to their visible result, and compare data freshness and coverage with stable. For example, after a reconciliation request is accepted, confirm the comparison finishes and reports the expected hosts.
+
+Record the checks and any differences in the registry. If a required integration, permission or safe test target is missing, identify the affected workflow and report staging as partial until it works or the operator explicitly accepts the exception.
+
 ## Promotion includes staging cleanup
 
 Approval to promote a staged service to stable also authorizes and requires cleanup of that service's disposable staging environment, without a separate confirmation. After verifying the promoted production service end to end and preserving needed source, evidence and recoverable rollback/configuration backups outside staging, stop and permanently delete the staging service, its dedicated VM or container and disks, temporary credentials, relays, shares and routes. Release reservations, retire registry records and verify that allocated resources were returned to the pool. A stopped VM still consumes disk; stopping alone is not completed cleanup.
