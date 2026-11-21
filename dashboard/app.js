@@ -1,6 +1,9 @@
 'use strict';
 const $=id=>document.getElementById(id);
-let data={machines:[],services:[],backups:[]},view=['services','backups','map'].includes(location.hash.slice(1))?location.hash.slice(1):'machines',filter='all',busy=false,offset=0,copying=0;
+const views = ['machines','services','backups','map','leases'];
+if (location.pathname === '/leases') history.replaceState(null, '', '/' + location.search + '#leases');
+const initialView = location.hash.slice(1);
+let data={machines:[],services:[],backups:[]},view=views.includes(initialView)?initialView:'machines',filter='all',busy=false,offset=0,copying=0;
 let disposeGraph=()=>{};
 const opened=new Set(),feedback=new Map(),statuses=['healthy','unhealthy','stale','unknown','stopped','running'];
 const now=()=>Date.now()/1000+offset;
@@ -13,7 +16,7 @@ function link(label,url,cls='button primary'){const a=el('a',cls,label);a.href=u
 function symbol(){const n=el('span','machine-symbol');n.setAttribute('aria-hidden','true');n.innerHTML='<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="7" rx="2"/><rect x="4" y="14" width="16" height="7" rx="2"/><path d="M8 6.5h.01M8 17.5h.01M13 6.5h4M13 17.5h4"/></svg>';return n}
 function details(key,cls,label){const d=el('details',cls);d.open=opened.has(key);d.append(el('summary','',label));d.addEventListener('toggle',()=>{if(d.isConnected){if(d.open)opened.add(key);else opened.delete(key)}});return d}
 function timeElement(t){const d=el('time','',age(t));if(t){d.dateTime=new Date(t*1000).toISOString();d.title=new Date(t*1000).toLocaleString()}return d}
-function switchView(v){view=v;filter='all';$('search').value='';$('host').value='';history.replaceState(null,'','#'+v);render()}
+function switchView(v,fromHistory=false){view=v;filter='all';$('search').value='';$('host').value='';if(!fromHistory&&location.hash!=='#'+v)history.pushState(null,'','#'+v);render()}
 function setFeedback(key,node,message){feedback.set(key,message);node.textContent=message.startsWith('Could not copy')?'Copy failed':message;node.parentElement.title=message;$('toast').textContent=message}
 function copyPassword(r,a,status){const b=el('button','button secondary password-copy');b.type='button';for(const label of ['Copy password','Password copied','Copying…','Copy failed']){const size=el('span','copy-size',label);size.setAttribute('aria-hidden','true');b.append(size)}status.className='copy-label';const previous=feedback.get(r.id+':'+a.id)||'Copy password';status.textContent=previous.startsWith('Could not copy')?'Copy failed':previous;b.title=previous;b.append(status);b.setAttribute('aria-label','Copy '+r.host+' '+a.label+' password');
  b.onclick=async()=>{b.disabled=true;copying++;const key=r.id+':'+a.id;setFeedback(key,status,'Copying…');try{
@@ -102,8 +105,20 @@ function serviceCard(r){const c=el('article','card service-card');c.dataset.id=r
 function render(){
  disposeGraph();
  const machine=view==='machines',isBackup=view==='backups',map=view==='map',items=map?[...data.machines,...data.services]:data[view];
- for(const v of ['machines','services','backups','map'])$(v+'-tab').setAttribute('aria-pressed',String(view===v));
+ for(const v of views)$(v+'-tab').setAttribute('aria-pressed',String(view===v));
  $('machine-count').textContent=data.machines.length;$('service-count').textContent=data.services.length;$('backup-count').textContent=data.backups.length;
+ const leases = view === 'leases';
+ const enteringLeases = leases && $('lease-panel').hidden;
+ $('inventory-panel').hidden = leases;
+ $('lease-panel').hidden = !leases;
+ $('updated').hidden = leases;
+ if (leases) {
+   if (enteringLeases) {
+     refreshVisible();
+     LeaseHistory.load();
+   }
+   return;
+ }
  $('title').textContent=map?'Resources':machine?'Machines':isBackup?'Backups':'Services';
  $('view-description').textContent=map?'Physical machines, their VMs and containers, and the services they run.':machine?'Physical hosts and virtual environments. Stopped states are labeled with their observation time.':isBackup?'Scheduled jobs handled by the central backup service.':'Registered applications and infrastructure. Health reports do not imply every service is running.';
  $('search').placeholder=map?'Find a machine or service…':machine?'Find a machine…':isBackup?'Find a backup job…':'Find a service…';
@@ -112,8 +127,13 @@ function render(){
  const q=$('search').value.toLowerCase(),host=$('host').value,rows=items.filter(r=>(filter==='all'||health(r)===filter)&&(!host||r.host===host)&&[r.name,r.host,r.id,...r.capabilities].join(' ').toLowerCase().includes(q));const rank={unhealthy:0,stale:1,unknown:2,healthy:3,running:3,stopped:4};rows.sort((a,b)=>rank[health(a)]-rank[health(b)]||a.name.localeCompare(b.name));$('summary').textContent=rows.length+' of '+items.length+' '+(map?'resources':view);$('updated').textContent=data.fetched_at?'Updated '+new Date(data.fetched_at*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'Connecting to the lab…';
  const cards=$('cards');cards.className=map?'':machine?'machines':'services';cards.setAttribute('aria-label',map?'Resources':machine?'Machines':isBackup?'Backups':'Services');const root=document.createDocumentFragment();if(!map)for(const r of rows)root.append(machine?machineCard(r):serviceCard(r));if(!rows.length)root.append(el('p','empty-results','No '+(map?'resources':view)+' match these filters.'));cards.replaceChildren(root);if(map&&rows.length)disposeGraph=ResourceGraph.mount(cards,items.map(r=>({...r,name:r.display_name||r.name,kind:r.kind==='machine'?r.machine_type:'service',status:health(r)})),{matching:new Set(rows.map(r=>r.id))});queueMicrotask(refreshVisible);
 }
-async function refresh(){if(busy||document.hidden)return;busy=true;$('refresh').disabled=true;try{const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});if(!response.ok)throw Error('failed');data=await response.json();$('lease-link').hidden=!data.lease_review_enabled;if(data.server_time)offset=data.server_time-Date.now()/1000;$('error').hidden=!data.error;$('error').textContent=data.error||'';showAddressAudit(data.address_audit);showAccuracy(data.inventory_accuracy);if(!copying&&!$('cards').contains(document.activeElement))render();}catch{$('error').hidden=false;$('error').textContent='Unable to refresh. Displayed readings may be stale.';}finally{busy=false;$('refresh').disabled=false}}
-$('machines-tab').onclick=()=>switchView('machines');$('services-tab').onclick=()=>switchView('services');$('backups-tab').onclick=()=>switchView('backups');$('map-tab').onclick=()=>switchView('map');$('search').oninput=render;$('host').onchange=render;$('refresh').onclick=refresh;document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';refresh();connectInventory();setInterval(()=>{if(!document.hidden&&!copying&&!$('cards').contains(document.activeElement))render()},15000);
+async function refresh(){if(busy||document.hidden)return;busy=true;$('refresh').disabled=true;try{const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});if(!response.ok)throw Error('failed');data=await response.json();$('leases-tab').hidden=!data.lease_review_enabled;if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}if(data.server_time)offset=data.server_time-Date.now()/1000;$('error').hidden=!data.error;$('error').textContent=data.error||'';showAddressAudit(data.address_audit);showAccuracy(data.inventory_accuracy);if(!copying&&!$('cards').contains(document.activeElement))render();}catch{$('error').hidden=false;$('error').textContent='Unable to refresh. Displayed readings may be stale.';}finally{busy=false;$('refresh').disabled=false}}
+for (const name of views) $(name+'-tab').onclick = () => switchView(name);
+addEventListener('popstate', () => {
+  const name = location.hash.slice(1) || 'machines';
+  if (views.includes(name)) switchView(name,true);
+});
+$('search').oninput=render;$('host').onchange=render;$('refresh').onclick=()=>view==='leases'?LeaseHistory.load():refresh();document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';refresh();connectInventory();setInterval(()=>{if(!document.hidden&&!copying&&!$('cards').contains(document.activeElement))render()},15000);
 
 function showAddressAudit(a){$('address-audit').textContent=a?'Last IP reservation audit: '+a.status+' · '+a.warnings+' warning'+(a.warnings===1?'':'s')+' · '+new Date(a.at).toLocaleString()+' · runs on demand from orca':'IP reservation audit: not published yet. Audits run on demand from orca.'}
 
