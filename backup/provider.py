@@ -16,26 +16,22 @@ def ssh_options(base, key='collector-key'):
             '-o', 'ConnectTimeout=10', '-o', 'UserKnownHostsFile='+str(base/'private/known_hosts')]
 
 
-def discover(base, config, spec):
-    binding = spec['provider']
-    if binding.get('kind') != 'proxmox-ssh':
-        raise ValueError('Unsupported discovery provider')
+def verified_address(binding, observation, now):
+    """Admit one current address only after matching the configured guest identity."""
     vmid = binding['vmid']
     if type(vmid) is not int or vmid <= 0:
         raise ValueError('Invalid guest identity')
-    target = ssh_target(config, binding['host_id'], binding['username'])
-    cmd = ssh_options(base, binding['key']) + ['-p', str(target['port']), '-o',
-        'HostKeyAlias='+target['host_key_alias'], target['destination'], 'discover']
-    response = subprocess.run(cmd, check=True, capture_output=True, timeout=30)
-    observation = json.loads(response.stdout)
-    # The forced-command credential returns one authorized guest only. It has no
-    # shell or arbitrary guest-exec interface and must observe the live provider.
-    if observation['vmid'] != vmid or observation['uuid'] != binding['uuid']:
+    guest_kind = binding.get('guest_kind', 'qemu')
+    if guest_kind not in ('qemu', 'lxc') or observation.get('kind', 'qemu') != guest_kind:
+        raise ValueError('Guest type changed')
+    identity = 'uuid' if guest_kind == 'qemu' else 'volume_id'
+    if (type(observation['vmid']) is not int or observation['vmid'] != vmid or
+            not binding[identity] or observation[identity] != binding[identity]):
         raise ValueError('Guest identity changed')
     if observation['state'] != 'running':
         raise ValueError('Guest is not running')
     observed = observation['observed_at']
-    if type(observed) not in (int, float) or not -2 <= time.time()-observed <= 60:
+    if type(observed) not in (int, float) or not -2 <= now-observed <= 60:
         raise ValueError('Stale provider observation')
     mac = binding['mac'].lower()
     candidates = set()
@@ -49,6 +45,21 @@ def discover(base, config, spec):
                 candidates.add(str(ip))
     if len(candidates) != 1:
         raise ValueError('Guest address unavailable or ambiguous')
+    return candidates.pop()
+
+
+def discover(base, config, spec):
+    binding = spec['provider']
+    if binding.get('kind') != 'proxmox-ssh':
+        raise ValueError('Unsupported discovery provider')
+    vmid = binding['vmid']
+    if type(vmid) is not int or vmid <= 0:
+        raise ValueError('Invalid guest identity')
+    target = ssh_target(config, binding['host_id'], binding['username'])
+    cmd = ssh_options(base, binding['key']) + ['-p', str(target['port']), '-o',
+        'HostKeyAlias='+target['host_key_alias'], target['destination'], 'discover '+str(vmid)]
+    response = subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+    address = verified_address(binding, json.loads(response.stdout), time.time())
     user = spec['username']
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', user):
         raise ValueError('Invalid SSH user')
@@ -58,7 +69,7 @@ def discover(base, config, spec):
     alias = spec['host_key_alias']
     if not re.fullmatch(r'[a-zA-Z0-9_-]+', alias):
         raise ValueError('Invalid SSH host identity')
-    result = {'destination': user+'@'+candidates.pop(), 'port': port,
+    result = {'destination': user+'@'+address, 'port': port,
               'host_key_alias': alias, 'proxy': None}
     if 'hop_username' in binding:
         hop = ssh_target(config, binding['host_id'], binding['hop_username'])
