@@ -183,8 +183,11 @@ remain independent and may keep a lease active beyond that window.
 
 Set `recovery.accept_uploads` in the controller configuration and
 `accept_uploads` in the recovery worker configuration to enable uploads.
-The worker then needs an allocator-only storage adapter that can write
-and verify these snapshots. Leave uploads disabled for a read-only worker.
+Set the recovery worker's `restic_command` to the read role and
+`upload_command` to the write role. Uploads use the writer to store and
+verify the checkpoint. Each owner download uses the reader. For existing
+single-adapter installations, omitting `upload_command` keeps the original
+command for both operations. Leave uploads disabled for a read-only worker.
 
 Have the task runner publish a consistent, immutable workspace archive at
 its declared checkpoint interval. Submit it with
@@ -255,3 +258,33 @@ ownership or the existing lease. `revoke-task-credential --task-ref
 <task-ref>` revokes controller access and delegated renewal for that task.
 Guest SSH stays bound to the active lease until its separately verified
 provider cleanup. Task credential expiry does not delete the guest.
+
+### Cold capture for an ext4 Linux slot
+
+Install `export_slot_disk.pl` on the Proxmox host as an operator-owned forced
+command. Bind its five arguments to one VM ID, guest name, SMBIOS UUID, exact
+LVM volume and maximum raw byte count. The source identity may call only
+`read-slot`. It can read the entire stopped slot disk, so give this identity
+only to the trusted capture worker. The provider holds the Proxmox config lock
+until the compressed raw stream finishes or times out. It opens no guest
+filesystem. Administrative storage writes outside Proxmox still require
+operator coordination.
+
+On the isolated worker, use `cold_capture.py CONFIG GUEST LEASE` as the
+exporter's capture command. Install Debian's `python3-guestfs` and its QEMU
+appliance there. Configure `source_command` as an argument array for the
+pinned SSH command, `spool_dir` as a disposable private directory,
+`disk_bytes` as the exact raw size, and `max_spool_bytes` as a bounded
+temporary allocation. Set `guest_id`, the absolute `workspace` and optionally
+`appliance_memory_mib`. Allow for transfer plus appliance boot in the export
+timeout. Use a service-managed temporary directory that is cleaned on worker
+termination. A stale or full spool must leave the lease held.
+
+The reader checks stream completion and size before opening the explicit raw
+image read-only in a network-disabled appliance. The supported recipe has one
+x86-64 Linux root GPT partition with ext4. The reader checks the protected
+lease identity written at admission before archiving the declared workspace.
+A missing or mismatched identity, unsupported layout or unreadable workspace
+fails the export and preserves the stopped slot. Leases predating the marker
+need operator review. Lease owners should place their work and evidence in the
+declared workspace. OS data elsewhere on the disk is outside the archive.

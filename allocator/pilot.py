@@ -126,10 +126,10 @@ class Proxmox:
             raise Rejected('provider_task_failed', 'The recorded provider task failed and needs operator review.')
         return True
 
-    def install_guest_key(self, key):
+    def install_guest_key(self, key, lease):
         self.call(self.guest + '/agent/file-write', {
             'file': '/etc/ssh/lease_authorized_keys',
-            'content': key + '\n',
+            'content': f'{key} lease-{lease}\n',
         })
 
     def ip(self):
@@ -359,7 +359,7 @@ class Pilot:
                 raise Rejected('missing_lease_key', 'The lease has no task SSH key. The slot remains held.')
             # Replaying this fixed-path write installs the same key for the
             # same lease. The guest is not handed out until it succeeds.
-            self.provider.install_guest_key(row['ssh_key'])
+            self.provider.install_guest_key(row['ssh_key'], lease)
             row = self.update(lease, 'ready', address=address)
         elif phase == 'stopping':
             if self.provider.status() != 'stopped':

@@ -82,7 +82,8 @@ def receive(config, grant, size, incoming, archive):
     archive.seek(0)
     if digest(archive) != grant['sha256']:
         raise ExportError('Uploaded archive does not match its declared digest.')
-    return store(config, archive, grant['path'][1:], grant['id'], 65)
+    upload_config = {**config, 'restic_command': config.get('upload_command', config['restic_command'])}
+    return store(upload_config, archive, grant['path'][1:], grant['id'], 65)
 
 
 def main():
