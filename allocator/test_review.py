@@ -18,10 +18,15 @@ class LeaseReviewTest(unittest.TestCase):
         db.executemany("INSERT INTO lease (id,phase) VALUES (?,'released')",
                        [(str(i),) for i in range(30)])
         current = lease_page(db, None, 'current')
+        summary = lease_page(db, None, 'counts')
+        self.assertNotIn('leases', summary)
+        self.assertEqual(summary['counts'], {'current': 1, 'released': 30})
+        self.assertEqual(current['counts'], summary['counts'])
         self.assertEqual([row['id'] for row in current['leases']], ['held'])
         self.assertIsNone(current['next_before'])
         first = lease_page(db, None, 'released')
         second = lease_page(db, str(first['next_before']), 'released')
         self.assertEqual([row['id'] for row in first['leases'] + second['leases']],
                          [str(i) for i in reversed(range(30))])
+        self.assertEqual(second['counts'], summary['counts'])
         self.assertIsNone(second['next_before'])

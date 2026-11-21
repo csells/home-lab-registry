@@ -5,6 +5,24 @@ const LeaseHistory = (() => {
   const older = document.querySelector('#older');
   const scopes = document.querySelectorAll('#lease-views button');
   const asOf = document.querySelector('#lease-as-of');
+  let countsAsOf = 0;
+  function showCounts(page) {
+    if (page.as_of < countsAsOf) return;
+    document.getElementById('lease-count').textContent = page.counts.current;
+    document.getElementById('current-lease-count').textContent = page.counts.current;
+    document.getElementById('released-lease-count').textContent = page.counts.released;
+    countsAsOf = page.as_of;
+  }
+  async function refreshCounts() {
+    const started = countsAsOf;
+    try {
+      const response = await fetch('/api/leases?scope=counts', {cache:'no-store', signal:AbortSignal.timeout(12000)});
+      if (!response.ok) throw new Error();
+      showCounts(await response.json());
+    } catch {
+      if (countsAsOf === started) document.getElementById('lease-count').textContent = '—';
+    }
+  }
   let scope = 'current';
   let request;
   const message = document.querySelector('#lease-error');
@@ -54,6 +72,7 @@ const LeaseHistory = (() => {
       if (!response.ok) throw new Error();
       const page = await response.json();
       if (controller.signal.aborted) return;
+      showCounts(page);
       if (!append) cards.replaceChildren();
       cards.append(...page.leases.map(card));
       if (!cards.childElementCount) cards.append(node('p', scope === 'current' ? 'No current leases.' : 'No released leases.'));
@@ -80,5 +99,5 @@ const LeaseHistory = (() => {
     return load();
   }
   for (const button of scopes) button.onclick = () => select(button.dataset.scope);
-  return {load, open: () => select('current')};
+  return {load, refreshCounts, open: () => select('current')};
 })();

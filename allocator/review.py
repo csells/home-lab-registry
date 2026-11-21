@@ -7,16 +7,23 @@ from checkpoints import Rejected
 
 def lease_page(db, before, scope='all'):
     predicates = {'all': '1', 'current': "phase != 'released'", 'released': "phase = 'released'"}
-    if scope not in predicates:
+    if scope not in (*predicates, 'counts'):
         raise Rejected('invalid_scope', 'Unknown lease scope.', 400)
     if before is not None and (not before.isascii() or not before.isdigit()
                                or len(before) > 18 or int(before) < 1):
         raise Rejected('invalid_cursor', 'Invalid lease history cursor.', 400)
+    now = time.time()
+    current, released = db.execute("""SELECT COUNT(*) FILTER (WHERE phase != 'released'),
+                                            COUNT(*) FILTER (WHERE phase = 'released') FROM lease""").fetchone()
+    summary = {'counts': {'current': current, 'released': released}, 'as_of': now}
+    if scope == 'counts':
+        if before is not None:
+            raise Rejected('invalid_cursor', 'Counts cannot be paginated.', 400)
+        return summary
     rows = db.execute(f"""SELECT rowid AS cursor, id, task, owner, phase, deadline,
                             released_at, hold_mode, hold_reason, reviewer, reviewer_hold, reviewer_reason, export_error, checkpoint
                          FROM lease WHERE {predicates[scope]} AND (? IS NULL OR rowid < ?)
                          ORDER BY rowid DESC LIMIT 26""", (before, before)).fetchall()
-    now = time.time()
     result = []
     for row in rows[:25]:
         item = {key: row[key] for key in ('id', 'task', 'owner', 'phase', 'deadline',
@@ -34,4 +41,4 @@ def lease_page(db, before, scope='all'):
         item.update(checkpoint_count=len(accessible), last_verified_at=last.get('verified_at'),
                     retained_through=last.get('retain_through'), pinned=bool(last.get('pin')))
         result.append(item)
-    return {'leases': result, 'as_of': now, 'next_before': rows[24]['cursor'] if len(rows) > 25 else None}
+    return {**summary, 'leases': result, 'next_before': rows[24]['cursor'] if len(rows) > 25 else None}

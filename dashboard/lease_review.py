@@ -18,7 +18,7 @@ def page(config_path, cursor, scope='all'):
     if (origin.scheme != 'https' or not origin.hostname or origin.username is not None
             or origin.password is not None or origin.query or origin.fragment or origin.path not in ('', '/')):
         raise ValueError('Configure the TLS allocator endpoint.')
-    if scope not in ('all', 'current', 'released'):
+    if scope not in ('all', 'current', 'released', 'counts'):
         raise ValueError('Unknown lease scope.')
     query = {'scope': scope}
     if cursor is not None:

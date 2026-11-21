@@ -111,7 +111,8 @@ class Handler(BaseHTTPRequestHandler):
                 query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
                 cursor,=query.pop('before',[None])
                 scope,=query.pop('scope',['all'])
-                if scope not in ('all','current','released'):raise ValueError()
+                if scope not in ('all','current','released','counts'):raise ValueError()
+                if scope=='counts' and cursor is not None:raise ValueError()
                 if query or (cursor is not None and (not cursor.isascii() or not cursor.isdigit() or len(cursor)>18 or cursor.startswith('0'))):raise ValueError()
             except ValueError:self.send_error(400,'Invalid lease query');return
             try:raw=json.dumps(lease_review_page(config,cursor,scope)).encode()
