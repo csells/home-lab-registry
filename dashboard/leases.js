@@ -3,7 +3,10 @@
 const LeaseHistory = (() => {
   const cards = document.querySelector('#leases');
   const older = document.querySelector('#older');
-  let loading = false;
+  const scopes = document.querySelectorAll('#lease-views button');
+  const asOf = document.querySelector('#lease-as-of');
+  let scope = 'current';
+  let request;
   const message = document.querySelector('#lease-error');
   let cursor = null;
   function node(tag, text) {
@@ -36,26 +39,46 @@ const LeaseHistory = (() => {
     return section;
   }
   async function load(append = false) {
-    if (loading) return;
-    loading = older.disabled = true;
+    request?.abort();
+    const controller = new AbortController();
+    request = controller;
+    older.disabled = true;
     message.hidden = true;
+    const query = new URLSearchParams({scope});
+    if (append) query.set('before', cursor);
     try {
-      const response = await fetch('/api/leases' + (append ? '?before=' + cursor : ''), {cache:'no-store', signal:AbortSignal.timeout(12000)});
+      const response = await fetch('/api/leases?' + query, {
+        cache: 'no-store',
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]),
+      });
       if (!response.ok) throw new Error();
       const page = await response.json();
+      if (controller.signal.aborted) return;
       if (!append) cards.replaceChildren();
       cards.append(...page.leases.map(card));
-      if (!cards.childElementCount) cards.append(node('p', 'No leases recorded.'));
+      if (!cards.childElementCount) cards.append(node('p', scope === 'current' ? 'No current leases.' : 'No released leases.'));
       cursor = page.next_before;
       older.hidden = cursor === null;
-      document.querySelector('#lease-as-of').textContent = 'Updated ' + date(page.as_of);
+      asOf.textContent = 'Updated ' + date(page.as_of);
     } catch {
-      message.textContent = 'Lease history could not be refreshed. Try again.';
+      if (controller.signal.aborted) return;
+      asOf.textContent = '';
+      message.textContent = 'Leases could not be refreshed. Try again.';
       message.hidden = false;
     } finally {
-      loading = older.disabled = false;
+      if (request === controller) older.disabled = false;
     }
   }
   older.onclick = () => load(true);
-  return {load};
+  function select(next) {
+    scope = next;
+    for (const button of scopes) button.setAttribute('aria-pressed', String(button.dataset.scope === scope));
+    cards.replaceChildren();
+    cursor = null;
+    older.hidden = true;
+    asOf.textContent = scope === 'current' ? 'Loading current leases…' : 'Loading lease history…';
+    return load();
+  }
+  for (const button of scopes) button.onclick = () => select(button.dataset.scope);
+  return {load, open: () => select('current')};
 })();

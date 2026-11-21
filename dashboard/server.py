@@ -110,9 +110,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
                 cursor,=query.pop('before',[None])
+                scope,=query.pop('scope',['all'])
+                if scope not in ('all','current','released'):raise ValueError()
                 if query or (cursor is not None and (not cursor.isascii() or not cursor.isdigit() or len(cursor)>18 or cursor.startswith('0'))):raise ValueError()
-            except ValueError:self.send_error(400,'Invalid history cursor');return
-            try:raw=json.dumps(lease_review_page(config,cursor)).encode()
+            except ValueError:self.send_error(400,'Invalid lease query');return
+            try:raw=json.dumps(lease_review_page(config,cursor,scope)).encode()
             except (OSError,ValueError,KeyError):self.send_error(503,'Lease history unavailable');return
             kind='application/json'
         elif path in ['/api/inventory','/api/machines','/api/services','/api/backups','/api/reconciliation']:

@@ -115,7 +115,7 @@ function render(){
  if (leases) {
    if (enteringLeases) {
      refreshVisible();
-     LeaseHistory.load();
+     LeaseHistory.open();
    }
    return;
  }

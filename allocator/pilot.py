@@ -1019,11 +1019,15 @@ def main():
                 try:
                     query = urllib.parse.parse_qs(target.query, keep_blank_values=True)
                     cursor, = query.pop('before', [None])
+                    scope, = query.pop('scope', ['all'])
                     if query:
                         raise ValueError()
-                    page = lease_page(controller.db, cursor)
-                except (ValueError, Rejected):
-                    self.respond({'code': 'invalid_cursor'}, 400)
+                    page = lease_page(controller.db, cursor, scope)
+                except Rejected as error:
+                    self.respond({'code': error.code}, 400)
+                    return
+                except ValueError:
+                    self.respond({'code': 'invalid_query'}, 400)
                     return
                 self.respond(page)
                 return

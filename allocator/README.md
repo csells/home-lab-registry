@@ -296,7 +296,8 @@ readable by the controller and its authorized dashboard. Configure the
 dashboard's private `lease-review.json` with the allocator HTTPS `endpoint`,
 its `ca_file`, and a private `token_file`. The dashboard offers
 the **Leases** tab at `/#leases` behind its usual operator login. Existing
-`/leases` bookmarks open the same tab. The reader can view ownership,
+`/leases` bookmarks open the same tab. Current shows leases through final export and reset.
+Released leases are available under History. The reader can view ownership,
 renewal deadlines, review holds, export failures, available checkpoint counts
 and the latest checkpoint's verification and retention dates. Requests are
 paged and made when the operator opens, refreshes or expands the history.

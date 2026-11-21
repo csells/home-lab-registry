@@ -4,7 +4,7 @@ import re
 import ssl
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -12,17 +12,20 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def page(config_path, cursor):
+def page(config_path, cursor, scope='all'):
     config = json.loads(config_path.read_text())
     origin = urlsplit(config['endpoint'])
     if (origin.scheme != 'https' or not origin.hostname or origin.username is not None
             or origin.password is not None or origin.query or origin.fragment or origin.path not in ('', '/')):
         raise ValueError('Configure the TLS allocator endpoint.')
-    path = '/v1/lease-review'
+    if scope not in ('all', 'current', 'released'):
+        raise ValueError('Unknown lease scope.')
+    query = {'scope': scope}
     if cursor is not None:
         if not re.fullmatch(r'[1-9][0-9]{0,17}', cursor):
             raise ValueError('Invalid history cursor.')
-        path += '?before=' + cursor
+        query['before'] = cursor
+    path = '/v1/lease-review?' + urlencode(query)
     token = Path(config['token_file']).read_text().strip()
     client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(),
         urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=config['ca_file'])))

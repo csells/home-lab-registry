@@ -5,13 +5,16 @@ import time
 from checkpoints import Rejected
 
 
-def lease_page(db, before):
+def lease_page(db, before, scope='all'):
+    predicates = {'all': '1', 'current': "phase != 'released'", 'released': "phase = 'released'"}
+    if scope not in predicates:
+        raise Rejected('invalid_scope', 'Unknown lease scope.', 400)
     if before is not None and (not before.isascii() or not before.isdigit()
                                or len(before) > 18 or int(before) < 1):
         raise Rejected('invalid_cursor', 'Invalid lease history cursor.', 400)
-    rows = db.execute("""SELECT rowid AS cursor, id, task, owner, phase, deadline,
+    rows = db.execute(f"""SELECT rowid AS cursor, id, task, owner, phase, deadline,
                             released_at, hold_mode, hold_reason, reviewer, reviewer_hold, reviewer_reason, export_error, checkpoint
-                         FROM lease WHERE (? IS NULL OR rowid < ?)
+                         FROM lease WHERE {predicates[scope]} AND (? IS NULL OR rowid < ?)
                          ORDER BY rowid DESC LIMIT 26""", (before, before)).fetchall()
     now = time.time()
     result = []

@@ -19,10 +19,14 @@
 <section id="cards" class="machines" aria-label="Machines"></section>
 </div>
 <section id="lease-panel" aria-labelledby="lease-title" hidden>
-  <div class="inventory-tools"><div class="inventory-title"><h2 id="lease-title">Environment leases</h2><p id="lease-as-of" role="status">Loading lease history…</p></div></div>
+  <div class="inventory-tools"><div class="inventory-title"><h2 id="lease-title">Environment leases</h2><p id="lease-as-of" role="status">Loading current leases…</p></div></div>
+  <div role="group" aria-label="Lease views" id="lease-views">
+    <button type="button" class="stat" data-scope="current" aria-pressed="true">Current</button>
+    <button type="button" class="stat" data-scope="released" aria-pressed="false">History</button>
+  </div>
   <p id="lease-error" role="alert" hidden></p>
   <div id="leases"></div>
-  <button type="button" class="button secondary" id="older" hidden>Show older leases</button>
+  <button type="button" class="button secondary" id="older" hidden>Show more leases</button>
 </section>
 <footer><strong>Home lab</strong><span>Live charts while viewing · Guest inventory changes stream automatically.</span></footer>
 <div id="toast" role="status" class="sr-only"></div>
