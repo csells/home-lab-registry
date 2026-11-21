@@ -99,7 +99,7 @@ def main():
     acquire.add_argument('--ssh-public-key', type=Path, required=True)
     acquire.add_argument('--recipe', default='debian13-amd64')
     acquire.add_argument('--reclaim-on-expiry', action='store_true')
-    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew'):
+    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export'):
         command = sub.add_parser(operation)
         command.add_argument('lease')
         if operation == 'renew':
@@ -117,8 +117,10 @@ def main():
             command.add_argument('--write-token', type=Path, required=True)
         elif operation == 'recover':
             command.add_argument('--output', type=Path, required=True)
-        elif operation == 'pin':
+        elif operation in ('pin', 'retain-failed-export', 'discard-failed-export'):
             command.add_argument('--reason', required=True)
+            if operation == 'discard-failed-export':
+                command.add_argument('--confirm-lease', required=True)
     args = parser.parse_args()
     if args.record and not args.registry_client:
         parser.error('--record requires --registry-client')
@@ -144,6 +146,10 @@ def main():
             elif args.command == 'hold':
                 route += '/hold'
                 payload = {'mode': args.mode, 'reason': args.reason}
+            elif args.command in ('retain-failed-export', 'discard-failed-export'):
+                route += '/export-disposition'
+                payload = {'mode': 'retain' if args.command == 'retain-failed-export' else 'discard',
+                           'reason': args.reason, 'confirm_lease': getattr(args, 'confirm_lease', None)}
             elif args.command == 'retry-export':
                 route += '/retry-export'
                 payload = {}

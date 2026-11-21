@@ -418,6 +418,14 @@ after the controller restarted. The credential could not inspect, release
 or renew a different lease. Expiry and revocation bounded its authority,
 and the owner could still renew independently.
 
+After an accelerated 24-hour export failure, the owner recorded a disk
+retention decision. The controller refused early discard, an incorrect
+lease confirmation and a different owner. The exact owner then explicitly
+authorized discarding the isolated test fixture. The controller persisted
+its decision with the reset intent. A replacement confirmed the disk was
+clean. Its first admission was refused while the host capacity observation
+was unavailable, and it started after a fresh capacity check.
+
 Stable still needs dedicated scoped capture and backup transports,
 incremental checkpoints, shared reservation coordination, automated agent
 credential issuance, notification delivery, and delegated reviewer holds.

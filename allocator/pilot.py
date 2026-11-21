@@ -249,6 +249,7 @@ class Pilot:
                 ('export_requested_at', 'REAL'),
                 ('export_failed_at', 'REAL'),
                 ('export_error', 'TEXT'),
+                ('export_disposition', 'TEXT'),
                 ('checkpoint', 'TEXT'),
             ):
                 if column not in columns:
@@ -377,8 +378,11 @@ class Pilot:
             checkpoint = json.loads(row['checkpoint'])
             checkpoint.pop('purge_claim', None)
             result['checkpoint'] = checkpoint
+        if row['export_disposition']:
+            result['export_disposition'] = json.loads(row['export_disposition'])
         if row['export_failed_at']:
-            result['export_needs_decision'] = time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS
+            result['export_needs_decision'] = (not row['export_disposition']
+                and time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS)
         if row['address']:
             result['ssh'] = {'host': row['address'], 'user': self.user,
                              'host_key_alias': self.provider.name, 'host_key': self.host_key}
@@ -504,9 +508,40 @@ class Pilot:
         self.check_export_source(row)
         with self.db:
             self.db.execute(
-                'UPDATE lease SET export_challenge=?, export_failed_at=NULL, export_error=NULL WHERE id=?',
+                'UPDATE lease SET export_challenge=?, export_failed_at=NULL, export_error=NULL,'
+                ' export_disposition=NULL WHERE id=?',
                 (uuid.uuid4().hex, lease))
         return self.public(self.get(lease))
+
+    def decide_failed_export(self, lease, data, owner):
+        row = self.owned(lease, owner)
+        mode, reason = data.get('mode'), data.get('reason')
+        if (mode not in ('retain', 'discard') or not isinstance(reason, str)
+                or not 1 <= len(reason.strip()) <= 240):
+            raise Rejected('invalid_disposition', 'Choose retain or discard and give a short reason.', 400)
+        if mode == 'discard' and data.get('confirm_lease') != lease:
+            raise Rejected('discard_confirmation_required', 'Explicitly confirm the exact lease ID.', 400)
+        previous = json.loads(row['export_disposition'] or '{}')
+        if previous.get('mode') == 'discard':
+            return self.inspect(lease, owner)
+        if (row['phase'] != 'awaiting-export' or row['checkpoint'] or not row['export_failed_at']
+                or time.time() < row['export_failed_at'] + EXPORT_REVIEW_SECONDS):
+            raise Rejected('disposition_unavailable', 'This lease has no unresolved 24-hour export failure.')
+        decision = json.dumps({'mode': mode, 'reason': reason.strip(), 'at': time.time()})
+        if mode == 'retain':
+            with self.db:
+                self.db.execute("""UPDATE lease SET hold_mode='disk', hold_reason=?,
+                    export_disposition=? WHERE id=?""", (reason.strip(), decision, lease))
+            return self.public(self.get(lease))
+
+        self.check_export_source(row)
+        prior = json.dumps(sorted(self.provider.recent_tasks('resetting')))
+        # Persist the explicit data disposition and provider intent together.
+        with self.db:
+            self.db.execute("""UPDATE lease SET phase='resetting', upstream=NULL, prior_tasks=?,
+                export_disposition=?, hold_mode=NULL, hold_reason=NULL WHERE id=?""",
+                            (prior, decision, lease))
+        return self.public(self.dispatch(lease, 'resetting', self.provider.reset, recorded=True))
 
     def next_export(self):
         row = self.db.execute(
@@ -832,6 +867,9 @@ def main():
                             return
                         if parts[3] == 'hold':
                             self.respond(controller.hold(parts[2], data, owner))
+                            return
+                        if parts[3] == 'export-disposition':
+                            self.respond(controller.decide_failed_export(parts[2], data, owner))
                             return
                         if parts[3] == 'retry-export':
                             self.respond(controller.retry_export(parts[2], owner))

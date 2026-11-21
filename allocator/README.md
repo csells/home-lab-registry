@@ -109,6 +109,10 @@ the challenge and one of these outcomes.
   visible to the owner. After 24 hours the pending export requires owner
   review. The owner can use `retry-export <id>` after repairing the cause.
   Retry resets the failure window and invalidates previous challenges.
+  After 24 hours the owner can also record `retain-failed-export <id>
+  --reason <reason>`, or explicitly authorize discard with
+  `discard-failed-export <id> --confirm-lease <id> --reason <reason>`.
+  The controller journals the exact discard decision with its reset intent.
 - `verified` with the full encrypted repository snapshot ID, expected
   `/lease-{id}.tar.gz` path, and independently downloaded SHA-256. The
   controller checks the stopped guest and its observed start history, records
