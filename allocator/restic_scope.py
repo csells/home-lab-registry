@@ -1,7 +1,9 @@
 """Restrict a storage-side Restic command to one allocator repository and role."""
 import argparse
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -68,7 +70,13 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     try:
-        return dispatch(config['role'], args.command, config['restic_command'])
+        command = args.command
+        if command == ['--ssh-original-command']:
+            original = os.environ.get('SSH_ORIGINAL_COMMAND', '')
+            if not 0 < len(original) <= 1024:
+                raise Denied
+            command = shlex.split(original)
+        return dispatch(config['role'], command, config['restic_command'])
     except Denied:
         print('Command is outside the storage credential scope.', file=sys.stderr)
         return 2

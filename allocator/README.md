@@ -233,6 +233,13 @@ Set the exporter's optional `retention_command` to the expiry endpoint.
 The standalone restic role uses a trusted deployment configuration.
 Never allow a caller to supply that configuration or repository argument.
 
+For an SSH adapter, bind each key to `restic_scope.py <private-role-config>
+--ssh-original-command` with OpenSSH's `restrict` and `command` key options.
+Configure the role and repository on the storage side. Each forced command
+parses arguments as data and refuses shell and out-of-role commands. Use
+independent OS accounts for the deployed roles when their repository
+credentials differ.
+
 
 ### Task credential issuance
 

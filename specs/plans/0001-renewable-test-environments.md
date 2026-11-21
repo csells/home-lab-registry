@@ -466,8 +466,10 @@ service's existing storage interface. The scoped writer stored and verified
 a task archive, the scoped reader downloaded it, and only the expiry role
 could remove it. The expiry role confirmed the snapshot was gone. The
 role test used a temporary operator transport against the dedicated
-repository. Stable still needs durable authenticated connections to
-these roles and a narrowly scoped cold-capture provider.
+repository. Separate forced-command SSH identities on a disposable staging
+VM exchanged an actual archive and rejected shell and cross-role commands.
+Stable still needs the approved storage adapter installation and a narrowly
+scoped cold-capture provider.
 
 
 ### Staging milestone: short-lived task credentials
