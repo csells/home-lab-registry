@@ -6,7 +6,7 @@ from reconciliation import reconcile as reconcile_inventory
 from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
 from lease_review import page as lease_review_page
-from access import credential
+from access import credential, scoped_records
 from guac import launch
 from machine_runtime import InventorySubscriptions,guest_endpoints
 BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;WAKE=threading.Event();RUNTIME=InventorySubscriptions(PRIVATE,WAKE);LAST_REQUEST=0;CATALOG_REFRESH=threading.Event();UPDATES=threading.Condition();VERSION=0
@@ -19,7 +19,7 @@ def reconcile():
         try:
             if records is None or CATALOG_REFRESH.is_set():
                 CATALOG_REFRESH.clear()
-                records=request(cfg,'GET','/v1/services')['services']
+                records=scoped_records(request(cfg,'GET','/v1/services')['services'])
                 LIVE.configure(records)
                 RUNTIME.configure(guest_endpoints(LIVE.endpoints(),json.loads((PRIVATE/'guest-endpoints.json').read_text()) if (PRIVATE/'guest-endpoints.json').exists() else None))
             states=RUNTIME.snapshot();accuracy=reconcile_inventory(records,states)
@@ -73,8 +73,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 while True:
                     with UPDATES:
-                        if version==VERSION:UPDATES.wait(60)
+                        if version==VERSION:UPDATES.wait(15)
+                        changed=version!=VERSION
                         version=VERSION
+                    if not changed:
+                        self.wfile.write(b': keepalive\n\n');self.wfile.flush()
+                        continue
                     with LOCK:payload={**STATE,'server_time':time.time()}
                     self.wfile.write(('event: inventory\ndata: '+json.dumps(payload)+'\n\n').encode());self.wfile.flush()
             except (OSError,TimeoutError):pass

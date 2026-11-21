@@ -547,3 +547,18 @@ provider read confirmed the slot was stopped, the allocator had zero
 unreleased leases and the temporary disk spool was empty. The credential
 was issued for the test. Automatic credential handoff by a production job
 launcher remains outstanding.
+
+### Staging milestone: whole-dashboard review access and stream recovery
+
+The operator limited terminal and password review to the disposable controller.
+A separate Guacamole installation connected a browser to its non-admin account.
+A command typed in the browser returned the expected username and hostname.
+The clipboard value matched the configured credential and authenticated to the
+terminal login. A different machine and a foreign origin were refused.
+
+A browser with its inventory stream interrupted reproduced a manual comparison
+that completed on the server but stayed pending on screen. The updated UI reads
+the cached comparison result while that user request is outstanding. A second
+test verified automatic reconnection after an HTTP failure closed EventSource.
+These checks used the actual registry, collectors and staging ingress. Public
+owner-session observations are recorded in the private deployment record.

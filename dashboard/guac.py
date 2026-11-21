@@ -6,15 +6,16 @@ from urllib.error import HTTPError
 from cryptography.hazmat.primitives.ciphers import Cipher,algorithms,modes
 from cryptography.hazmat.primitives.padding import PKCS7
 from client import request
+from access import scoped_records
 LOCK=threading.Lock();CACHE={}
 API='http://127.0.0.1:8095/guacamole/api/'
 
 def connections(private,records):
     result={};pins=(private/'guacamole_known_hosts').read_text().splitlines()
-    for record in records:
+    for record in scoped_records(records):
         s=record['spec']
         if s['lifecycle']!='active' or 'machine' not in s['capabilities']:continue
-        machine=s['host']
+        machine=s.get('resources',{}).get('review_terminal_id') or s['host']
         if not re.fullmatch(r'[a-z][a-z0-9-]{0,48}',machine):continue
         for route in s.get('resources',{}).get('management_access',[]):
             if route['id']!='os' or not (route.get('url') or '').startswith('ssh://'):continue

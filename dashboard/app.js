@@ -18,7 +18,7 @@ function details(key,cls,label){const d=el('details',cls);d.open=opened.has(key)
 function timeElement(t){const d=el('time','',age(t));if(t){d.dateTime=new Date(t*1000).toISOString();d.title=new Date(t*1000).toLocaleString()}return d}
 function switchView(v,fromHistory=false){view=v;filter='all';$('search').value='';$('host').value='';if(!fromHistory&&location.hash!=='#'+v)history.pushState(null,'','#'+v);render()}
 function setFeedback(key,node,message){feedback.set(key,message);node.textContent=message.startsWith('Could not copy')?'Copy failed':message;node.parentElement.title=message;$('toast').textContent=message}
-function copyPassword(r,a,status){const b=el('button','button secondary password-copy');b.type='button';for(const label of ['Copy password','Password copied','Copying…','Copy failed']){const size=el('span','copy-size',label);size.setAttribute('aria-hidden','true');b.append(size)}status.className='copy-label';const previous=feedback.get(r.id+':'+a.id)||'Copy password';status.textContent=previous.startsWith('Could not copy')?'Copy failed':previous;b.title=previous;b.append(status);b.setAttribute('aria-label','Copy '+r.host+' '+a.label+' password');
+function copyPassword(r,a,status){const b=el('button','button secondary password-copy');b.type='button';for(const label of ['Copy password','Password copied','Copying…','Copy failed']){const size=el('span','copy-size',label);size.setAttribute('aria-hidden','true');b.append(size)}status.className='copy-label';const previous=feedback.get(r.id+':'+a.id)||'Copy password';status.textContent=previous.startsWith('Could not copy')?'Copy failed':previous;b.title=previous;b.append(status);b.setAttribute('aria-label','Copy '+(r.display_name||r.host)+' '+a.label+' password');
  b.onclick=async()=>{b.disabled=true;copying++;const key=r.id+':'+a.id;setFeedback(key,status,'Copying…');try{
   if(!navigator.clipboard||!window.ClipboardItem)throw Error('unsupported');
   const value=fetch('api/copy-password',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'copy-password'},body:JSON.stringify({machine:r.id,login:a.id}),cache:'no-store',signal:AbortSignal.timeout(15000)}).then(r=>{if(!r.ok)throw Error('failed');return r.text()}).then(text=>new Blob([text],{type:'text/plain'}));
@@ -39,7 +39,7 @@ function accessPanel(r){const box=el('section','access-panel');box.setAttribute(
    row.append(consoleRow);
   }
   const actions=el('div','login-actions');
-  if(ssh&&a.browser_terminal&&a.browser_terminal.startsWith('/terminal/')){const l=link('Open SSH terminal ↗',a.browser_terminal);l.setAttribute('aria-label','Open SSH terminal · '+r.host);actions.append(l)}else{const label=ssh?'Open SSH app':a.id==='proxmox'?'Open Proxmox':a.id==='kvm'?'Open KVM':'Open Intel AMT';const l=link(label+' ↗',url.href);l.setAttribute('aria-label',label+' · '+r.host+(a.id==='amt-off'?' · OS off':''));actions.append(l)}row.append(actions);
+  if(ssh&&a.browser_terminal&&a.browser_terminal.startsWith('/terminal/')){const l=link('Open SSH terminal ↗',a.browser_terminal);l.setAttribute('aria-label','Open SSH terminal · '+(r.display_name||r.host));actions.append(l)}else{const label=ssh?'Open SSH app':a.id==='proxmox'?'Open Proxmox':a.id==='kvm'?'Open KVM':a.id==='console'?'Open terminal login':'Open Intel AMT';const l=link(label+' ↗',url.href);l.setAttribute('aria-label',label+' · '+r.host+(a.id==='amt-off'?' · OS off':''));actions.append(l)}row.append(actions);
   const more=details(r.id+':route:'+a.id,'route-details','Login details');
   if(ssh){more.append(el('p','','This terminal runs in your browser and connects through the lab. You are logged in automatically; no SSH password or installed app is required.'));
   }else more.append(el('p','','This opens the device’s own login page. You need home-network or VPN access.'));
@@ -226,22 +226,46 @@ function showAccuracy(a){
 $('reconcile').onclick=async()=>{
  const button=$('reconcile');button.disabled=true;reconcileRequested=now();$('reconcile-status').textContent='Checking registered deployments against current host inventories…';
  try{const r=await fetch('api/reconcile',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'reconcile'},body:'{}',signal:AbortSignal.timeout(12000)});if(!r.ok)throw Error('HTTP '+r.status);
-  const deadline=Date.now()+90000;while(reconcileRequested&&Date.now()<deadline){await new Promise(r=>setTimeout(r,1000))}
+  const deadline=Date.now()+90000;
+  while(reconcileRequested && Date.now()<deadline){
+   await new Promise(resolve=>setTimeout(resolve,4000));
+   if(!reconcileRequested)break;
+   // A manual comparison can finish while this browser's event stream is disconnected.
+   const result=await fetch('api/reconciliation',{cache:'no-store',signal:AbortSignal.timeout(8000)});
+   if(!result.ok)throw Error('HTTP '+result.status+' reading comparison');
+   const report=await result.json();
+   if(report.error)throw Error(report.error);
+   if(reconcileRequested && report.inventory_accuracy){
+    data.inventory_accuracy=report.inventory_accuracy;
+    showAccuracy(report.inventory_accuracy);
+   }
+  }
   if(reconcileRequested)throw Error('Timed out waiting for a completed reconciliation');
  }catch(e){$('reconcile-status').textContent='Could not complete reconciliation: '+e.message;reconcileRequested=0}finally{button.disabled=false}
 };
 
-var inventoryStream;
+var inventoryStream, inventoryRetry, inventoryRetryDelay;
 function connectInventory(){
+ clearTimeout(inventoryRetry);
  if(inventoryStream)inventoryStream.close();
  inventoryStream=new EventSource('api/inventory/stream');
  inventoryStream.addEventListener('inventory',event=>{
-  try{data=JSON.parse(event.data);if(data.server_time)offset=data.server_time-Date.now()/1000;
+  try{data=JSON.parse(event.data);inventoryRetryDelay=1000;if(data.server_time)offset=data.server_time-Date.now()/1000;
    $('error').hidden=!data.error;$('error').textContent=data.error||'';
    showAddressAudit(data.address_audit);showAccuracy(data.inventory_accuracy);
    if(!copying&&!$('cards').contains(document.activeElement))render();
   }catch{$('error').hidden=false;$('error').textContent='Invalid inventory event; waiting for a valid update.'}
  });
- inventoryStream.onerror=()=>{$('error').hidden=false;$('error').textContent='Inventory stream disconnected; reconnecting. Cached observations may be stale.'};
+ inventoryStream.onerror=()=>{
+  $('error').hidden=false;$('error').textContent='Inventory stream disconnected; reconnecting. Cached observations may be stale.';
+  // EventSource retries transport errors, but closes permanently on some HTTP errors.
+  if(inventoryStream.readyState===EventSource.CLOSED){
+   clearTimeout(inventoryRetry);
+   inventoryRetry=setTimeout(connectInventory,inventoryRetryDelay||1000);
+   inventoryRetryDelay=Math.min(30000,(inventoryRetryDelay||1000)*2);
+  }
+ };
 }
-addEventListener('pagehide',()=>inventoryStream?.close());
+addEventListener('pagehide',()=>{clearTimeout(inventoryRetry);inventoryStream?.close()});
+addEventListener('online',()=>{if(inventoryStream?.readyState!==EventSource.OPEN)connectInventory()});
+addEventListener('pageshow',event=>{if(event.persisted){connectInventory();refreshVisible()}});

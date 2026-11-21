@@ -339,3 +339,20 @@ preserved. Repeating the same request reports the existing restore and leaves
 any subsequent edits intact. The result identifies the captured scope and
 timestamp. Files outside that scope and changes after an incremental
 checkpoint are outside the recovery point.
+
+### Restrict dashboard access during review
+
+Set `LAB_DASHBOARD_ACCESS_TARGET` in the review dashboard service to the disposable
+machine's registry ID. The dashboard continues to show the full inventory. It
+offers logins only from that machine's `resources.staging_review.access`, which
+contains a unique `terminal_id` and the normal `management_access` list. A missing
+target or empty list exposes no login actions. Leave the variable unset for an
+installation that uses the normal registry management paths.
+
+Use a separate Guacamole signing key, terminal SSH key, and password mapping for
+the review guest. Pin its host keys and verify the account cannot administer the
+guest or read the controller configuration. Keep the review gateway behind the
+owner sign-in. Proxy EventSource responses with buffering disabled and preserve
+WebSocket upgrades for Guacamole. Verify terminal input and the clipboard login
+through the review route, and check that another machine and a foreign origin are
+refused. Retire the account, keys, gateway and review VM at teardown.
