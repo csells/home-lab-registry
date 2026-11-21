@@ -1,6 +1,6 @@
 # Renewable test environments as a home-lab service
 
-Status: proposed. The first implementation target is one bounded Linux pool.
+Status: in progress. A bounded Linux pilot runs in disposable staging.
 Created 2026-10-19; expanded 2026-11-20 with heterogeneous placement, Apple workers
 and the usage audit. No allocator or provider migration is claimed deployed.
 
@@ -317,8 +317,7 @@ A missed renewal marked the lease overdue and kept the guest available for
 renewal. An unauthenticated request and a read of a protected guest were denied.
 
 Remaining for the Linux slice: shared reservation discovery and registry projection,
-automated credential issuance, and incremental export and restore. The agreed grace, retention and hold policy
-still needs to be implemented and exercised before automatic reclamation.
+automated credential issuance, incremental checkpoints, and stable deployment.
 
 The pilot now journals a pre-dispatch view of recent tasks. When the provider
 reply is lost, it attaches only a unique new task for the same dedicated token,
@@ -359,4 +358,38 @@ encrypted Drive. After release and slot reset, a clean replacement loaded
 the verified archive from Drive and recovered both the working diff and the
 evidence. This was an operator-driven backup integration check. Incremental
 exports, fully automated verification and restore, qualification after
-physical guest deletion, and policy-driven reclamation still remain open.
+physical guest deletion, and full reclamation qualification remained open at this milestone.
+
+
+### Staging milestone: final export before reset
+
+A new pilot lease can opt in to expiry reclamation. During grace, the original
+owner can renew. Once grace ends the controller stops the guest, records the
+export work and holds the disk. An explicit checkpoint-preserving release
+uses this same path. A missing capture path produced a real failure and
+left the stopped slot reserved. A running hold kept the guest running
+beyond grace. A disk hold survived the verified receipt and a controller
+restart. The owner reopened a failed export after an accelerated 24-hour
+test, and the previous challenge was refused.
+
+Using the real encrypted Google Drive backup, the verifier downloaded the
+checkpoint and compared its digest before authorizing reset. Clearing the
+disk hold let the controller finish the rollback without a task client
+driving progress. A replacement started with a clean disk and recovered
+both the unfinished work and the failure evidence from the checkpoint.
+This qualifies reuse after destructive disk rollback. Recovery after
+physical guest deletion remains open.
+
+A timer ran the export worker inside the staging VM. The test withheld
+the first receipt after a successful upload and readback. The timer found
+the already uploaded snapshot using the export challenge, read it back
+again, and recorded the receipt without a second upload. Separate scoped
+operator forwarding exercised the real stopped guest and backup repository
+without storing provider or backup credentials in the worker.
+
+Keep automatic reclamation scoped to the owned pilot slot. Stable still
+needs durable restricted capture and backup credentials, incremental
+checkpoints, independent owner retrieval, enforceable 30-day retention
+and pinning, notification delivery, delegated reviewer holds, and
+shared reservation coordination. The pilot does not enroll existing
+guests. This candidate has no production promotion approval.

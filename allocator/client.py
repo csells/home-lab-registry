@@ -62,13 +62,19 @@ def main():
     acquire.add_argument('--seconds', type=int, required=True)
     acquire.add_argument('--ssh-public-key', type=Path, required=True)
     acquire.add_argument('--recipe', default='debian13-amd64')
-    for operation in ('inspect', 'renew', 'release'):
+    acquire.add_argument('--reclaim-on-expiry', action='store_true')
+    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export'):
         command = sub.add_parser(operation)
         command.add_argument('lease')
         if operation == 'renew':
             command.add_argument('--seconds', type=int, required=True)
         elif operation == 'release':
-            command.add_argument('--discard-disposable-data', action='store_true', required=True)
+            disposition = command.add_mutually_exclusive_group(required=True)
+            disposition.add_argument('--discard-disposable-data', action='store_true')
+            disposition.add_argument('--preserve-checkpoint', action='store_true')
+        elif operation == 'hold':
+            command.add_argument('--mode', choices=('running', 'disk', 'clear'), default='disk')
+            command.add_argument('--reason')
     args = parser.parse_args()
     if args.record and not args.registry_client:
         parser.error('--record requires --registry-client')
@@ -78,7 +84,8 @@ def main():
         if args.command == 'acquire':
             key = ' '.join(args.ssh_public_key.read_text().split()[:2])
             payload = {'task': args.task, 'request_key': args.request_key, 'seconds': args.seconds,
-                       'recipe': args.recipe, 'ssh_public_key': key}
+                       'recipe': args.recipe, 'ssh_public_key': key,
+                       'reclaim_on_expiry': args.reclaim_on_expiry}
         else:
             if not re.fullmatch('[a-f0-9]{32}', args.lease):
                 raise ValueError('Invalid lease ID')
@@ -88,7 +95,14 @@ def main():
                 payload = {'seconds': args.seconds}
             elif args.command == 'release':
                 route += '/release'
-                payload = {'discard_disposable_data': True}
+                payload = {'discard_disposable_data': args.discard_disposable_data,
+                           'preserve_checkpoint': args.preserve_checkpoint}
+            elif args.command == 'hold':
+                route += '/hold'
+                payload = {'mode': args.mode, 'reason': args.reason}
+            elif args.command == 'retry-export':
+                route += '/retry-export'
+                payload = {}
         print(json.dumps(request(endpoint, args.ca, args.token_file, route, payload)))
         return 0
     except urllib.error.HTTPError as error:

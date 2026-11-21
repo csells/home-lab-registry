@@ -25,9 +25,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+EXPORT_REVIEW_SECONDS = 24 * 60 * 60
+CHECKPOINT_RETENTION_SECONDS = 30 * 24 * 60 * 60
+
+
 PROVIDER_TASK_TYPES = {
     'starting': 'qmstart',
     'stopping': 'qmshutdown',
+    'export-stopping': 'qmshutdown',
     'resetting': 'qmrollback',
 }
 
@@ -93,6 +98,13 @@ class Proxmox:
         parts = upid.split(':') if isinstance(upid, str) else []
         return (len(parts) == 9 and parts[0] == 'UPID' and parts[1] == self.node
                 and parts[5:8] == [PROVIDER_TASK_TYPES[phase], self.guest_id, self.identity])
+
+    def slot_start_tasks(self):
+        query = urllib.parse.urlencode({
+            'source': 'all', 'vmid': self.guest_id, 'typefilter': 'qmstart', 'limit': 50,
+        })
+        tasks = self.call(f'/nodes/{self.node}/tasks?{query}')
+        return json.dumps(sorted(row['upid'] for row in tasks))
 
     def recent_tasks(self, phase):
         query = urllib.parse.urlencode({
@@ -226,6 +238,15 @@ class Pilot:
                 ('prior_tasks', 'TEXT'),
                 ('owner', "TEXT NOT NULL DEFAULT 'operator'"),
                 ('ssh_key', 'TEXT'),
+                ('reclaim_on_expiry', 'INTEGER NOT NULL DEFAULT 0'),
+                ('hold_mode', 'TEXT'),
+                ('hold_reason', 'TEXT'),
+                ('export_challenge', 'TEXT'),
+                ('export_start_tasks', 'TEXT'),
+                ('export_requested_at', 'REAL'),
+                ('export_failed_at', 'REAL'),
+                ('export_error', 'TEXT'),
+                ('checkpoint', 'TEXT'),
             ):
                 if column not in columns:
                     self.db.execute(f'ALTER TABLE lease ADD COLUMN {column} {definition}')
@@ -233,6 +254,11 @@ class Pilot:
         self.capacity = Capacity(self.provider, config['capacity'])
         self.user = config['guest_user']
         self.host_key = public_key(config['guest_host_key'])
+        policy = config.get('reclamation', {})
+        self.reclaim_enabled = bool(policy.get('verifier_token_file'))
+        self.grace_seconds = policy.get('grace_seconds', 7200)
+        if type(self.grace_seconds) is not int or self.grace_seconds < 1:
+            raise ValueError('Grace must be a positive duration')
 
     def update(self, lease, phase, upstream=None, address=None, prior_tasks=None):
         with self.db:
@@ -275,7 +301,7 @@ class Pilot:
     def inspect(self, lease, owner):
         row = self.owned(lease, owner)
         phase = row['phase']
-        if phase in ('starting', 'stopping', 'resetting'):
+        if phase in ('starting', 'stopping', 'export-stopping', 'resetting'):
             if not row['upstream']:
                 row = self.recover_task(row)
                 if not row['upstream']:
@@ -303,18 +329,35 @@ class Pilot:
             if self.provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The guest did not stop. The slot remains held.')
             row = self.dispatch(lease, 'resetting', self.provider.reset)
+        elif phase == 'export-stopping':
+            if self.provider.status() != 'stopped':
+                raise Rejected('unexpected_guest_state', 'The guest did not stop. Preserve its disk.')
+            row = self.request_export(lease)
         elif phase == 'resetting':
             if self.provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The reset slot did not return to the stopped state.')
-            row = self.update(lease, 'released')
+            if row['checkpoint']:
+                receipt = json.loads(row['checkpoint'])
+                receipt['retain_through'] = time.time() + CHECKPOINT_RETENTION_SECONDS
+                with self.db:
+                    self.db.execute(
+                        "UPDATE lease SET phase='released', upstream=NULL, address=NULL, prior_tasks=NULL, checkpoint=? WHERE id=?",
+                        (json.dumps(receipt), lease))
+                row = self.get(lease)
+            else:
+                row = self.update(lease, 'released')
         status = row['phase']
         if status == 'ready' and time.time() >= row['deadline']:
             status = 'overdue'
         return self.public(row, status)
 
     def public(self, row, status=None):
-        result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key')}
+        result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'export_start_tasks', 'checkpoint')}
         result['status'] = status or row['phase']
+        if row['checkpoint']:
+            result['checkpoint'] = json.loads(row['checkpoint'])
+        if row['export_failed_at']:
+            result['export_needs_decision'] = time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS
         if row['address']:
             result['ssh'] = {'host': row['address'], 'user': self.user,
                              'host_key_alias': self.provider.name, 'host_key': self.host_key}
@@ -325,13 +368,16 @@ class Pilot:
         if not all(isinstance(s, str) and 0 < len(s) <= 128 for s in (task, key)):
             raise Rejected('invalid_request', 'Provide a task and a request_key of 1–128 characters.', 400)
         self.check_duration(seconds)
+        reclaim = data.get('reclaim_on_expiry', False)
+        if type(reclaim) is not bool or (reclaim and not self.reclaim_enabled):
+            raise Rejected('reclamation_unavailable', 'Automatic reclamation is unavailable for this request.', 422)
         key = owner + '/' + key
         ssh_key = public_key(data.get('ssh_public_key'))
         if data.get('recipe') != 'debian13-amd64':
             raise Rejected('unsupported_recipe', 'The pilot provides only debian13-amd64.', 422)
         prev = self.db.execute('SELECT * FROM lease WHERE request_key=?', (key,)).fetchone()
         if prev:
-            if prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key:
+            if prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key or bool(prev['reclaim_on_expiry']) != reclaim:
                 raise Rejected('request_key_conflict', 'This request key is already bound to different inputs.')
             return self.inspect(prev['id'], owner)
         if self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone():
@@ -343,9 +389,9 @@ class Pilot:
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
-                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key)
-                VALUES (?,?,?,?,?,?,?,?,?)''',
-                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key))
+                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry)
+                VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim)))
         return self.public(self.dispatch(lease, 'starting', self.provider.start, recorded=True))
 
     @staticmethod
@@ -364,12 +410,131 @@ class Pilot:
                             (max(row['deadline'], time.time()+seconds), lease))
         return self.inspect(lease, owner)
 
+    def hold(self, lease, data, owner):
+        row = self.owned(lease, owner)
+        mode, reason = data.get('mode', 'disk'), data.get('reason')
+        if not row['reclaim_on_expiry'] or row['phase'] not in ('ready', 'awaiting-export'):
+            raise Rejected('hold_unavailable', 'Only an enrolled lease before reset can be held.')
+        if mode not in ('running', 'disk', 'clear'):
+            raise Rejected('invalid_hold', 'Select running, disk, or clear.', 400)
+        if mode == 'running' and row['phase'] != 'ready':
+            raise Rejected('already_stopped', 'The guest has already stopped for export.')
+        if mode != 'clear' and (not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 240):
+            raise Rejected('hold_reason_required', 'Provide a short hold reason.', 400)
+        with self.db:
+            self.db.execute('UPDATE lease SET hold_mode=?, hold_reason=? WHERE id=?',
+                            (None if mode == 'clear' else mode,
+                             None if mode == 'clear' else reason.strip(), lease))
+        return self.public(self.get(lease))
+
+    def request_export(self, lease):
+        start_tasks = self.provider.slot_start_tasks()
+        with self.db:
+            self.db.execute("""UPDATE lease SET phase='awaiting-export', upstream=NULL,
+                prior_tasks=NULL, address=NULL, export_challenge=?, export_requested_at=?,
+                export_start_tasks=? WHERE id=?""", (uuid.uuid4().hex, time.time(), start_tasks, lease))
+        return self.get(lease)
+
+    def retry_export(self, lease, owner):
+        row = self.owned(lease, owner)
+        if row['phase'] != 'awaiting-export' or row['checkpoint'] or not row['export_failed_at']:
+            raise Rejected('export_retry_unavailable', 'Only a failed pending export can be retried.')
+        self.check_export_source(row)
+        with self.db:
+            self.db.execute(
+                'UPDATE lease SET export_challenge=?, export_failed_at=NULL, export_error=NULL WHERE id=?',
+                (uuid.uuid4().hex, lease))
+        return self.public(self.get(lease))
+
+    def next_export(self):
+        row = self.db.execute(
+            "SELECT id FROM lease WHERE phase='awaiting-export' AND checkpoint IS NULL"
+            " AND (export_failed_at IS NULL OR export_failed_at > ?)",
+            (time.time() - EXPORT_REVIEW_SECONDS,)).fetchone()
+        return {'export': self.pending_export(row['id']) if row is not None else None}
+
+    def pending_export(self, lease):
+        row = self.get(lease)
+        if row['phase'] != 'awaiting-export' or row['checkpoint']:
+            raise Rejected('export_not_pending', 'This lease is not waiting for a final export.')
+        if row['export_failed_at'] and time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS:
+            raise Rejected('export_decision_required', 'Export has failed for 24 hours. Owner disposition is required.')
+        return {'lease_id': lease, 'challenge': row['export_challenge'],
+                'guest_id': self.provider.guest_id, 'requested_at': row['export_requested_at']}
+
+    def check_export_source(self, row):
+        if (self.provider.status() != 'stopped' or
+                self.provider.slot_start_tasks() != row['export_start_tasks']):
+            raise Rejected('export_source_changed', 'The guest start history or power state changed. Preserve its disk for review.')
+
+    def export_result(self, lease, data):
+        row = self.get(lease)
+        if row['checkpoint']:
+            receipt = json.loads(row['checkpoint'])
+            if (data.get('outcome') == 'verified' and data.get('challenge') == row['export_challenge']
+                    and all(data.get(field) == receipt[field] for field in ('snapshot', 'path', 'sha256'))):
+                return self.public(row)
+            raise Rejected('export_already_verified', 'A different receipt cannot replace a verified export.')
+        pending = self.pending_export(lease)
+        if data.get('challenge') != pending['challenge']:
+            raise Rejected('export_identity_mismatch', 'Receipt did not match the current export challenge.')
+        self.check_export_source(row)
+        if data.get('outcome') == 'failed':
+            reason = data.get('reason')
+            if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 240:
+                raise Rejected('invalid_export_error', 'Provide a short failure reason.', 400)
+            with self.db:
+                self.db.execute("""UPDATE lease SET export_failed_at=coalesce(export_failed_at, ?),
+                    export_error=? WHERE id=?""", (time.time(), reason.strip(), lease))
+            print(f'Final export failed for lease {lease}; disk preserved', flush=True)
+            return self.public(self.get(lease))
+        snapshot, digest, path = data.get('snapshot'), data.get('sha256'), data.get('path')
+        if (data.get('outcome') != 'verified' or not isinstance(snapshot, str)
+                or not re.fullmatch(r'[a-f0-9]{64}', snapshot)
+                or path != '/lease-' + lease + '.tar.gz'
+                or not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)):
+            raise Rejected('invalid_export_receipt', 'Provide a verified encrypted snapshot and download digest.', 400)
+        receipt = {'snapshot': snapshot, 'path': path, 'sha256': digest, 'verified_at': time.time()}
+        with self.db:
+            self.db.execute('UPDATE lease SET checkpoint=?, export_failed_at=NULL, export_error=NULL WHERE id=?',
+                            (json.dumps(receipt), lease))
+        return self.public(self.get(lease))
+
+    def advance_reclamation(self):
+        if not self.reclaim_enabled:
+            return
+        active = self.db.execute("SELECT * FROM lease WHERE phase!='released' AND reclaim_on_expiry=1").fetchone()
+        if active is None:
+            return
+        row = dict(active)
+        key, phase = row['id'], row['phase']
+        if phase == 'starting':
+            self.inspect(key, row['owner'])
+        elif phase == 'ready' and time.time() >= row['deadline'] + self.grace_seconds and row['hold_mode'] != 'running':
+            if self.provider.status() == 'stopped':
+                self.request_export(key)
+            else:
+                self.dispatch(key, 'export-stopping', self.provider.shutdown)
+        elif phase in ('export-stopping', 'resetting'):
+            self.inspect(key, row['owner'])
+        elif phase == 'awaiting-export' and row['checkpoint'] and not row['hold_mode']:
+            self.check_export_source(row)
+            self.dispatch(key, 'resetting', self.provider.reset)
+
     def release(self, lease, data, owner):
         row = self.owned(lease, owner)
-        if row['phase'] in ('released', 'stopping', 'resetting'):
+        if row['phase'] in ('released', 'stopping', 'export-stopping', 'awaiting-export', 'resetting'):
             return self.inspect(lease, owner)
         if row['phase'] != 'ready':
             raise Rejected('lease_not_releasable', 'Inspect the start operation before requesting release.')
+        if row['reclaim_on_expiry']:
+            if data.get('preserve_checkpoint') is not True or data.get('discard_disposable_data'):
+                raise Rejected('final_export_required', 'Enrolled leases require verified export before reset.')
+            if row['hold_mode']:
+                raise Rejected('lease_held', 'Clear the review hold before releasing the guest.')
+            if self.provider.status() == 'stopped':
+                return self.public(self.request_export(lease))
+            return self.public(self.dispatch(lease, 'export-stopping', self.provider.shutdown))
         if data.get('discard_disposable_data') is not True:
             raise Rejected('release_requires_disposition', 'Confirm discard of the pilot workspace after saving any required data.', 400)
         if self.provider.status() == 'stopped':
@@ -392,6 +557,35 @@ def main():
             or len(set(secrets.values())) != len(secrets)):
         raise ValueError('Configure a different randomly generated token for each pilot principal')
 
+    verifier_ref = config.get('reclamation', {}).get('verifier_token_file')
+    verifier = Path(verifier_ref).read_text().strip() if verifier_ref else None
+    if verifier is not None and (not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', verifier)
+                                 or verifier in secrets.values()):
+        raise ValueError('Use a distinct final export verifier credential')
+
+    class CheckedServer(HTTPServer):
+        next_check = 0
+        last_warning = None
+
+        def get_request(self):
+            connection, address = super().get_request()
+            connection.settimeout(4)
+            return connection, address
+
+        def service_actions(self):
+            if time.monotonic() < self.next_check:
+                return
+            self.next_check = time.monotonic() + 2
+            try:
+                controller.advance_reclamation()
+            except (Rejected, OSError, ValueError, KeyError, TypeError) as error:
+                warning = getattr(error, 'code', type(error).__name__)
+                if warning != self.last_warning:
+                    print(f'Reclamation held for review: {warning}', flush=True)
+                self.last_warning = warning
+            else:
+                self.last_warning = None
+
     class Handler(BaseHTTPRequestHandler):
         def respond(self, value, status=200):
             body = json.dumps(value).encode()
@@ -408,11 +602,19 @@ def main():
             for principal, value in secrets.items():
                 if hmac.compare_digest(supplied, ('Bearer ' + value).encode('ascii')):
                     owner = principal
-            if owner is None:
+            is_verifier = verifier is not None and hmac.compare_digest(supplied, ('Bearer ' + verifier).encode('ascii'))
+            parts = self.path.strip('/').split('/')
+            export_route = len(parts) in (2, 3) and parts[:2] == ['v1', 'final-export']
+            if (export_route and not is_verifier) or (not export_route and owner is None):
                 self.respond({'code': 'unauthorized'}, 401)
                 return
             try:
-                parts = self.path.strip('/').split('/')
+                if export_route and self.command == 'GET':
+                    if len(parts) == 2:
+                        self.respond(controller.next_export())
+                    else:
+                        self.respond(controller.pending_export(parts[2]))
+                    return
                 if self.command == 'GET' and len(parts) == 3 and parts[:2] == ['v1', 'leases']:
                     self.respond(controller.inspect(parts[2], owner))
                     return
@@ -423,12 +625,21 @@ def main():
                     data = json.loads(self.rfile.read(size))
                     if not isinstance(data, dict):
                         raise Rejected('invalid_body', 'Provide a JSON object.', 400)
+                    if export_route and len(parts) == 3:
+                        self.respond(controller.export_result(parts[2], data))
+                        return
                     if parts == ['v1', 'leases']:
                         self.respond(controller.acquire(data, owner), 202)
                         return
                     if len(parts) == 4 and parts[:2] == ['v1', 'leases']:
                         if parts[3] == 'renew':
                             self.respond(controller.renew(parts[2], data, owner))
+                            return
+                        if parts[3] == 'hold':
+                            self.respond(controller.hold(parts[2], data, owner))
+                            return
+                        if parts[3] == 'retry-export':
+                            self.respond(controller.retry_export(parts[2], owner))
                             return
                         if parts[3] == 'release':
                             self.respond(controller.release(parts[2], data, owner), 202)
@@ -451,12 +662,12 @@ def main():
     tls = config.get('tls')
     if host != '127.0.0.1' and not tls:
         raise ValueError('A non-loopback listener requires TLS')
-    with HTTPServer((host, int(config.get('port', 8093))), Handler) as server:
+    with CheckedServer((host, int(config.get('port', 8093))), Handler) as server:
         if tls:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.minimum_version = ssl.TLSVersion.TLSv1_3
             context.load_cert_chain(tls['cert_file'], tls['key_file'])
-            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
         print(f'Lease pilot listening with {"TLS" if tls else "local HTTP"}', flush=True)
         server.serve_forever()
 

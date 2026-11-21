@@ -62,8 +62,7 @@ Each lease installs only its caller's public key, and release must finish
 restoring the clean snapshot before the slot accepts another lease. Verify the guest host key through the trusted provisioner before setting
 `guest_host_key`. Use the returned `host_key_alias` with strict verification,
 so a DHCP address change does not weaken the host identity check. Automated credential issuance, lifecycle registry projection, automatic discovery of
-reservations outside this controller, checkpoint export and automatic expiry
-cleanup remain open. Lost
+reservations outside this controller, and unattended checkpoint export remain open. Lost
 provider task recovery is qualified for the single dedicated slot. Use only disposable
 qualification data in the slot.
 
@@ -85,3 +84,63 @@ Use the same options with `inspect <id>`, `renew <id> --seconds 900`, or
 returns JSON, with structured rejection details on stderr and exit status 2.
 Capacity rejections require a new caller decision. The client never retries
 mutations automatically.
+
+
+## Opt-in staged reclamation
+
+Set `reclamation.verifier_token_file` to a separate private bearer credential.
+The default `reclamation.grace_seconds` is 7200. New requests may opt in with
+`--reclaim-on-expiry`. Previous leases keep their original policy. An opted-in
+lease remains renewable during grace. After grace the controller stops the guest
+and holds its disk while the exporter obtains and verifies a checkpoint. Early
+`release <id> --preserve-checkpoint` starts the same process. An opted-in
+lease cannot be reset through the discard option.
+
+The owner can set `hold <id> --mode disk --reason <reason>` or explicitly
+preserve the running guest with `--mode running`. A disk hold permits shutdown
+and prevents reset even after backup. Use `hold <id> --mode clear` to remove
+the hold.
+
+The separate verifier uses `GET /v1/final-export` to discover pending work and
+`GET /v1/final-export/{id}` to inspect the exact lease, guest and challenge. It uses `POST` on that route with
+the challenge and one of these outcomes.
+
+- `failed` with a short reason. The disk stays reserved and the error is
+  visible to the owner. After 24 hours the pending export requires owner
+  review. The owner can use `retry-export <id>` after repairing the cause.
+  Retry resets the failure window and invalidates previous challenges.
+- `verified` with the full encrypted repository snapshot ID, expected
+  `/lease-{id}.tar.gz` path, and independently downloaded SHA-256. The
+  controller checks the stopped guest and its observed start history, records
+  the receipt, and completes rollback through the same durable task journal.
+  Repeating the exact receipt is safe. Inspect returns the checkpoint path,
+  snapshot and digest after release.
+
+Use a dedicated slot under exclusive controller control. Proxmox task history
+is a supplementary consistency check. It cannot fence host-root actions or
+writes to a stopped guest disk. The pilot expects the verifier to download and
+check the archive through a trusted storage integration before posting.
+The 30-day retain-through timestamp records the policy. This pilot has no
+automatic prune or pin command, notification delivery, or delegated reviewer identities.
+
+
+### Backup worker
+
+Run `python3 allocator/exporter.py CONFIG.json` once per scheduling tick.
+Configure the private controller `endpoint`, `ca_file`, scoped
+`verifier_token_file`, private `lock_file`, and the owned `guest_id`.
+Supply `capture_command` and `restic_command` as argument arrays. The capture
+command receives the guest and lease IDs. The operator-provided adapter must
+independently verify the exact stopped guest and export only its declared
+workspace and evidence. The backup adapter runs restic against the intended
+encrypted repository without exposing repository secrets to task agents.
+The worker applies configurable `max_archive_bytes` and `command_timeout`
+limits, looks up existing snapshots by export challenge, downloads the archive
+to compare SHA-256, and submits a receipt only after that succeeds. A failed
+attempt leaves the disk reserved. Use one scheduler for this slot.
+
+The staged worker can run under systemd. Provisioning a durable least-privilege
+capture and backup transport for stable is still required. The qualification
+uses operator-owned forwarding that never grants provider or backup credentials
+to the worker. Deploying this worker alongside a storage service or allowing
+task agents to retrieve artifacts independently requires a scoped adapter.
