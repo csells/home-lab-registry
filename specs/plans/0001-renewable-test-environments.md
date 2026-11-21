@@ -468,8 +468,12 @@ could remove it. The expiry role confirmed the snapshot was gone. The
 role test used a temporary operator transport against the dedicated
 repository. Separate forced-command SSH identities on a disposable staging
 VM exchanged an actual archive and rejected shell and cross-role commands.
-Stable still needs the approved storage adapter installation and a narrowly
-scoped cold-capture provider.
+The scoped storage adapter was authorized and installed on the backup
+controller. Production SSH verified independent read, write and expiry roles
+against a dedicated encrypted Drive repository. The production configuration
+archive was downloaded and its recovery key reopened the repository. The
+stable allocator has not adopted the adapter. A narrowly scoped cold-capture
+provider remains open.
 
 
 ### Staging milestone: short-lived task credentials
