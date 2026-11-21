@@ -320,3 +320,20 @@ independent and persist across restarts. The reviewer receives no guest,
 artifact or release authority. To override an unresolved reviewer hold, the
 owner must confirm that exact reviewer and give a reason. The recorded
 override preserves the affected principal, prior reason and data disposition.
+
+### Matching replacement and workspace restore
+
+Use `resume <predecessor> --task <task> --request-key <new-operation-key>
+--seconds <duration> --identity <new-private-key>` with the owner's ordinary
+credential. The task client requires the adjacent `restore_workspace.py`
+helper and a fresh Ed25519 identity. The controller records the predecessor,
+requirements and chosen acknowledged checkpoint on the replacement. The
+default selects a retained final checkpoint, otherwise the newest available
+incremental one. Use `--checkpoint-id` for a particular incremental version.
+
+The client verifies the archive on download and again in the new guest before
+installing it in the task's workspace. An existing nonempty workspace is
+preserved. Repeating the same request reports the existing restore and leaves
+any subsequent edits intact. The result identifies the captured scope and
+timestamp. Files outside that scope and changes after an incremental
+checkpoint are outside the recovery point.

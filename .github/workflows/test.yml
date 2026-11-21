@@ -12,6 +12,7 @@ jobs:
           python-version: '3.13'
       - run: pip install -r requirements.txt
       - run: python -W error::ResourceWarning -m unittest discover -s registry -v
+      - run: python -m unittest discover -s allocator -v
       - run: python -m unittest discover -s dashboard -v
       - run: PYTHONPATH=backup:registry python -m unittest discover -s backup -v
       - run: node --check dashboard/app.js

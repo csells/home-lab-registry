@@ -471,9 +471,8 @@ VM exchanged an actual archive and rejected shell and cross-role commands.
 The scoped storage adapter was authorized and installed on the backup
 controller. Production SSH verified independent read, write and expiry roles
 against a dedicated encrypted Drive repository. The production configuration
-archive was downloaded and its recovery key reopened the repository. The
-stable allocator has not adopted the adapter. A narrowly scoped cold-capture
-provider remains open.
+archive was downloaded and its recovery key reopened the repository. The staging allocator subsequently exercised this adapter with scoped cold
+capture, as recorded below. Production allocator adoption remains outstanding.
 
 
 ### Staging milestone: short-lived task credentials
@@ -483,8 +482,8 @@ client found the actual controller through the registry, acquired a real
 guest, and used an independently generated SSH key to reach its non-admin
 account. A second issuer using the same task reference could not see or
 operate the first lease. Controller restart, rotation, expiry, revocation
-and delegated renewal revocation were exercised. The stable job launcher
-integration and browser review are still outstanding.
+and delegated renewal revocation were exercised. Stable job-launcher integration remains outstanding. The subsequent dashboard
+milestone records browser acceptance.
 
 ### Staging milestone: unattended cold capture with scoped provider access
 
@@ -528,3 +527,23 @@ reviewer replacement were refused. An unrelated task could not change the
 hold, and the reviewer could not inspect the guest or release it. An explicit
 owner override recorded the named reviewer, prior reason and effect before
 the normal checkpoint-gated release returned the slot.
+
+### Staging milestone: replacement of a released Linux lease
+
+The owner recovered a verified final workspace into a matching replacement
+using a new SSH key. The previous guest's key was refused. The test edited
+the recovered file and replayed the original request. The client returned
+the same lease and preserved the new edit. Scheduled final export and reset
+returned the replacement slot to the pool. This run exercised final capture.
+
+One fresh BB thread received a short-lived task credential and the client
+bundle. It discovered the allocator in the registry, requested Linux by
+capability and connected using the guest identity returned by the lease.
+Python round-tripped a UTF-8 filename and a 260-byte binary payload in a
+gzip-compressed tar archive. The agent waited for the asynchronous release,
+downloaded the final checkpoint and verified its source and result. A second
+download matched the archive digest and both copies of the payload. A
+provider read confirmed the slot was stopped, the allocator had zero
+unreleased leases and the temporary disk spool was empty. The credential
+was issued for the test. Automatic credential handoff by a production job
+launcher remains outstanding.

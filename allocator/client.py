@@ -1,13 +1,16 @@
 """Task-side client for the disposable lease pilot."""
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import shlex
 import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -110,6 +113,61 @@ def write_secret(grant, output):
         os.link(secret.name, output)
 
 
+def resume_workspace(endpoint, args):
+    origin = '/v1/leases/' + args.predecessor
+    if not re.fullmatch('[a-f0-9]{32}', args.predecessor):
+        raise ValueError('Invalid predecessor lease ID')
+    public = subprocess.check_output(['ssh-keygen', '-y', '-f', str(args.identity)], timeout=8,
+                                     stdin=subprocess.DEVNULL, text=True).split()
+    if len(public) < 2 or public[0] != 'ssh-ed25519':
+        raise ValueError('Use an independently generated Ed25519 identity for the replacement')
+    def api(path, body=None):
+        return request(endpoint, args.ca, args.token_file, path, body)
+    payload = {'task': args.task, 'request_key': args.request_key, 'seconds': args.seconds,
+               'ssh_public_key': ' '.join(public[:2]), 'reclaim_on_expiry': True,
+               'resume_from': args.predecessor, 'checkpoint_id': args.checkpoint_id}
+    lease = api('/v1/leases', payload)
+    lease_id = lease['id']
+    # Emit the operation ID before network-dependent restore steps.
+    print('Replacement lease ' + lease_id + '; retry with the same request key after interruption.', file=sys.stderr)
+    until = time.monotonic() + 120
+    while lease['status'] in ('starting', 'waiting-for-guest-ip') and time.monotonic() < until:
+        time.sleep(1)
+        lease = api('/v1/leases/' + lease_id)
+    if lease['status'] != 'ready':
+        raise ValueError('Replacement is ' + lease['status'] + '. Inspect it before retrying.')
+    point, ssh = lease['resume_point'], lease['ssh']
+    if point['lease'] != args.predecessor:
+        raise ValueError('Replacement lineage differs from the requested predecessor')
+    grant = api(origin + '/checkpoint-recovery', {'checkpoint_id': point['checkpoint_id']})
+    if point['sha256'] != grant['sha256']:
+        raise ValueError('The authorized recovery point changed')
+    ip = str(ipaddress.ip_address(ssh['host']))
+    if (not re.fullmatch('[a-z_][a-z0-9_-]{0,31}', ssh['user'])
+            or not re.fullmatch('[a-zA-Z0-9_-]{1,64}', ssh['host_key_alias'])
+            or not re.fullmatch(r'ssh-ed25519 [a-zA-Z0-9+/=]+', ssh['host_key'])):
+        raise ValueError('Invalid replacement SSH identity')
+    helper = Path(__file__).with_name('restore_workspace.py').read_text()
+    with tempfile.TemporaryDirectory() as tmp:
+        pin = Path(tmp)/'known_hosts'
+        pin.write_text(ssh['host_key_alias'] + ' ' + ssh['host_key'] + '\n')
+        archive = Path(tmp)/'checkpoint'
+        download_checkpoint(grant, args.ca, archive)
+        command = ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+                   '-o', 'IdentityAgent=none', '-o', 'IdentitiesOnly=yes', '-o', 'ClearAllForwardings=yes',
+                   '-o', 'StrictHostKeyChecking=yes', '-o', 'GlobalKnownHostsFile=/dev/null',
+                   '-o', 'UserKnownHostsFile='+str(pin), '-o', 'HostKeyAlias='+ssh['host_key_alias'],
+                   '-i', str(args.identity), ssh['user']+'@'+ip,
+                   shlex.join(['python3','-c',helper,point['sha256'],lease_id])]
+        with archive.open('rb') as stream:
+            result = subprocess.check_output(command, stdin=stream, timeout=180, text=True).strip()
+        if result not in ('restored','previously-restored'):
+            raise ValueError('The guest did not acknowledge the restore')
+    return {'lease': lease_id, 'workspace': '~/workspace', 'restore': result, 'recovery_point': point,
+            'coverage': ('Declared workspace at final capture.' if point['capture'] == 'final'
+                         else 'Declared checkpoint only. Later unacknowledged changes are unavailable.')}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -120,6 +178,13 @@ def main():
     parser.add_argument('--token-file', required=True, type=Path)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('capabilities')
+    resume = sub.add_parser('resume')
+    resume.add_argument('predecessor')
+    resume.add_argument('--task', required=True)
+    resume.add_argument('--request-key', required=True)
+    resume.add_argument('--seconds', type=int, required=True)
+    resume.add_argument('--identity', required=True, type=Path)
+    resume.add_argument('--checkpoint-id')
     acquire = sub.add_parser('acquire')
     acquire.add_argument('--task', required=True)
     acquire.add_argument('--request-key', required=True)
@@ -179,6 +244,9 @@ def main():
         parser.error('--record requires --registry-client')
     try:
         endpoint = args.endpoint or discover(args.registry_client, args.record)
+        if args.command == 'resume':
+            print(json.dumps(resume_workspace(endpoint, args)))
+            return 0
         if args.command == 'capabilities':
             print(json.dumps(request(endpoint, args.ca, args.token_file, '/v1/capabilities', None)))
             return 0

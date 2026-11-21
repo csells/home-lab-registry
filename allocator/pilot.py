@@ -264,6 +264,7 @@ class Pilot:
         columns = {row['name'] for row in self.db.execute('PRAGMA table_info(lease)')}
         with self.db:
             for column, definition in (
+                ('resume_point', 'TEXT'),
                 ('requirements', "TEXT NOT NULL DEFAULT '{}'"),
                 ('prior_tasks', 'TEXT'),
                 ('owner', "TEXT NOT NULL DEFAULT 'operator'"),
@@ -422,6 +423,7 @@ class Pilot:
     def public(self, row, status=None):
         result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'export_start_tasks', 'checkpoint')}
         result['requirements'] = json.loads(row['requirements'])
+        result['resume_point'] = json.loads(row['resume_point']) if row['resume_point'] else None
         result['status'] = status or row['phase']
         if incremental := self.checkpoints.list(row['id']):
             result['incremental_checkpoints'] = incremental
@@ -439,6 +441,33 @@ class Pilot:
                              'host_key_alias': self.provider.name, 'host_key': self.host_key}
         return result
 
+    def matching_point(self, source, owner, requested_id, replacement_key):
+        if not isinstance(source, str) or not re.fullmatch('[a-f0-9]{32}', source):
+            raise Rejected('invalid_source', 'Provide the predecessor lease ID.', 400)
+        previous = self.owned(source, owner)
+        if previous['ssh_key'] == replacement_key:
+            raise Rejected('new_ssh_key_required', 'Generate a fresh SSH key for the replacement.', 400)
+        if previous['phase'] != 'released':
+            raise Rejected('source_active', 'Reconnect to the existing lease until reclamation finishes.')
+        now = time.time()
+        candidates = [requested_id]
+        if requested_id is None:
+            candidates.extend(r['id'] for r in self.db.execute(
+                'SELECT id FROM incremental_checkpoint WHERE lease_id=? AND receipt IS NOT NULL ORDER BY created_at DESC',
+                (source,)))
+        for candidate in candidates:
+            try:
+                receipt = self.available_checkpoint(previous, now, candidate)
+            except Rejected as error:
+                if error.code != 'checkpoint_unavailable':
+                    raise
+                continue
+            return {'lease': source, 'requested_checkpoint': requested_id, 'checkpoint_id': candidate,
+                    'sha256': receipt['sha256'], 'verified_at': receipt['verified_at'],
+                    'scope': 'declared workspace', 'capture': 'incremental' if candidate else 'final',
+                    'requirements': json.loads(previous['requirements'])}
+        raise Rejected('checkpoint_unavailable', 'No acknowledged recoverable version remains.', 404)
+
     def acquire(self, data, owner):
         task, key, seconds = data.get('task'), data.get('request_key'), data.get('seconds')
         if not all(isinstance(s, str) and 0 < len(s) <= 128 for s in (task, key)):
@@ -454,10 +483,26 @@ class Pilot:
         if data.get('recipe', RECIPE) != RECIPE:
             raise Rejected('unsupported_recipe', 'The pilot provides only debian13-amd64.', 422)
         prev = self.db.execute('SELECT * FROM lease WHERE request_key=?', (key,)).fetchone()
+        resume_from = data.get('resume_from')
+        requested_checkpoint = data.get('checkpoint_id')
+        if requested_checkpoint is not None and not resume_from:
+            raise Rejected('invalid_source', 'Select a predecessor lease for this checkpoint.', 400)
+        point = None
         if prev:
+            point = json.loads(prev['resume_point'] or '{}')
+            if point.get('lease') != resume_from or point.get('requested_checkpoint') != requested_checkpoint:
+                raise Rejected('request_key_conflict', 'This request key identifies another recovery source.')
+            if resume_from and 'requirements' not in data:
+                encoded = requirements(point['requirements'])
             if prev['requirements'] != encoded or prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key or bool(prev['reclaim_on_expiry']) != reclaim:
                 raise Rejected('request_key_conflict', 'This request key is already bound to different inputs.')
             return self.inspect(prev['id'], owner)
+        if resume_from is not None:
+            point = self.matching_point(resume_from, owner, requested_checkpoint, ssh_key)
+            if 'requirements' in data and requested != point['requirements']:
+                raise Rejected('not_matching', 'A matching replacement uses the predecessor requirements.', 422)
+            requested = point['requirements']
+            encoded = requirements(requested)
         if self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone():
             raise Rejected('capacity_exhausted', 'The single pilot slot is already reserved.')
         if self.provider.status() != 'stopped':
@@ -468,9 +513,9 @@ class Pilot:
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
-                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
-                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded))
+                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements, resume_point)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded, json.dumps(point) if point else None))
         return self.public(self.dispatch(lease, 'starting', self.provider.start, recorded=True))
 
     @staticmethod
