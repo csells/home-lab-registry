@@ -1,6 +1,9 @@
 """Private, single-slot Linux lease pilot. Run on loopback in a disposable VM."""
+import base64
+import binascii
 import hmac
 import json
+import re
 import sqlite3
 import ssl
 import time
@@ -27,6 +30,19 @@ PROVIDER_TASK_TYPES = {
     'stopping': 'qmshutdown',
     'resetting': 'qmrollback',
 }
+
+
+def public_key(value):
+    parts = value.split() if isinstance(value, str) and len(value) <= 200 else []
+    if len(parts) == 2 and parts[0] == 'ssh-ed25519':
+        try:
+            blob = base64.b64decode(parts[1], validate=True)
+        except binascii.Error:
+            blob = b''
+        prefix = bytes.fromhex('0000000b') + b'ssh-ed25519' + bytes.fromhex('00000020')
+        if len(blob) == len(prefix) + 32 and blob.startswith(prefix):
+            return 'ssh-ed25519 ' + base64.b64encode(blob).decode('ascii')
+    raise Rejected('invalid_ssh_key', 'Provide one OpenSSH Ed25519 public key without a comment.', 400)
 
 
 class Proxmox:
@@ -95,6 +111,12 @@ class Proxmox:
             raise Rejected('provider_task_failed', 'The recorded provider task failed and needs operator review.')
         return True
 
+    def install_guest_key(self, key):
+        self.call(self.guest + '/agent/file-write', {
+            'file': '/etc/ssh/lease_authorized_keys',
+            'content': key + '\n',
+        })
+
     def ip(self):
         interfaces = self.call(self.guest + '/agent/network-get-interfaces')['result']
         for interface in interfaces:
@@ -121,11 +143,17 @@ class Pilot:
         self.db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_reserved_slot
             ON lease ((1)) WHERE phase != 'released'""")
         columns = {row['name'] for row in self.db.execute('PRAGMA table_info(lease)')}
-        if 'prior_tasks' not in columns:
-            with self.db:
-                self.db.execute('ALTER TABLE lease ADD COLUMN prior_tasks TEXT')
+        with self.db:
+            for column, definition in (
+                ('prior_tasks', 'TEXT'),
+                ('owner', "TEXT NOT NULL DEFAULT 'operator'"),
+                ('ssh_key', 'TEXT'),
+            ):
+                if column not in columns:
+                    self.db.execute(f'ALTER TABLE lease ADD COLUMN {column} {definition}')
         self.provider = Proxmox(config['proxmox'])
         self.user = config['guest_user']
+        self.host_key = public_key(config['guest_host_key'])
 
     def update(self, lease, phase, upstream=None, address=None, prior_tasks=None):
         with self.db:
@@ -138,6 +166,12 @@ class Pilot:
         if row is None:
             raise Rejected('unknown_lease', 'No lease has this identifier.', 404)
         return dict(row)
+
+    def owned(self, lease, owner):
+        row = self.get(lease)
+        if row['owner'] != owner:
+            raise Rejected('unknown_lease', 'No lease has this identifier.', 404)
+        return row
 
     def dispatch(self, lease, phase, operation, *, recorded=False):
         if not recorded:
@@ -159,8 +193,8 @@ class Pilot:
             return row
         return self.update(row['id'], row['phase'], upstream=new.pop())
 
-    def inspect(self, lease):
-        row = self.get(lease)
+    def inspect(self, lease, owner):
+        row = self.owned(lease, owner)
         phase = row['phase']
         if phase in ('starting', 'stopping', 'resetting'):
             if not row['upstream']:
@@ -180,6 +214,11 @@ class Pilot:
                 address = None
             if not address:
                 return self.public(row, 'waiting-for-guest-ip')
+            if not row['ssh_key']:
+                raise Rejected('missing_lease_key', 'The lease has no task SSH key. The slot remains held.')
+            # Replaying this fixed-path write installs the same key for the
+            # same lease. The guest is not handed out until it succeeds.
+            self.provider.install_guest_key(row['ssh_key'])
             row = self.update(lease, 'ready', address=address)
         elif phase == 'stopping':
             if self.provider.status() != 'stopped':
@@ -195,24 +234,27 @@ class Pilot:
         return self.public(row, status)
 
     def public(self, row, status=None):
-        result = {key: value for key, value in row.items() if key != 'prior_tasks'}
+        result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key')}
         result['status'] = status or row['phase']
         if row['address']:
-            result['ssh'] = {'host': row['address'], 'user': self.user}
+            result['ssh'] = {'host': row['address'], 'user': self.user,
+                             'host_key_alias': self.provider.name, 'host_key': self.host_key}
         return result
 
-    def acquire(self, data):
+    def acquire(self, data, owner):
         task, key, seconds = data.get('task'), data.get('request_key'), data.get('seconds')
         if not all(isinstance(s, str) and 0 < len(s) <= 128 for s in (task, key)):
             raise Rejected('invalid_request', 'Provide a task and a request_key of 1–128 characters.', 400)
         self.check_duration(seconds)
+        key = owner + '/' + key
+        ssh_key = public_key(data.get('ssh_public_key'))
         if data.get('recipe') != 'debian13-amd64':
             raise Rejected('unsupported_recipe', 'The pilot provides only debian13-amd64.', 422)
         prev = self.db.execute('SELECT * FROM lease WHERE request_key=?', (key,)).fetchone()
         if prev:
-            if prev['task'] != task or prev['initial_seconds'] != seconds:
+            if prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key:
                 raise Rejected('request_key_conflict', 'This request key is already bound to different inputs.')
-            return self.inspect(prev['id'])
+            return self.inspect(prev['id'], owner)
         if self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone():
             raise Rejected('capacity_exhausted', 'The single pilot slot is already reserved.')
         if self.provider.status() != 'stopped':
@@ -221,9 +263,9 @@ class Pilot:
         prior = json.dumps(sorted(self.provider.recent_tasks('starting')))
         with self.db:
             self.db.execute('''INSERT INTO lease
-                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks)
-                VALUES (?,?,?,?,?,?,?)''',
-                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior))
+                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key)
+                VALUES (?,?,?,?,?,?,?,?,?)''',
+                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key))
         return self.public(self.dispatch(lease, 'starting', self.provider.start, recorded=True))
 
     @staticmethod
@@ -231,21 +273,21 @@ class Pilot:
         if type(seconds) is not int or not 0 < seconds <= 86400 * 365:
             raise Rejected('invalid_duration', 'Provide a duration between one second and one year.', 400)
 
-    def renew(self, lease, data):
+    def renew(self, lease, data, owner):
         seconds = data.get('seconds')
         self.check_duration(seconds)
-        row = self.get(lease)
+        row = self.owned(lease, owner)
         if row['phase'] not in ('starting', 'ready'):
             raise Rejected('lease_not_renewable', 'Only starting or ready leases can renew.')
         with self.db:
             self.db.execute('UPDATE lease SET deadline=? WHERE id=?',
                             (max(row['deadline'], time.time()+seconds), lease))
-        return self.inspect(lease)
+        return self.inspect(lease, owner)
 
-    def release(self, lease, data):
-        row = self.get(lease)
+    def release(self, lease, data, owner):
+        row = self.owned(lease, owner)
         if row['phase'] in ('released', 'stopping', 'resetting'):
-            return self.inspect(lease)
+            return self.inspect(lease, owner)
         if row['phase'] != 'ready':
             raise Rejected('lease_not_releasable', 'Inspect the start operation before requesting release.')
         if data.get('discard_disposable_data') is not True:
@@ -261,9 +303,14 @@ def main():
     parser.add_argument('config', type=Path)
     config = json.loads(parser.parse_args().config.read_text())
     controller = Pilot(config)
-    secret = Path(config['client_token_file']).read_text().strip()
-    if len(secret) < 32:
-        raise ValueError('Use a randomly generated pilot client token')
+    secrets = {owner: Path(path).read_text().strip()
+               for owner, path in config['client_tokens'].items()}
+    if (not secrets or any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner)
+                           for owner in secrets)
+            or any(not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', value)
+                   for value in secrets.values())
+            or len(set(secrets.values())) != len(secrets)):
+        raise ValueError('Configure a different randomly generated token for each pilot principal')
 
     class Handler(BaseHTTPRequestHandler):
         def respond(self, value, status=200):
@@ -276,13 +323,18 @@ def main():
             self.wfile.write(body)
 
         def route(self):
-            if not hmac.compare_digest(self.headers.get('Authorization', ''), 'Bearer ' + secret):
+            supplied = self.headers.get('Authorization', '').encode('latin-1')
+            owner = None
+            for principal, value in secrets.items():
+                if hmac.compare_digest(supplied, ('Bearer ' + value).encode('ascii')):
+                    owner = principal
+            if owner is None:
                 self.respond({'code': 'unauthorized'}, 401)
                 return
             try:
                 parts = self.path.strip('/').split('/')
                 if self.command == 'GET' and len(parts) == 3 and parts[:2] == ['v1', 'leases']:
-                    self.respond(controller.inspect(parts[2]))
+                    self.respond(controller.inspect(parts[2], owner))
                     return
                 if self.command == 'POST':
                     size = int(self.headers.get('Content-Length', '0'))
@@ -292,14 +344,14 @@ def main():
                     if not isinstance(data, dict):
                         raise Rejected('invalid_body', 'Provide a JSON object.', 400)
                     if parts == ['v1', 'leases']:
-                        self.respond(controller.acquire(data), 202)
+                        self.respond(controller.acquire(data, owner), 202)
                         return
                     if len(parts) == 4 and parts[:2] == ['v1', 'leases']:
                         if parts[3] == 'renew':
-                            self.respond(controller.renew(parts[2], data))
+                            self.respond(controller.renew(parts[2], data, owner))
                             return
                         if parts[3] == 'release':
-                            self.respond(controller.release(parts[2], data), 202)
+                            self.respond(controller.release(parts[2], data, owner), 202)
                             return
                 self.respond({'code': 'unknown_route'}, 404)
             except Rejected as error:

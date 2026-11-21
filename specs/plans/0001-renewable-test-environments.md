@@ -316,8 +316,8 @@ reset, and reacquisition. An old lease release left a later lease untouched.
 A missed renewal marked the lease overdue and kept the guest available for
 renewal. An unauthenticated request and a read of a protected guest were denied.
 
-Remaining for the Linux slice: task-scoped guest credentials, live admission
-and registry projection, and incremental export and restore. The agreed grace, retention and hold policy
+Remaining for the Linux slice: live host admission and registry projection, a
+supported client transport with credential issuance, and incremental export and restore. The agreed grace, retention and hold policy
 still needs to be implemented and exercised before automatic reclamation.
 
 The pilot now journals a pre-dispatch view of recent tasks. When the provider
@@ -328,3 +328,12 @@ controller processes recovered each task from Proxmox and verified that each
 mutation executed once. An intent without a unique match keeps its reservation
 for operator review. Broader provider and multi-slot recovery qualification
 remain open.
+
+The pilot now binds each authenticated request to its task principal and
+installs that principal's public key only for the leased guest's non-admin
+account. Live staging exercised two distinct principals. Cross-owner
+inspect, renew, release and SSH failed. The replacement guest accepted its
+own key and rejected the previous key after rollback. SSH strict host
+verification continued across a DHCP address change. This was a staging
+harness over a private operator transport; fresh agent discovery and client
+credential issuance remain separate qualification.
