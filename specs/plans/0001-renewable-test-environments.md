@@ -468,3 +468,14 @@ could remove it. The expiry role confirmed the snapshot was gone. The
 role test used a temporary operator transport against the dedicated
 repository. Stable still needs durable authenticated connections to
 these roles and a narrowly scoped cold-capture provider.
+
+
+### Staging milestone: short-lived task credentials
+
+A scoped launcher issued a short-lived credential to a fresh client. The
+client found the actual controller through the registry, acquired a real
+guest, and used an independently generated SSH key to reach its non-admin
+account. A second issuer using the same task reference could not see or
+operate the first lease. Controller restart, rotation, expiry, revocation
+and delegated renewal revocation were exercised. The stable job launcher
+integration and browser review are still outstanding.

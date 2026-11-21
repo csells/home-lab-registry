@@ -232,3 +232,19 @@ can remove an exact managed snapshot and check the repository index.
 Set the exporter's optional `retention_command` to the expiry endpoint.
 The standalone restic role uses a trusted deployment configuration.
 Never allow a caller to supply that configuration or repository argument.
+
+
+### Task credential issuance
+
+Configure `task_issuer_tokens` with one secret file per trusted job launcher.
+The launcher issues a scoped credential with `issue-task-credential
+--task-ref <task-ref> --seconds <duration> --write-token <private-file>`.
+Give the task only the issued credential, its own SSH key and the CA.
+The launcher cannot acquire, inspect or operate task leases with its issuer
+credential. Each launcher owns a separate task namespace.
+
+Issue again for the same task reference to rotate access without changing
+ownership or the existing lease. `revoke-task-credential --task-ref
+<task-ref>` revokes controller access and delegated renewal for that task.
+Guest SSH stays bound to the active lease until its separately verified
+provider cleanup. Task credential expiry does not delete the guest.

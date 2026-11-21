@@ -103,6 +103,13 @@ def upload_checkpoint(endpoint, ca, token_file, route, path, key):
             return json.load(response)
 
 
+def write_secret(grant, output):
+    with tempfile.NamedTemporaryFile(dir=output.parent) as secret:
+        secret.write((grant.pop('token') + '\n').encode('ascii'))
+        secret.flush()
+        os.link(secret.name, output)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -154,11 +161,30 @@ def main():
     sub.add_parser('list-reservations')
     release = sub.add_parser('release-reservation')
     release.add_argument('reservation')
+    issue = sub.add_parser('issue-task-credential')
+    issue.add_argument('--task-ref', required=True)
+    issue.add_argument('--seconds', type=int, required=True)
+    issue.add_argument('--write-token', type=Path, required=True)
+    revoke = sub.add_parser('revoke-task-credential')
+    revoke.add_argument('--task-ref', required=True)
     args = parser.parse_args()
     if args.record and not args.registry_client:
         parser.error('--record requires --registry-client')
     try:
         endpoint = args.endpoint or discover(args.registry_client, args.record)
+        if args.command in ('issue-task-credential', 'revoke-task-credential'):
+            payload = {'task_ref': args.task_ref}
+            if args.command == 'issue-task-credential':
+                if args.write_token.exists() or args.write_token.is_symlink():
+                    raise ValueError('Output credential file already exists')
+                payload['seconds'] = args.seconds
+            else:
+                payload['revoke'] = True
+            grant = request(endpoint, args.ca, args.token_file, '/v1/task-credentials', payload)
+            if args.command == 'issue-task-credential':
+                write_secret(grant, args.write_token)
+            print(json.dumps(grant))
+            return 0
         if args.command in ('reserve-capacity', 'list-reservations', 'release-reservation'):
             route, payload = '/v1/capacity-reservations', None
             if args.command == 'reserve-capacity':
@@ -210,10 +236,7 @@ def main():
                 grant = request(endpoint, args.ca, args.token_file, route + '/delegate-renewal',
                                 {'duration_seconds': args.duration_seconds,
                                  'extension_seconds': args.extension_seconds})
-                with tempfile.NamedTemporaryFile(dir=args.write_token.parent) as secret:
-                    secret.write((grant.pop('token') + '\n').encode('ascii'))
-                    secret.flush()
-                    os.link(secret.name, args.write_token)
+                write_secret(grant, args.write_token)
                 print(json.dumps(grant))
                 return 0
             elif args.command == 'checkpoint':

@@ -18,6 +18,7 @@ from pathlib import Path
 
 
 from checkpoints import Checkpoints, Rejected
+from credentials import TaskCredentials
 from reservations import Reservations
 
 
@@ -271,6 +272,7 @@ class Pilot:
             with self.db:
                 self.db.execute('ALTER TABLE recovery_ticket ADD COLUMN checkpoint_id TEXT')
         self.checkpoints = Checkpoints(self.db)
+        self.task_credentials = TaskCredentials(self.db, config.get('task_credential_max_seconds', 86400))
         recovery = config.get('recovery', {})
         self.recovery_endpoint = recovery.get('endpoint')
         self.upload_endpoint = self.recovery_endpoint if recovery.get('accept_uploads') is True else None
@@ -832,13 +834,15 @@ def main():
 
     reservation_tokens = {owner: Path(path).read_text().strip()
                           for owner, path in config.get('reservation_tokens', {}).items()}
-    all_tokens = [*task_tokens.values(), *reservation_tokens.values()]
+    issuer_tokens = {issuer: Path(path).read_text().strip()
+                     for issuer, path in config.get('task_issuer_tokens', {}).items()}
+    all_tokens = [*task_tokens.values(), *reservation_tokens.values(), *issuer_tokens.values()]
     all_tokens.extend(token for token in (recovery_token, verifier) if token)
-    if (any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner) for owner in reservation_tokens)
+    if (any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner) for owner in (*reservation_tokens, *issuer_tokens))
             or any(not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', value)
-                   for value in reservation_tokens.values())
+                   for value in (*reservation_tokens.values(), *issuer_tokens.values()))
             or len(set(all_tokens)) != len(all_tokens)):
-        raise ValueError('Configure separate credentials for reservation principals')
+        raise ValueError('Configure separate credentials for reservation and task issuer principals')
 
     class CheckedServer(HTTPServer):
         next_check = 0
@@ -879,6 +883,9 @@ def main():
             for principal, value in task_tokens.items():
                 if hmac.compare_digest(supplied, ('Bearer ' + value).encode('ascii')):
                     owner = principal
+            header = self.headers.get('Authorization', '')
+            if owner is None and header.startswith('Bearer '):
+                owner = controller.task_credentials.owner(header.removeprefix('Bearer '))
             is_verifier = verifier is not None and hmac.compare_digest(supplied, ('Bearer ' + verifier).encode('ascii'))
             parts = self.path.strip('/').split('/')
             delegated_route = len(parts) == 3 and parts[:2] == ['v1', 'delegated-renewal']
@@ -891,7 +898,11 @@ def main():
             reservation_route = len(parts) >= 2 and parts[:2] == ['v1', 'capacity-reservations']
             reservation_owner = next((principal for principal, value in reservation_tokens.items()
                 if hmac.compare_digest(supplied, ('Bearer ' + value).encode('ascii'))), None)
-            authorized = (reservation_owner is not None if reservation_route
+            issue_route = parts == ['v1', 'task-credentials']
+            issuer = next((name for name, value in issuer_tokens.items()
+                if hmac.compare_digest(supplied, ('Bearer ' + value).encode('ascii'))), None)
+            authorized = (issuer is not None if issue_route
+                          else reservation_owner is not None if reservation_route
                           else is_recovery_worker if recovery_route
                           else is_verifier if export_route or expiry_route else owner is not None)
             if not authorized and not (delegated_route and self.command == 'POST'):
@@ -919,6 +930,9 @@ def main():
                         raise Rejected('invalid_body', 'Provide a JSON object.', 400)
                     if export_route and len(parts) == 3:
                         self.respond(controller.export_result(parts[2], data))
+                        return
+                    if issue_route:
+                        self.respond(controller.task_credentials.issue(issuer, data))
                         return
                     if reservation_route and len(parts) == 2:
                         self.respond(controller.reservations.reserve(reservation_owner, data))
