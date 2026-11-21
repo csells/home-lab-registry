@@ -1,10 +1,13 @@
 """Task-side client for the disposable lease pilot."""
 import argparse
+import hashlib
 import json
+import os
 import re
 import ssl
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,7 +31,7 @@ def discover(registry_client, record_id):
     return endpoint
 
 
-def request(endpoint, ca, token_file, route, payload):
+def verified_opener(endpoint, ca):
     parsed = urllib.parse.urlsplit(endpoint)
     if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
             or parsed.password or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
@@ -37,6 +40,11 @@ def request(endpoint, ca, token_file, route, payload):
     context.minimum_version = ssl.TLSVersion.TLSv1_3
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                         urllib.request.HTTPSHandler(context=context), NoRedirect())
+    return opener
+
+
+def request(endpoint, ca, token_file, route, payload):
+    opener = verified_opener(endpoint, ca)
     token = token_file.read_text().strip()
     if not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', token):
         raise ValueError('Invalid task credential file')
@@ -45,6 +53,34 @@ def request(endpoint, ca, token_file, route, payload):
     with opener.open(urllib.request.Request(endpoint.rstrip('/') + route, data=body,
                                             headers=headers), timeout=20) as response:
         return json.load(response)
+
+
+def download_checkpoint(grant, ca, destination):
+    if not re.fullmatch(r'[a-zA-Z0-9_-]{43}', grant['ticket']):
+        raise ValueError('Invalid checkpoint ticket')
+    endpoint = grant['endpoint']
+    opener = verified_opener(endpoint, ca)
+    headers = {'Authorization': 'Bearer ' + grant['ticket']}
+    download = urllib.request.Request(endpoint.rstrip('/') + '/v1/checkpoint', headers=headers)
+    digest = hashlib.sha256()
+    # Publish the verified archive atomically, without replacing an existing file.
+    with tempfile.NamedTemporaryFile(dir=destination.parent) as partial:
+        with opener.open(download, timeout=150) as response:
+            remaining = int(response.headers['Content-Length'])
+            if not 0 < remaining <= 1024 ** 3:
+                raise ValueError('Invalid archive size')
+            while remaining:
+                chunk = response.read(min(65536, remaining))
+                if not chunk:
+                    raise OSError('Checkpoint download ended early')
+                digest.update(chunk)
+                partial.write(chunk)
+                remaining -= len(chunk)
+        if digest.hexdigest() != grant['sha256']:
+            raise ValueError('Checkpoint digest did not match')
+        partial.flush()
+        os.link(partial.name, destination)
+    return {'path': str(destination), 'sha256': digest.hexdigest()}
 
 
 def main():
@@ -63,7 +99,7 @@ def main():
     acquire.add_argument('--ssh-public-key', type=Path, required=True)
     acquire.add_argument('--recipe', default='debian13-amd64')
     acquire.add_argument('--reclaim-on-expiry', action='store_true')
-    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export'):
+    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew'):
         command = sub.add_parser(operation)
         command.add_argument('lease')
         if operation == 'renew':
@@ -75,6 +111,14 @@ def main():
         elif operation == 'hold':
             command.add_argument('--mode', choices=('running', 'disk', 'clear'), default='disk')
             command.add_argument('--reason')
+        elif operation == 'delegate-renewal':
+            command.add_argument('--duration-seconds', type=int, required=True)
+            command.add_argument('--extension-seconds', type=int, required=True)
+            command.add_argument('--write-token', type=Path, required=True)
+        elif operation == 'recover':
+            command.add_argument('--output', type=Path, required=True)
+        elif operation == 'pin':
+            command.add_argument('--reason', required=True)
     args = parser.parse_args()
     if args.record and not args.registry_client:
         parser.error('--record requires --registry-client')
@@ -103,6 +147,33 @@ def main():
             elif args.command == 'retry-export':
                 route += '/retry-export'
                 payload = {}
+            elif args.command == 'delegated-renew':
+                route = '/v1/delegated-renewal/' + args.lease
+                payload = {}
+            elif args.command == 'revoke-renewal':
+                route += '/delegate-renewal'
+                payload = {'revoke': True}
+            elif args.command == 'delegate-renewal':
+                if args.write_token.exists() or args.write_token.is_symlink():
+                    raise ValueError('Output credential file already exists')
+                grant = request(endpoint, args.ca, args.token_file, route + '/delegate-renewal',
+                                {'duration_seconds': args.duration_seconds,
+                                 'extension_seconds': args.extension_seconds})
+                with tempfile.NamedTemporaryFile(dir=args.write_token.parent) as secret:
+                    secret.write((grant.pop('token') + '\n').encode('ascii'))
+                    secret.flush()
+                    os.link(secret.name, args.write_token)
+                print(json.dumps(grant))
+                return 0
+            elif args.command == 'recover':
+                if args.output.exists() or args.output.is_symlink():
+                    raise ValueError('Recovery output already exists')
+                grant = request(endpoint, args.ca, args.token_file, route + '/checkpoint-recovery', {})
+                print(json.dumps(download_checkpoint(grant, args.ca, args.output)))
+                return 0
+            elif args.command in ('pin', 'unpin'):
+                route += '/checkpoint-pin'
+                payload = {'pinned': args.command == 'pin', 'reason': getattr(args, 'reason', None)}
         print(json.dumps(request(endpoint, args.ca, args.token_file, route, payload)))
         return 0
     except urllib.error.HTTPError as error:

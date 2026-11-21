@@ -1,9 +1,11 @@
 """Private, single-slot Linux lease pilot. Run on loopback in a disposable VM."""
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import re
+import secrets
 import sqlite3
 import ssl
 import time
@@ -27,6 +29,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 EXPORT_REVIEW_SECONDS = 24 * 60 * 60
 CHECKPOINT_RETENTION_SECONDS = 30 * 24 * 60 * 60
+RECOVERY_TICKET_SECONDS = 300
 
 
 PROVIDER_TASK_TYPES = {
@@ -250,12 +253,28 @@ class Pilot:
             ):
                 if column not in columns:
                     self.db.execute(f'ALTER TABLE lease ADD COLUMN {column} {definition}')
+        with self.db:
+            self.db.execute('''CREATE TABLE IF NOT EXISTS recovery_ticket (
+                token_hash TEXT PRIMARY KEY, lease_id TEXT NOT NULL,
+                expires_at REAL NOT NULL, redeemed INTEGER NOT NULL DEFAULT 0
+            )''')
+            self.db.execute('''CREATE TABLE IF NOT EXISTS renewal_delegate (
+                lease_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL,
+                valid_until REAL NOT NULL, extension INTEGER NOT NULL
+            )''')
+        recovery = config.get('recovery', {})
+        self.recovery_endpoint = recovery.get('endpoint')
+        if bool(self.recovery_endpoint) != bool(recovery.get('worker_token_file')):
+            raise ValueError('Recovery needs an HTTPS endpoint and a dedicated worker credential')
         self.provider = Proxmox(config['proxmox'])
         self.capacity = Capacity(self.provider, config['capacity'])
         self.user = config['guest_user']
         self.host_key = public_key(config['guest_host_key'])
         policy = config.get('reclamation', {})
         self.reclaim_enabled = bool(policy.get('verifier_token_file'))
+        self.retention_enabled = policy.get('purge_expired_checkpoints') is True
+        if self.retention_enabled and not self.reclaim_enabled:
+            raise ValueError('Checkpoint expiry requires a verifier')
         self.grace_seconds = policy.get('grace_seconds', 7200)
         if type(self.grace_seconds) is not int or self.grace_seconds < 1:
             raise ValueError('Grace must be a positive duration')
@@ -355,7 +374,9 @@ class Pilot:
         result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'export_start_tasks', 'checkpoint')}
         result['status'] = status or row['phase']
         if row['checkpoint']:
-            result['checkpoint'] = json.loads(row['checkpoint'])
+            checkpoint = json.loads(row['checkpoint'])
+            checkpoint.pop('purge_claim', None)
+            result['checkpoint'] = checkpoint
         if row['export_failed_at']:
             result['export_needs_decision'] = time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS
         if row['address']:
@@ -409,6 +430,47 @@ class Pilot:
             self.db.execute('UPDATE lease SET deadline=? WHERE id=?',
                             (max(row['deadline'], time.time()+seconds), lease))
         return self.inspect(lease, owner)
+
+    def delegate_renewal(self, lease, data, owner):
+        row = self.owned(lease, owner)
+        if data.get('revoke') is True:
+            with self.db:
+                self.db.execute('DELETE FROM renewal_delegate WHERE lease_id=?', (lease,))
+            return {'revoked': True}
+        if row['phase'] not in ('starting', 'ready'):
+            raise Rejected('lease_not_renewable', 'Only a live or starting lease can delegate renewal.')
+        duration, extension = data.get('duration_seconds'), data.get('extension_seconds')
+        self.check_duration(duration)
+        self.check_duration(extension)
+        if extension >= duration:
+            raise Rejected('invalid_delegation', 'The extension must be shorter than the delegation window.', 400)
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode('ascii')).hexdigest()
+        valid_until = time.time() + duration
+        with self.db:
+            self.db.execute("""INSERT INTO renewal_delegate VALUES (?,?,?,?)
+                ON CONFLICT(lease_id) DO UPDATE SET token_hash=excluded.token_hash,
+                valid_until=excluded.valid_until, extension=excluded.extension""",
+                            (lease, token_hash, valid_until, extension))
+        return {'token': token, 'valid_until': valid_until, 'extension_seconds': extension}
+
+    def delegated_renew(self, lease, token):
+        if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+            raise Rejected('delegation_unavailable', 'No valid renewal delegation.', 401)
+        token_hash = hashlib.sha256(token.encode('ascii')).hexdigest()
+        delegation = self.db.execute('SELECT * FROM renewal_delegate WHERE lease_id=?',
+                                     (lease,)).fetchone()
+        now = time.time()
+        if (not delegation or delegation['valid_until'] <= now
+                or not hmac.compare_digest(token_hash, delegation['token_hash'])):
+            raise Rejected('delegation_unavailable', 'No valid renewal delegation.', 401)
+        row = self.get(lease)
+        if row['phase'] not in ('starting', 'ready'):
+            raise Rejected('lease_not_renewable', 'Reclamation has already begun.')
+        deadline = max(row['deadline'], min(now + delegation['extension'], delegation['valid_until']))
+        with self.db:
+            self.db.execute('UPDATE lease SET deadline=? WHERE id=?', (deadline, lease))
+        return {'deadline': deadline, 'delegated_until': delegation['valid_until']}
 
     def hold(self, lease, data, owner):
         row = self.owned(lease, owner)
@@ -472,7 +534,7 @@ class Pilot:
         if row['checkpoint']:
             receipt = json.loads(row['checkpoint'])
             if (data.get('outcome') == 'verified' and data.get('challenge') == row['export_challenge']
-                    and all(data.get(field) == receipt[field] for field in ('snapshot', 'path', 'sha256'))):
+                    and all(data.get(field) == receipt.get(field) for field in ('snapshot', 'path', 'sha256', 'storage_managed'))):
                 return self.public(row)
             raise Rejected('export_already_verified', 'A different receipt cannot replace a verified export.')
         pending = self.pending_export(lease)
@@ -494,11 +556,116 @@ class Pilot:
                 or path != '/lease-' + lease + '.tar.gz'
                 or not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)):
             raise Rejected('invalid_export_receipt', 'Provide a verified encrypted snapshot and download digest.', 400)
-        receipt = {'snapshot': snapshot, 'path': path, 'sha256': digest, 'verified_at': time.time()}
+        managed = data.get('storage_managed')
+        if managed is not None and type(managed) is not bool:
+            raise Rejected('invalid_export_receipt', 'Storage management must be a boolean.', 400)
+        receipt = {'snapshot': snapshot, 'path': path, 'sha256': digest,
+                   'verified_at': time.time(), 'storage_managed': managed}
         with self.db:
             self.db.execute('UPDATE lease SET checkpoint=?, export_failed_at=NULL, export_error=NULL WHERE id=?',
                             (json.dumps(receipt), lease))
         return self.public(self.get(lease))
+
+    def set_pin(self, lease, data, owner):
+        row = self.owned(lease, owner)
+        checkpoint = json.loads(row['checkpoint'] or '{}')
+        if not checkpoint.get('storage_managed') or row['phase'] != 'released':
+            raise Rejected('checkpoint_not_managed', 'Only a released, managed checkpoint can be pinned.')
+        if checkpoint.get('purge_claim') or checkpoint.get('purged_at'):
+            raise Rejected('checkpoint_expiring', 'This checkpoint has already entered expiry.')
+        pinned, reason = data.get('pinned'), data.get('reason')
+        if type(pinned) is not bool or (pinned and (
+                not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 240)):
+            raise Rejected('invalid_pin', 'Choose pin with a short reason, or unpin.', 400)
+        if pinned:
+            checkpoint['pin'] = {'reason': reason.strip(), 'at': time.time()}
+        else:
+            checkpoint.pop('pin', None)
+        self.save_checkpoint(lease, checkpoint)
+        return self.public(self.get(lease))
+
+    def save_checkpoint(self, lease, checkpoint):
+        with self.db:
+            self.db.execute('UPDATE lease SET checkpoint=? WHERE id=?',
+                            (json.dumps(checkpoint), lease))
+
+    def claim_expired_checkpoint(self):
+        if not self.retention_enabled:
+            return {'expiry': None}
+        row = self.db.execute("""SELECT id, export_challenge, checkpoint FROM lease
+            WHERE phase='released' AND json_extract(checkpoint, '$.storage_managed')=1
+              AND json_extract(checkpoint, '$.pin') IS NULL
+              AND json_extract(checkpoint, '$.purged_at') IS NULL
+              AND json_extract(checkpoint, '$.retain_through') <= ?
+              AND NOT EXISTS (SELECT 1 FROM recovery_ticket
+                              WHERE lease_id=lease.id AND expires_at > ?)
+            ORDER BY json_extract(checkpoint, '$.retain_through'), id LIMIT 1""",
+                              (time.time(), time.time())).fetchone()
+        if row is None:
+            return {'expiry': None}
+        checkpoint = json.loads(row['checkpoint'])
+        if not checkpoint.get('purge_claim'):
+            checkpoint['purge_claim'] = uuid.uuid4().hex
+            checkpoint['purge_started_at'] = time.time()
+            self.save_checkpoint(row['id'], checkpoint)
+        return {'expiry': {'lease_id': row['id'], 'challenge': row['export_challenge'],
+                           'claim': checkpoint['purge_claim'], 'snapshot': checkpoint['snapshot'],
+                           'path': checkpoint['path']}}
+
+    def confirm_checkpoint_expiry(self, data):
+        row = self.get(data.get('lease_id'))
+        checkpoint = json.loads(row['checkpoint'] or '{}')
+        if (not self.retention_enabled or not checkpoint.get('purge_claim')
+                or data.get('claim') != checkpoint['purge_claim']
+                or data.get('snapshot') != checkpoint['snapshot']
+                or data.get('absent') is not True):
+            raise Rejected('expiry_receipt_mismatch', 'No matching expiry claim and verified removal.')
+        if not checkpoint.get('purged_at'):
+            checkpoint['purged_at'] = time.time()
+            self.save_checkpoint(row['id'], checkpoint)
+        return self.public(self.get(row['id']))
+
+    @staticmethod
+    def available_checkpoint(row, now):
+        checkpoint = json.loads(row['checkpoint'] or '{}')
+        if (row['phase'] != 'released' or not checkpoint.get('storage_managed')
+                or checkpoint.get('purge_claim') or checkpoint.get('purged_at')
+                or (not checkpoint.get('pin') and checkpoint['retain_through'] <= now)):
+            raise Rejected('checkpoint_unavailable', 'No retained checkpoint is available for this lease.', 404)
+        return checkpoint
+
+    def recovery_ticket(self, lease, owner):
+        if not self.recovery_endpoint:
+            raise Rejected('recovery_unavailable', 'Checkpoint recovery is unavailable.', 503)
+        row = self.owned(lease, owner)
+        now = time.time()
+        checkpoint = self.available_checkpoint(row, now)
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode('ascii')).hexdigest()
+        expiry = now + RECOVERY_TICKET_SECONDS
+        with self.db:
+            self.db.execute('DELETE FROM recovery_ticket WHERE expires_at <= ?', (now,))
+            self.db.execute('DELETE FROM recovery_ticket WHERE lease_id=? AND redeemed=0', (lease,))
+            self.db.execute('INSERT INTO recovery_ticket (token_hash, lease_id, expires_at) VALUES (?,?,?)',
+                            (token_hash, lease, expiry))
+        return {'endpoint': self.recovery_endpoint, 'ticket': token, 'expires_at': expiry,
+                'sha256': checkpoint['sha256']}
+
+    def redeem_recovery_ticket(self, data):
+        token = data.get('ticket')
+        if not isinstance(token, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{43}', token):
+            raise Rejected('ticket_unavailable', 'Recovery ticket is unavailable.', 404)
+        token_hash = hashlib.sha256(token.encode('ascii')).hexdigest()
+        now = time.time()
+        ticket = self.db.execute('SELECT * FROM recovery_ticket WHERE token_hash=?', (token_hash,)).fetchone()
+        if not ticket or ticket['redeemed'] or ticket['expires_at'] <= now:
+            raise Rejected('ticket_unavailable', 'Recovery ticket is unavailable.', 404)
+        row = self.get(ticket['lease_id'])
+        checkpoint = self.available_checkpoint(row, now)
+        with self.db:
+            self.db.execute('UPDATE recovery_ticket SET redeemed=1, expires_at=? WHERE token_hash=?',
+                            (now + RECOVERY_TICKET_SECONDS, token_hash))
+        return {field: checkpoint[field] for field in ('snapshot', 'path', 'sha256')}
 
     def advance_reclamation(self):
         if not self.reclaim_enabled:
@@ -548,20 +715,26 @@ def main():
     parser.add_argument('config', type=Path)
     config = json.loads(parser.parse_args().config.read_text())
     controller = Pilot(config)
-    secrets = {owner: Path(path).read_text().strip()
+    task_tokens = {owner: Path(path).read_text().strip()
                for owner, path in config['client_tokens'].items()}
-    if (not secrets or any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner)
-                           for owner in secrets)
+    if (not task_tokens or any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner)
+                           for owner in task_tokens)
             or any(not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', value)
-                   for value in secrets.values())
-            or len(set(secrets.values())) != len(secrets)):
+                   for value in task_tokens.values())
+            or len(set(task_tokens.values())) != len(task_tokens)):
         raise ValueError('Configure a different randomly generated token for each pilot principal')
 
     verifier_ref = config.get('reclamation', {}).get('verifier_token_file')
     verifier = Path(verifier_ref).read_text().strip() if verifier_ref else None
     if verifier is not None and (not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', verifier)
-                                 or verifier in secrets.values()):
+                                 or verifier in task_tokens.values()):
         raise ValueError('Use a distinct final export verifier credential')
+
+    recovery_ref = config.get('recovery', {}).get('worker_token_file')
+    recovery_token = Path(recovery_ref).read_text().strip() if recovery_ref else None
+    if recovery_token is not None and (not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', recovery_token)
+            or recovery_token == verifier or recovery_token in task_tokens.values()):
+        raise ValueError('Use a distinct recovery worker credential')
 
     class CheckedServer(HTTPServer):
         next_check = 0
@@ -599,13 +772,20 @@ def main():
         def route(self):
             supplied = self.headers.get('Authorization', '').encode('latin-1')
             owner = None
-            for principal, value in secrets.items():
+            for principal, value in task_tokens.items():
                 if hmac.compare_digest(supplied, ('Bearer ' + value).encode('ascii')):
                     owner = principal
             is_verifier = verifier is not None and hmac.compare_digest(supplied, ('Bearer ' + verifier).encode('ascii'))
             parts = self.path.strip('/').split('/')
+            delegated_route = len(parts) == 3 and parts[:2] == ['v1', 'delegated-renewal']
             export_route = len(parts) in (2, 3) and parts[:2] == ['v1', 'final-export']
-            if (export_route and not is_verifier) or (not export_route and owner is None):
+            expiry_route = parts == ['v1', 'checkpoint-expiry']
+            recovery_route = parts == ['v1', 'redeem-checkpoint']
+            is_recovery_worker = recovery_token is not None and hmac.compare_digest(
+                supplied, ('Bearer ' + recovery_token).encode('ascii'))
+            authorized = (is_recovery_worker if recovery_route
+                          else is_verifier if export_route or expiry_route else owner is not None)
+            if not authorized and not (delegated_route and self.command == 'POST'):
                 self.respond({'code': 'unauthorized'}, 401)
                 return
             try:
@@ -628,10 +808,25 @@ def main():
                     if export_route and len(parts) == 3:
                         self.respond(controller.export_result(parts[2], data))
                         return
+                    if delegated_route:
+                        header = self.headers.get('Authorization', '')
+                        token = header.removeprefix('Bearer ') if header.startswith('Bearer ') else ''
+                        self.respond(controller.delegated_renew(parts[2], token))
+                        return
+                    if recovery_route:
+                        self.respond(controller.redeem_recovery_ticket(data))
+                        return
+                    if expiry_route:
+                        self.respond(controller.confirm_checkpoint_expiry(data) if data
+                                     else controller.claim_expired_checkpoint())
+                        return
                     if parts == ['v1', 'leases']:
                         self.respond(controller.acquire(data, owner), 202)
                         return
                     if len(parts) == 4 and parts[:2] == ['v1', 'leases']:
+                        if parts[3] == 'delegate-renewal':
+                            self.respond(controller.delegate_renewal(parts[2], data, owner))
+                            return
                         if parts[3] == 'renew':
                             self.respond(controller.renew(parts[2], data, owner))
                             return
@@ -640,6 +835,12 @@ def main():
                             return
                         if parts[3] == 'retry-export':
                             self.respond(controller.retry_export(parts[2], owner))
+                            return
+                        if parts[3] == 'checkpoint-recovery':
+                            self.respond(controller.recovery_ticket(parts[2], owner))
+                            return
+                        if parts[3] == 'checkpoint-pin':
+                            self.respond(controller.set_pin(parts[2], data, owner))
                             return
                         if parts[3] == 'release':
                             self.respond(controller.release(parts[2], data, owner), 202)

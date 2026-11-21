@@ -99,7 +99,36 @@ def export(config, job):
             if digest(restored) != expected:
                 raise ExportError('Downloaded checkpoint differs from the source.')
     return {'outcome': 'verified', 'challenge': challenge, 'snapshot': snapshot,
-            'path': '/' + filename, 'sha256': expected}
+            'path': '/' + filename, 'sha256': expected, 'storage_managed': True}
+
+
+def expire(config, job):
+    lease, challenge, snapshot = (job[key] for key in ('lease_id', 'challenge', 'snapshot'))
+    if (not re.fullmatch(r'[a-f0-9]{32}', lease) or not re.fullmatch(r'[a-f0-9]{32}', challenge)
+            or not re.fullmatch(r'[a-f0-9]{64}', snapshot) or job['path'] != f'/lease-{lease}.tar.gz'):
+        raise ExportError('Expiry job has an invalid checkpoint identity.')
+    restic = config['restic_command']
+    timeout = config.get('command_timeout', 120)
+    tag = 'lease-export-' + challenge
+    def observed(*filters):
+        snapshots = json.loads(command_json(restic + ['snapshots', *filters, '--json'], timeout))
+        if not isinstance(snapshots, list) or len(snapshots) > 1:
+            raise ExportError('Expiry has ambiguous backup history.')
+        return snapshots
+
+    snapshots = observed('--tag', tag)
+    if snapshots:
+        existing, = snapshots
+        if (existing['id'] != snapshot or existing['paths'] != [job['path']]
+                or not {TAG, tag} <= set(existing['tags'])):
+            raise ExportError('Expiry would affect a different snapshot.')
+        command_json(restic + ['forget', snapshot, '--json'], timeout)
+    stored_ids = command_json(restic + ['list', 'snapshots'], timeout).decode('ascii').split()
+    if any(not re.fullmatch(r'[a-f0-9]{64}', snapshot_id) for snapshot_id in stored_ids):
+        raise ExportError('Backup storage did not return a valid snapshot inventory.')
+    if snapshot in stored_ids:
+        raise ExportError('The expired checkpoint is still visible in storage.')
+    return {'lease_id': lease, 'snapshot': snapshot, 'claim': job['claim'], 'absent': True}
 
 
 def process(config):
@@ -110,6 +139,12 @@ def process(config):
     route = '/v1/final-export'
     job = call(route)['export']
     if job is None:
+        if config.get('purge_expired_checkpoints') is True:
+            expiry_route = '/v1/checkpoint-expiry'
+            expiry = call(expiry_route, {})['expiry']
+            if expiry is not None:
+                call(expiry_route, expire(config, expiry))
+                print('Verified removal of the expired snapshot.')
         return 0
     lease = job['lease_id']
     if not isinstance(lease, str) or not re.fullmatch(r'[a-f0-9]{32}', lease):

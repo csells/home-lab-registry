@@ -120,8 +120,8 @@ Use a dedicated slot under exclusive controller control. Proxmox task history
 is a supplementary consistency check. It cannot fence host-root actions or
 writes to a stopped guest disk. The pilot expects the verifier to download and
 check the archive through a trusted storage integration before posting.
-The 30-day retain-through timestamp records the policy. This pilot has no
-automatic prune or pin command, notification delivery, or delegated reviewer identities.
+The 30-day retain-through timestamp records the policy. Notification delivery
+and delegated reviewer identities remain open.
 
 
 ### Backup worker
@@ -144,3 +144,32 @@ capture and backup transport for stable is still required. The qualification
 uses operator-owned forwarding that never grants provider or backup credentials
 to the worker. Deploying this worker alongside a storage service or allowing
 task agents to retrieve artifacts independently requires a scoped adapter.
+
+
+### Retention, recovery and delegated renewal
+
+Owners can use `pin <id> --reason <reason>` and `unpin <id>` for a released
+checkpoint created by the backup worker. For automatic expiry, enable
+`purge_expired_checkpoints` in the controller's `reclamation` configuration
+and the worker configuration. Use this only with a backup policy that protects
+these snapshots from external pruning while the allocator retains them. The
+worker checks the exact snapshot, lease path and tags before forgetting it.
+It does not prune repository-wide data. Expiry stays outstanding until the
+worker independently confirms the snapshot is absent. Metadata remains.
+
+Set `recovery.endpoint` and `recovery.worker_token_file` in the controller.
+Run `recovery.py` with the private TLS listener settings, controller HTTPS
+endpoint and CA, the separate recovery worker token, and a read-only Restic
+adapter. Recovery never receives the task's general credential. An owner can
+run `recover <id> --output <archive.tar.gz>` after release. A short-lived
+single-use ticket grants only the exact checkpoint. Both sides verify the
+archive digest. The client saves it privately and refuses to overwrite
+existing files. A valid recovery ticket defers expiry for a short window.
+
+The owner can issue a task runner a renewal-only credential with
+`delegate-renewal <id> --duration-seconds <window> --extension-seconds <step>
+--write-token <private-file>`. A timer or job uses that token with
+`delegated-renew <id>`. An authorized owner can rotate or revoke it.
+The runner has no access to task inspection, SSH, artifacts or release.
+It cannot extend a lease past the declared delegation window. Owner renewals
+remain independent and may keep a lease active beyond that window.

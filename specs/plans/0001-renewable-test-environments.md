@@ -377,8 +377,7 @@ checkpoint and compared its digest before authorizing reset. Clearing the
 disk hold let the controller finish the rollback without a task client
 driving progress. A replacement started with a clean disk and recovered
 both the unfinished work and the failure evidence from the checkpoint.
-This qualifies reuse after destructive disk rollback. Recovery after
-physical guest deletion remains open.
+This milestone qualified reuse after destructive disk rollback.
 
 A timer ran the export worker inside the staging VM. The test withheld
 the first receipt after a successful upload and readback. The timer found
@@ -388,8 +387,39 @@ operator forwarding exercised the real stopped guest and backup repository
 without storing provider or backup credentials in the worker.
 
 Keep automatic reclamation scoped to the owned pilot slot. Stable still
-needs durable restricted capture and backup credentials, incremental
-checkpoints, independent owner retrieval, enforceable 30-day retention
-and pinning, notification delivery, delegated reviewer holds, and
+needed durable restricted capture and backup credentials, incremental
+checkpoints, independent owner retrieval, 30-day retention and pinning,
+notification delivery, delegated reviewer holds, and
 shared reservation coordination. The pilot does not enroll existing
 guests. This candidate has no production promotion approval.
+
+
+### Staging milestone: owner recovery, retention and delegated renewal
+
+An owner used their task credential to obtain and redeem a short-lived
+checkpoint ticket over TLS. Another owner could not obtain a ticket for
+the lease and the first owner could not replay a consumed ticket. The
+client stored the archive only after checking its digest.
+
+An independently owned disposable clone was backed up and then removed
+with its disks. The controller was restarted. The owner downloaded the
+same archive after the clone was gone and recovered both unfinished work
+and failure evidence in a matching replacement. The original staging
+slot remained available.
+
+A pinned snapshot survived an accelerated 30-day expiry and controller
+restart. Unpinning allowed the verifier to claim exactly that snapshot.
+The worker removed it from encrypted storage. After simulating loss of
+the completion receipt, a retry confirmed that the exact snapshot ID
+was absent. A separate checkpoint still restored intact.
+
+A real systemd job renewed a lease with a separate renewal-only credential
+after the controller restarted. The credential could not inspect, release
+or renew a different lease. Expiry and revocation bounded its authority,
+and the owner could still renew independently.
+
+Stable still needs dedicated scoped capture and backup transports,
+incremental checkpoints, shared reservation coordination, automated agent
+credential issuance, notification delivery, and delegated reviewer holds.
+The staged storage and recovery tests used short-lived operator adapters.
+Broader provider delivery and production approval remain open.
