@@ -485,3 +485,32 @@ account. A second issuer using the same task reference could not see or
 operate the first lease. Controller restart, rotation, expiry, revocation
 and delegated renewal revocation were exercised. The stable job launcher
 integration and browser review are still outstanding.
+
+### Staging milestone: unattended cold capture with scoped provider access
+
+A fresh task wrote uncommitted work and evidence to its declared workspace.
+The production backup controller's separate read and write roles served the
+disposable staging allocator. A scheduled export used a dedicated SSH identity
+on the Proxmox host, restricted to one stopped raw slot. The host checked the
+guest ID, name, hardware UUID and volume under its config lock. Shell requests,
+substituting a guest, and reading a running slot were denied.
+
+The capture worker verified the exact raw size and opened the disk in a
+read-only libguestfs appliance with networking disabled. A wrong lease marker,
+a wrong VM identity, and an incomplete source failed before an archive was
+returned. After an independent download from encrypted storage, the controller
+reset the slot. The owner retrieved the final edit and evidence after reset.
+The worker removed its temporary raw copy. In one test the scheduled job used
+21.4 CPU seconds and peaked at 271 MiB; this does not establish limits for other
+disk sizes. Recovery covers the declared workspace of the qualified ext4 recipe.
+
+The scoped host installation and its pre-change state have independently
+retrieved encrypted configuration backups. The staging credential expires and
+is bound to the worker. A stable allocator deployment still requires review,
+credential provisioning, production verification and staging teardown.
+
+A read-only dashboard review shows actual lease owners and phases, holds,
+export errors, available recovery points and retention dates. On the real
+staging ledger, a task credential was denied the operator index and the
+operator reader was denied allocation writes. The authenticated lease page
+passed refresh and pagination checks at phone and desktop widths.

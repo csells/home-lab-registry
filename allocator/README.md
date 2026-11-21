@@ -288,3 +288,15 @@ A missing or mismatched identity, unsupported layout or unreadable workspace
 fails the export and preserves the stopped slot. Leases predating the marker
 need operator review. Lease owners should place their work and evidence in the
 declared workspace. OS data elsewhere on the disk is outside the archive.
+
+### Operator lease review
+
+Set the controller's optional `review_token_file` to a dedicated secret
+readable by the controller and its authorized dashboard. Configure the
+dashboard's private `lease-review.json` with the allocator HTTPS `endpoint`,
+its `ca_file`, and a private `token_file`. The dashboard offers
+`/leases` behind its usual operator login. The reader can view ownership,
+renewal deadlines, review holds, export failures, available checkpoint counts
+and the latest checkpoint's verification and retention dates. Requests are
+paged and made when the operator opens, refreshes or expands the history.
+The review credential cannot issue leases, retrieve artifacts or change holds.

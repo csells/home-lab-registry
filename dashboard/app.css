@@ -45,3 +45,5 @@ nav{flex-wrap:wrap;column-gap:20px;row-gap:0}.badge.stopped{background:#edf0ee;c
 .host-inventory details{margin-top:6px}
 .host-inventory li,.accuracy-group li{overflow-wrap:anywhere}
 .accuracy-group h3,.observed-host h3{font-size:1rem;margin:16px 0 6px}
+
+#lease-link[hidden] { display: none; }

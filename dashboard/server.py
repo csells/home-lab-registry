@@ -5,6 +5,7 @@ from model import inventory,address_audit_summary
 from reconciliation import reconcile as reconcile_inventory
 from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
+from lease_review import page as lease_review_page
 from access import credential
 from guac import launch
 from machine_runtime import InventorySubscriptions,guest_endpoints
@@ -103,14 +104,26 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:self.send_error(404)
             except (BrokenPipeError,ConnectionResetError,TimeoutError):pass
             return
+        elif path=='/api/leases':
+            config=PRIVATE/'lease-review.json'
+            if not config.exists():self.send_error(404);return
+            try:
+                query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
+                cursor,=query.pop('before',[None])
+                if query or (cursor is not None and (not cursor.isascii() or not cursor.isdigit() or len(cursor)>18 or cursor.startswith('0'))):raise ValueError()
+            except ValueError:self.send_error(400,'Invalid history cursor');return
+            try:raw=json.dumps(lease_review_page(config,cursor)).encode()
+            except (OSError,ValueError,KeyError):self.send_error(503,'Lease history unavailable');return
+            kind='application/json'
         elif path in ['/api/inventory','/api/machines','/api/services','/api/backups','/api/reconciliation']:
             with LOCK:data=dict(STATE)
             data['server_time']=time.time()
+            data['lease_review_enabled']=(PRIVATE/'lease-review.json').is_file()
             if path=='/api/reconciliation':data={'inventory_accuracy':data.get('inventory_accuracy'),'error':data['error'],'fetched_at':data['fetched_at']}
             elif path!='/api/inventory':key=path.rsplit('/',1)[1];data={key:data[key],'error':data['error'],'fetched_at':data['fetched_at']}
             raw=json.dumps(data).encode();kind='application/json'
-        elif path in ['/','/app.js','/app.css','/resource-graph.js','/resource-graph.css','/vendor/elk-api.js','/vendor/elk-worker.min.js']:
-            file='index.html' if path=='/' else path.lstrip('/');raw=(BASE/file).read_bytes();kind='text/html' if path=='/' else 'text/css' if path.endswith('.css') else 'text/javascript'
+        elif path in ['/','/leases','/leases.js','/leases.css','/app.js','/app.css','/resource-graph.js','/resource-graph.css','/vendor/elk-api.js','/vendor/elk-worker.min.js']:
+            file='index.html' if path=='/' else 'leases.html' if path=='/leases' else path.lstrip('/');raw=(BASE/file).read_bytes();kind='text/html' if path in ('/','/leases') else 'text/css' if path.endswith('.css') else 'text/javascript'
         else:self.send_error(404);return
         self.send_response(200);self.send_header('Content-Type',kind+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");self.end_headers();self.wfile.write(raw)
 if __name__=='__main__':

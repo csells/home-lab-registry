@@ -20,6 +20,7 @@ from pathlib import Path
 from checkpoints import Checkpoints, Rejected
 from credentials import TaskCredentials
 from reservations import Reservations
+from review import lease_page
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -836,8 +837,12 @@ def main():
                           for owner, path in config.get('reservation_tokens', {}).items()}
     issuer_tokens = {issuer: Path(path).read_text().strip()
                      for issuer, path in config.get('task_issuer_tokens', {}).items()}
+    review_ref = config.get('review_token_file')
+    reviewer = Path(review_ref).read_text().strip() if review_ref else None
+    if reviewer is not None and not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', reviewer):
+        raise ValueError('Configure a dedicated read-only lease review credential')
     all_tokens = [*task_tokens.values(), *reservation_tokens.values(), *issuer_tokens.values()]
-    all_tokens.extend(token for token in (recovery_token, verifier) if token)
+    all_tokens.extend(token for token in (recovery_token, verifier, reviewer) if token)
     if (any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner) for owner in (*reservation_tokens, *issuer_tokens))
             or any(not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', value)
                    for value in (*reservation_tokens.values(), *issuer_tokens.values()))
@@ -887,6 +892,25 @@ def main():
             if owner is None and header.startswith('Bearer '):
                 owner = controller.task_credentials.owner(header.removeprefix('Bearer '))
             is_verifier = verifier is not None and hmac.compare_digest(supplied, ('Bearer ' + verifier).encode('ascii'))
+            target = urllib.parse.urlsplit(self.path)
+            if target.path == '/v1/lease-review':
+                if reviewer is None or not hmac.compare_digest(supplied, ('Bearer ' + reviewer).encode('ascii')):
+                    self.respond({'code': 'unauthorized'}, 401)
+                    return
+                if self.command != 'GET':
+                    self.respond({'code': 'method_not_allowed'}, 405)
+                    return
+                try:
+                    query = urllib.parse.parse_qs(target.query, keep_blank_values=True)
+                    cursor, = query.pop('before', [None])
+                    if query:
+                        raise ValueError()
+                    page = lease_page(controller.db, cursor)
+                except (ValueError, Rejected):
+                    self.respond({'code': 'invalid_cursor'}, 400)
+                    return
+                self.respond(page)
+                return
             parts = self.path.strip('/').split('/')
             delegated_route = len(parts) == 3 and parts[:2] == ['v1', 'delegated-renewal']
             export_route = len(parts) in (2, 3) and parts[:2] == ['v1', 'final-export']

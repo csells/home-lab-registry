@@ -1,0 +1,9 @@
+#leases { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 23rem), 1fr)); gap: 1rem; margin-block: 1rem; }
+.lease { background: var(--surface, Canvas); color: inherit; border: 1px solid var(--line); border-radius: .75rem; padding: 1.25rem; min-width: 0; overflow-wrap: anywhere; }
+.lease header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .4rem 1rem; }
+.lease h2 { font-size: 1.25rem; line-height: 1.25; margin: 0; }
+.lease dl { display: grid; grid-template-columns: auto 1fr; gap: .4rem 1rem; margin: 1rem 0 0; }
+.lease dd { margin: 0; }
+.lease dt { color: var(--muted, inherit); }
+
+#older[hidden] { display: none; }
