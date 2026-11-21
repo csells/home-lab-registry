@@ -300,3 +300,23 @@ renewal deadlines, review holds, export failures, available checkpoint counts
 and the latest checkpoint's verification and retention dates. Requests are
 paged and made when the operator opens, refreshes or expands the history.
 The review credential cannot issue leases, retrieve artifacts or change holds.
+
+### Capability admission and reviewer holds
+
+A task can call `capabilities` with its ordinary credential to inspect the
+qualified recipe and the slot's currently observed vCPU, memory and disk size.
+Pass `--requirements '{"os":"linux","architecture":"amd64","memory_mib":512}'`
+to `acquire`. Numeric requirements are minimums. Unsupported capabilities
+and insufficient headroom return an immediate, specific rejection. Replaying
+a request key with different requirements is rejected. A capability report is
+an observation and reserves no capacity. Pin `proxmox.guest_uuid` and
+`proxmox.guest_volume` together to check hardware and disk identity before
+provider changes.
+
+The owner can designate another active task principal using
+`assign-reviewer <lease> --reviewer <principal>`. The reviewer can call
+`reviewer-hold` with a mode and reason. Owner and reviewer holds are
+independent and persist across restarts. The reviewer receives no guest,
+artifact or release authority. To override an unresolved reviewer hold, the
+owner must confirm that exact reviewer and give a reason. The recorded
+override preserves the affected principal, prior reason and data disposition.

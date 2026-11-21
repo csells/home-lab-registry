@@ -30,6 +30,10 @@ Choose an unused guest ID on the verified host. Use that machine's registered te
 
 Discover the authorized allocator and its supported operations through the registry. Respect task ownership, review holds and production headroom. When no eligible slot is available, report why immediately and let the requester decide whether to retry; do not queue, auto-retry or oversubscribe. Use a staging-only allocator only for its recorded qualification. An expired registry date is an owner-review signal unless that guest was admitted under a verified automatic reclamation policy.
 
+For an allocator that advertises capability-based admission, use the task's scoped credential to query its supported recipe and resources. Derive CPU, RAM, disk and hardware requirements from the work. Reuse the owned lease across test runs, renew it while work or review continues, and use a new request key only for a different request. For the Linux pilot, discover an active record with capability `lease-pilot` and endpoint `lease_api`; use the registered client, trust material and scope. Staging availability alone does not authorize production workloads.
+
+Keep work and evidence in the recipe's declared workspace. Check that the latest recovery point is acknowledged and record its time. Use independent owner and designated-reviewer holds when another task still needs the guest. Release through the allocator and verify the final disposition. Recover using the returned checkpoint identity and compare the saved work after reset. Escalate held disks or missing evidence through the recorded operator path. Never substitute a manual hypervisor reset for a failed export.
+
 ## Platform and migration validation
 
 Select platform support from machine capabilities in the registry. Windows needs a suitable VM; macOS virtualization needs compatible Apple hardware. iOS Simulator and Android Emulator do not replace physical-device testing. Verify hardware acceleration and any nested-virtualization arrangement with the actual test.

@@ -514,3 +514,17 @@ export errors, available recovery points and retention dates. On the real
 staging ledger, a task credential was denied the operator index and the
 operator reader was denied allocation writes. The authenticated lease page
 passed refresh and pagination checks at phone and desktop widths.
+
+Staging admission reports the fixed recipe and measured vCPUs, memory and disk.
+An ordinary task requested Linux by capability, reached the matched guest and
+released it. Unsupported GPU, CPU and memory requests returned reasons without
+creating a lease. An identical retry returned the same lease; changing the
+requirements under the same key was refused.
+
+A distinct task principal received a reviewer assignment, placed a running
+hold and changed it to a disk hold. The owner clearing its own hold did not
+clear the reviewer's hold. Restart preserved it, and allocation release and
+reviewer replacement were refused. An unrelated task could not change the
+hold, and the reviewer could not inspect the guest or release it. An explicit
+owner override recorded the named reviewer, prior reason and effect before
+the normal checkpoint-gated release returned the slot.

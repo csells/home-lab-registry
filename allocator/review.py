@@ -10,14 +10,14 @@ def lease_page(db, before):
                                or len(before) > 18 or int(before) < 1):
         raise Rejected('invalid_cursor', 'Invalid lease history cursor.', 400)
     rows = db.execute("""SELECT rowid AS cursor, id, task, owner, phase, deadline,
-                            released_at, hold_mode, hold_reason, export_error, checkpoint
+                            released_at, hold_mode, hold_reason, reviewer, reviewer_hold, reviewer_reason, export_error, checkpoint
                          FROM lease WHERE (? IS NULL OR rowid < ?)
                          ORDER BY rowid DESC LIMIT 26""", (before, before)).fetchall()
     now = time.time()
     result = []
     for row in rows[:25]:
         item = {key: row[key] for key in ('id', 'task', 'owner', 'phase', 'deadline',
-                'released_at', 'hold_mode', 'hold_reason', 'export_error')}
+                'released_at', 'hold_mode', 'hold_reason', 'reviewer', 'reviewer_hold', 'reviewer_reason', 'export_error')}
         if item['phase'] == 'ready' and item['deadline'] <= now:
             item['phase'] = 'overdue'
         saved = db.execute("""SELECT receipt FROM incremental_checkpoint

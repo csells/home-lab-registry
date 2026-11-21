@@ -18,6 +18,7 @@ from pathlib import Path
 
 
 from checkpoints import Checkpoints, Rejected
+from capabilities import PLATFORM, RECIPE, match, requirements
 from credentials import TaskCredentials
 from reservations import Reservations
 from review import lease_page
@@ -72,6 +73,9 @@ class Proxmox:
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=self.context), NoRedirect())
         self.name, self.snapshot = config['guest_name'], config['snapshot']
+        self.uuid, self.volume = config.get('guest_uuid'), config.get('guest_volume')
+        if bool(self.uuid) != bool(self.volume):
+            raise ValueError('Pin both the slot hardware UUID and boot volume')
 
     def call(self, route, fields=None, *, token=None):
         data = None if fields is None else urllib.parse.urlencode(fields).encode()
@@ -80,21 +84,31 @@ class Proxmox:
         with self.opener.open(request, timeout=5) as response:
             return json.load(response)['data']
 
-    def status(self):
+    def verified_config(self):
         config = self.call(self.guest + '/config')
         if config['name'] != self.name or config.get('template'):
             raise Rejected('slot_identity_changed', 'The configured guest no longer matches this pilot slot.')
+        if self.uuid and (('uuid=' + self.uuid) not in config.get('smbios1', '').split(',')
+                          or config.get('scsi0', '').split(',')[0] != self.volume):
+            raise Rejected('slot_identity_changed', 'The slot hardware UUID or boot volume changed.')
         if config.get('lock'):
             raise Rejected('slot_locked', 'Proxmox reports an in-flight task on the pilot slot.')
+        return config
+
+    def status(self):
+        self.verified_config()
         return self.call(self.guest + '/status/current')['status']
 
     def start(self):
+        self.verified_config()
         return self.call(self.guest + '/status/start', {})
 
     def shutdown(self):
+        self.verified_config()
         return self.call(self.guest + '/status/shutdown', {'timeout': 20})
 
     def reset(self):
+        self.verified_config()
         snap = urllib.parse.quote(self.snapshot, safe='')
         return self.call(self.guest + '/snapshot/' + snap + '/rollback', {'start': 0})
 
@@ -128,6 +142,7 @@ class Proxmox:
         return True
 
     def install_guest_key(self, key, lease):
+        self.verified_config()
         self.call(self.guest + '/agent/file-write', {
             'file': '/etc/ssh/lease_authorized_keys',
             'content': f'{key} lease-{lease}\n',
@@ -167,19 +182,23 @@ class Capacity:
             raise ValueError('Capacity values must be nonnegative MiB integers')
         return value * MIB
 
-    def check(self, reservations=(0, 0), *, require_slot=True, allow_running_slot=False):
+    def read_observation(self, *, require_slot=True, allow_running_slot=False):
         try:
-            observation = self.observe(require_slot=require_slot, allow_running_slot=allow_running_slot)
+            return self.observe(require_slot=require_slot, allow_running_slot=allow_running_slot)
         except (OSError, ValueError, TypeError, KeyError) as error:
             print(f'Capacity observation failed: {type(error).__name__}', flush=True)
             raise Rejected('capacity_unverified', 'Fresh host capacity could not be verified. Try again later.', 503) from error
 
+    def check(self, reservations=(0, 0), *, require_slot=True, allow_running_slot=False):
+        observation = self.read_observation(require_slot=require_slot, allow_running_slot=allow_running_slot)
         for value, minimum, code, label in (
             (observation['memory_after_start'] - reservations[0] * MIB, self.memory_floor, 'host_memory_headroom', 'memory'),
             (observation['storage_after_writes'] - reservations[1] * MIB, self.storage_floor, 'host_storage_headroom', 'storage'),
         ):
             if value < minimum:
                 raise Rejected(code, f'This request would leave {max(0, value) // MIB} MiB of host {label} headroom; {minimum // MIB} MiB is required.')
+
+        return observation
 
     def observe(self, *, require_slot=True, allow_running_slot=False):
         node = '/nodes/' + urllib.parse.quote(self.provider.node, safe='')
@@ -213,6 +232,9 @@ class Capacity:
         pending_slot_memory = self.positive(slot['maxmem']) if require_slot and slot['status'] == 'stopped' else 0
         slot_disk_reserve = self.positive(slot['maxdisk']) if require_slot else 0
         return {
+            'slot_resources': {'memory_mib': self.positive(slot['maxmem']) // MIB,
+                               'disk_mib': self.positive(slot['maxdisk']) // MIB,
+                               'vcpus': self.positive(slot['maxcpu'])},
             'memory_after_start': min(available, total - reserved)
             - self.reserved_memory - pending_slot_memory,
             'storage_after_writes': available_storage - slot_disk_reserve,
@@ -242,10 +264,15 @@ class Pilot:
         columns = {row['name'] for row in self.db.execute('PRAGMA table_info(lease)')}
         with self.db:
             for column, definition in (
+                ('requirements', "TEXT NOT NULL DEFAULT '{}'"),
                 ('prior_tasks', 'TEXT'),
                 ('owner', "TEXT NOT NULL DEFAULT 'operator'"),
                 ('ssh_key', 'TEXT'),
                 ('reclaim_on_expiry', 'INTEGER NOT NULL DEFAULT 0'),
+                ('reviewer', 'TEXT'),
+                ('reviewer_hold', 'TEXT'),
+                ('reviewer_reason', 'TEXT'),
+                ('reviewer_override', 'TEXT'),
                 ('hold_mode', 'TEXT'),
                 ('hold_reason', 'TEXT'),
                 ('export_challenge', 'TEXT'),
@@ -273,6 +300,7 @@ class Pilot:
             with self.db:
                 self.db.execute('ALTER TABLE recovery_ticket ADD COLUMN checkpoint_id TEXT')
         self.checkpoints = Checkpoints(self.db)
+        self.static_principals = frozenset(config['client_tokens'])
         self.task_credentials = TaskCredentials(self.db, config.get('task_credential_max_seconds', 86400))
         recovery = config.get('recovery', {})
         self.recovery_endpoint = recovery.get('endpoint')
@@ -393,6 +421,7 @@ class Pilot:
 
     def public(self, row, status=None):
         result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'export_start_tasks', 'checkpoint')}
+        result['requirements'] = json.loads(row['requirements'])
         result['status'] = status or row['phase']
         if incremental := self.checkpoints.list(row['id']):
             result['incremental_checkpoints'] = incremental
@@ -420,11 +449,13 @@ class Pilot:
             raise Rejected('reclamation_unavailable', 'Automatic reclamation is unavailable for this request.', 422)
         key = owner + '/' + key
         ssh_key = public_key(data.get('ssh_public_key'))
-        if data.get('recipe') != 'debian13-amd64':
+        requested = data.get('requirements', {})
+        encoded = requirements(requested)
+        if data.get('recipe', RECIPE) != RECIPE:
             raise Rejected('unsupported_recipe', 'The pilot provides only debian13-amd64.', 422)
         prev = self.db.execute('SELECT * FROM lease WHERE request_key=?', (key,)).fetchone()
         if prev:
-            if prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key or bool(prev['reclaim_on_expiry']) != reclaim:
+            if prev['requirements'] != encoded or prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key or bool(prev['reclaim_on_expiry']) != reclaim:
                 raise Rejected('request_key_conflict', 'This request key is already bound to different inputs.')
             return self.inspect(prev['id'], owner)
         if self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone():
@@ -432,13 +463,14 @@ class Pilot:
         if self.provider.status() != 'stopped':
             raise Rejected('slot_unavailable', 'The pilot guest is already running outside the controller.')
         prior = json.dumps(sorted(self.provider.recent_tasks('starting')))
-        self.capacity.check(self.reservations.totals())
+        observed = self.capacity.check(self.reservations.totals())
+        match(requested, observed['slot_resources'])
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
-                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry)
-                VALUES (?,?,?,?,?,?,?,?,?,?)''',
-                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim)))
+                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded))
         return self.public(self.dispatch(lease, 'starting', self.provider.start, recorded=True))
 
     @staticmethod
@@ -498,8 +530,42 @@ class Pilot:
             self.db.execute('UPDATE lease SET deadline=? WHERE id=?', (deadline, lease))
         return {'deadline': deadline, 'delegated_until': delegation['valid_until']}
 
-    def hold(self, lease, data, owner):
+    def assign_reviewer(self, lease, data, owner):
         row = self.owned(lease, owner)
+        if row['phase'] not in ('starting','ready','awaiting-export') or not row['reclaim_on_expiry']:
+            raise Rejected('hold_unavailable', 'Only an enrolled lease before reset accepts review.')
+        reviewer = data.get('reviewer')
+        if reviewer is not None:
+            if not isinstance(reviewer, str) or not reviewer or reviewer == owner:
+                raise Rejected('invalid_reviewer', 'Choose a separate existing task principal.', 400)
+            issued = self.db.execute("""SELECT 1 FROM task_credential
+                WHERE owner=? AND revoked_at IS NULL AND expires_at>?""", (reviewer, time.time())).fetchone()
+            if reviewer not in self.static_principals and not issued:
+                raise Rejected('invalid_reviewer', 'Choose an active task principal.', 400)
+        if row['reviewer_hold'] and reviewer != row['reviewer']:
+            raise Rejected('lease_held', 'Resolve the designated reviewer hold before changing reviewers.')
+        with self.db:
+            self.db.execute('UPDATE lease SET reviewer=? WHERE id=?', (reviewer, lease))
+        return self.public(self.get(lease))
+
+    def override_review_hold(self, lease, data, owner):
+        row = self.owned(lease, owner)
+        reason = data.get('reason')
+        if (not row['reviewer_hold'] or data.get('confirm_reviewer') != row['reviewer']
+                or not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 240):
+            raise Rejected('review_confirmation_required', 'Confirm the affected reviewer and give a reason.')
+        decision = {'at': time.time(), 'owner': owner, 'reviewer': row['reviewer'],
+                    'hold': row['reviewer_hold'], 'prior_reason': row['reviewer_reason'],
+                    'reason': reason.strip(), 'disposition': 'Remove reviewer hold; standard checkpoint policy applies.'}
+        with self.db:
+            self.db.execute("""UPDATE lease SET reviewer=NULL, reviewer_hold=NULL, reviewer_reason=NULL,
+                reviewer_override=? WHERE id=?""", (json.dumps(decision), lease))
+        return self.public(self.get(lease))
+
+    def hold(self, lease, data, principal, *, delegated=False):
+        row = self.get(lease)
+        if principal != row['reviewer' if delegated else 'owner']:
+            raise Rejected('unknown_lease', 'No lease has this identifier.', 404)
         mode, reason = data.get('mode', 'disk'), data.get('reason')
         if not row['reclaim_on_expiry'] or row['phase'] not in ('ready', 'awaiting-export'):
             raise Rejected('hold_unavailable', 'Only an enrolled lease before reset can be held.')
@@ -510,9 +576,12 @@ class Pilot:
         if mode != 'clear' and (not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 240):
             raise Rejected('hold_reason_required', 'Provide a short hold reason.', 400)
         with self.db:
-            self.db.execute('UPDATE lease SET hold_mode=?, hold_reason=? WHERE id=?',
+            fields = 'reviewer_hold=?, reviewer_reason=?' if delegated else 'hold_mode=?, hold_reason=?'
+            self.db.execute(f'UPDATE lease SET {fields} WHERE id=?',
                             (None if mode == 'clear' else mode,
                              None if mode == 'clear' else reason.strip(), lease))
+        if delegated:
+            return {'id': lease, 'hold': mode, 'reviewer': principal}
         return self.public(self.get(lease))
 
     def request_export(self, lease):
@@ -556,6 +625,8 @@ class Pilot:
                     export_disposition=? WHERE id=?""", (reason.strip(), decision, lease))
             return self.public(self.get(lease))
 
+        if row['reviewer_hold']:
+            raise Rejected('lease_held', 'Resolve the designated reviewer hold before discarding this disk.')
         self.check_export_source(row)
         prior = json.dumps(sorted(self.provider.recent_tasks('resetting')))
         # Persist the explicit data disposition and provider intent together.
@@ -774,14 +845,14 @@ class Pilot:
         key, phase = row['id'], row['phase']
         if phase == 'starting':
             self.inspect(key, row['owner'])
-        elif phase == 'ready' and time.time() >= row['deadline'] + self.grace_seconds and row['hold_mode'] != 'running':
+        elif phase == 'ready' and time.time() >= row['deadline'] + self.grace_seconds and 'running' not in (row['hold_mode'], row['reviewer_hold']):
             if self.provider.status() == 'stopped':
                 self.request_export(key)
             else:
                 self.dispatch(key, 'export-stopping', self.provider.shutdown)
         elif phase in ('export-stopping', 'resetting'):
             self.inspect(key, row['owner'])
-        elif phase == 'awaiting-export' and row['checkpoint'] and not row['hold_mode']:
+        elif phase == 'awaiting-export' and row['checkpoint'] and not (row['hold_mode'] or row['reviewer_hold']):
             self.check_export_source(row)
             self.dispatch(key, 'resetting', self.provider.reset)
 
@@ -794,7 +865,7 @@ class Pilot:
         if row['reclaim_on_expiry']:
             if data.get('preserve_checkpoint') is not True or data.get('discard_disposable_data'):
                 raise Rejected('final_export_required', 'Enrolled leases require verified export before reset.')
-            if row['hold_mode']:
+            if row['hold_mode'] or row['reviewer_hold']:
                 raise Rejected('lease_held', 'Clear the review hold before releasing the guest.')
             if self.provider.status() == 'stopped':
                 return self.public(self.request_export(lease))
@@ -933,6 +1004,12 @@ def main():
                 self.respond({'code': 'unauthorized'}, 401)
                 return
             try:
+                if parts == ['v1','capabilities'] and self.command == 'GET':
+                    controller.provider.verified_config()
+                    observation = controller.capacity.read_observation(allow_running_slot=True)
+                    self.respond({'recipe': RECIPE, 'observed_at': time.time(),
+                                  'capabilities': {**PLATFORM, 'gpu': 'none', **observation['slot_resources']}})
+                    return
                 if reservation_route and self.command == 'GET' and len(parts) == 2:
                     self.respond({'reservations': controller.reservations.list(reservation_owner)})
                     return
@@ -988,6 +1065,15 @@ def main():
                             return
                         if parts[3] == 'renew':
                             self.respond(controller.renew(parts[2], data, owner))
+                            return
+                        if parts[3] == 'reviewer':
+                            self.respond(controller.assign_reviewer(parts[2], data, owner))
+                            return
+                        if parts[3] == 'reviewer-hold':
+                            self.respond(controller.hold(parts[2], data, owner, delegated=True))
+                            return
+                        if parts[3] == 'override-reviewer':
+                            self.respond(controller.override_review_hold(parts[2], data, owner))
                             return
                         if parts[3] == 'hold':
                             self.respond(controller.hold(parts[2], data, owner))

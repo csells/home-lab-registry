@@ -119,14 +119,16 @@ def main():
     parser.add_argument('--ca', required=True, type=Path)
     parser.add_argument('--token-file', required=True, type=Path)
     sub = parser.add_subparsers(dest='command', required=True)
+    sub.add_parser('capabilities')
     acquire = sub.add_parser('acquire')
     acquire.add_argument('--task', required=True)
     acquire.add_argument('--request-key', required=True)
     acquire.add_argument('--seconds', type=int, required=True)
     acquire.add_argument('--ssh-public-key', type=Path, required=True)
     acquire.add_argument('--recipe', default='debian13-amd64')
+    acquire.add_argument('--requirements', type=json.loads, help='Required OS, architecture, GPU, vCPUs, memory_mib or disk_mib as JSON')
     acquire.add_argument('--reclaim-on-expiry', action='store_true')
-    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export', 'checkpoint'):
+    for operation in ('inspect', 'renew', 'release', 'hold', 'assign-reviewer', 'remove-reviewer', 'reviewer-hold', 'override-reviewer', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export', 'checkpoint'):
         command = sub.add_parser(operation)
         command.add_argument('lease')
         if operation == 'renew':
@@ -135,7 +137,12 @@ def main():
             disposition = command.add_mutually_exclusive_group(required=True)
             disposition.add_argument('--discard-disposable-data', action='store_true')
             disposition.add_argument('--preserve-checkpoint', action='store_true')
-        elif operation == 'hold':
+        elif operation == 'assign-reviewer':
+            command.add_argument('--reviewer', required=True)
+        elif operation == 'override-reviewer':
+            command.add_argument('--confirm-reviewer', required=True)
+            command.add_argument('--reason', required=True)
+        elif operation in ('hold','reviewer-hold'):
             command.add_argument('--mode', choices=('running', 'disk', 'clear'), default='disk')
             command.add_argument('--reason')
         elif operation == 'delegate-renewal':
@@ -172,6 +179,9 @@ def main():
         parser.error('--record requires --registry-client')
     try:
         endpoint = args.endpoint or discover(args.registry_client, args.record)
+        if args.command == 'capabilities':
+            print(json.dumps(request(endpoint, args.ca, args.token_file, '/v1/capabilities', None)))
+            return 0
         if args.command in ('issue-task-credential', 'revoke-task-credential'):
             payload = {'task_ref': args.task_ref}
             if args.command == 'issue-task-credential':
@@ -203,6 +213,8 @@ def main():
             payload = {'task': args.task, 'request_key': args.request_key, 'seconds': args.seconds,
                        'recipe': args.recipe, 'ssh_public_key': key,
                        'reclaim_on_expiry': args.reclaim_on_expiry}
+            if args.requirements is not None:
+                payload['requirements'] = args.requirements
         else:
             if not re.fullmatch('[a-f0-9]{32}', args.lease):
                 raise ValueError('Invalid lease ID')
@@ -214,8 +226,14 @@ def main():
                 route += '/release'
                 payload = {'discard_disposable_data': args.discard_disposable_data,
                            'preserve_checkpoint': args.preserve_checkpoint}
-            elif args.command == 'hold':
-                route += '/hold'
+            elif args.command in ('assign-reviewer', 'remove-reviewer'):
+                route += '/reviewer'
+                payload = {'reviewer': getattr(args, 'reviewer', None)}
+            elif args.command == 'override-reviewer':
+                route += '/override-reviewer'
+                payload = {'confirm_reviewer': args.confirm_reviewer, 'reason': args.reason}
+            elif args.command in ('hold','reviewer-hold'):
+                route += '/' + args.command
                 payload = {'mode': args.mode, 'reason': args.reason}
             elif args.command in ('retain-failed-export', 'discard-failed-export'):
                 route += '/export-disposition'

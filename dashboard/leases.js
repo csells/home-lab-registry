@@ -24,6 +24,8 @@ function card(lease) {
   if (lease.released_at) field('Released', date(lease.released_at));
   else field('Renew by', date(lease.deadline));
   if (lease.hold_mode) field('Review hold', lease.hold_mode + ' · ' + lease.hold_reason);
+  if (lease.reviewer) field('Reviewer', lease.reviewer);
+  if (lease.reviewer_hold) field('Reviewer hold', lease.reviewer_hold + ' · ' + lease.reviewer_reason);
   if (lease.export_error) field('Export failure', lease.export_error);
   field('Recovery points', String(lease.checkpoint_count));
   if (lease.last_verified_at) field('Last verified', date(lease.last_verified_at));
