@@ -447,8 +447,18 @@ def main():
         do_GET = route
         do_POST = route
 
-    print('Lease pilot listening on loopback', flush=True)
-    HTTPServer(('127.0.0.1', int(config.get('port', 8093))), Handler).serve_forever()
+    host = config.get('listen', '127.0.0.1')
+    tls = config.get('tls')
+    if host != '127.0.0.1' and not tls:
+        raise ValueError('A non-loopback listener requires TLS')
+    with HTTPServer((host, int(config.get('port', 8093))), Handler) as server:
+        if tls:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_3
+            context.load_cert_chain(tls['cert_file'], tls['key_file'])
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+        print(f'Lease pilot listening with {"TLS" if tls else "local HTTP"}', flush=True)
+        server.serve_forever()
 
 
 if __name__ == '__main__':

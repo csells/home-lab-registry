@@ -14,14 +14,18 @@ baseline snapshot. The controller only writes that fixed path. The provider's
 file-write privilege itself is guest-wide, so keep its token within the
 controller and scope it to the owned staging guest.
 
-The API binds to loopback and binds each distinct staging bearer token to one
-task principal. Lease IDs are checked against that principal on every read or
+The API defaults to loopback. A non-loopback listener requires TLS 1.3 and a
+certificate matching the registered endpoint. Each distinct staging bearer
+token identifies one task principal. Lease IDs are checked against that principal on every read or
 mutation. The request key is scoped to that principal. Run with
 `python3 allocator/pilot.py CONFIG.json`. Keep the SQLite database on persistent
 storage outside the leased guest. Keep secrets in private files. Set the
 following configuration keys:
 
 - `database`, `client_tokens` (principal to private token file), `guest_user`, and `guest_host_key` (host public key verified independently).
+- For a LAN endpoint, `listen`, `port`, `tls.cert_file` and `tls.key_file`.
+  Keep the private key on the controller. Give the authorized task the
+  independently obtained CA and its own bearer credential file.
 - `proxmox.url`, `proxmox.node`, `proxmox.guest_id`, `proxmox.guest_name`,
   `proxmox.snapshot`, `proxmox.token_file`, and `proxmox.ca_file`
 - `capacity.token_file` (separate read-only token), `capacity.storage`,
@@ -57,9 +61,27 @@ token exclusively for this controller.
 Each lease installs only its caller's public key, and release must finish
 restoring the clean snapshot before the slot accepts another lease. Verify the guest host key through the trusted provisioner before setting
 `guest_host_key`. Use the returned `host_key_alias` with strict verification,
-so a DHCP address change does not weaken the host identity check. Distributed credential issuance, a
-supported client transport, registry projection, automatic discovery of
+so a DHCP address change does not weaken the host identity check. Automated credential issuance, lifecycle registry projection, automatic discovery of
 reservations outside this controller, checkpoint export and automatic expiry
 cleanup remain open. Lost
 provider task recovery is qualified for the single dedicated slot. Use only disposable
 qualification data in the slot.
+
+## Task-side discovery and use
+
+The operator registers the private HTTPS endpoint as `endpoints.lease_api` on
+an active record with capability `lease-pilot`. Treat this as a staging-only
+interface. Obtain the trust material and the task credential through the
+authorized operator path before accessing the endpoint.
+
+```sh
+python3 allocator/client.py --record <record-id> --registry-client <registry.py> \
+  --ca <ca.pem> --token-file <task-token> acquire --task <task> \
+  --request-key <unique-key> --seconds 900 --ssh-public-key <key.pub>
+```
+
+Use the same options with `inspect <id>`, `renew <id> --seconds 900`, or
+`release <id> --discard-disposable-data` for qualification data. The client
+returns JSON, with structured rejection details on stderr and exit status 2.
+Capacity rejections require a new caller decision. The client never retries
+mutations automatically.

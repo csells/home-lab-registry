@@ -317,7 +317,7 @@ A missed renewal marked the lease overdue and kept the guest available for
 renewal. An unauthenticated request and a read of a protected guest were denied.
 
 Remaining for the Linux slice: shared reservation discovery and registry projection,
-a supported client transport with credential issuance, and incremental export and restore. The agreed grace, retention and hold policy
+automated credential issuance, and incremental export and restore. The agreed grace, retention and hold policy
 still needs to be implemented and exercised before automatic reclamation.
 
 The pilot now journals a pre-dispatch view of recent tasks. When the provider
@@ -346,3 +346,17 @@ inventory, and an unauthorized capacity read were tested against the real
 host. Each left the lease journal and provider start history unchanged.
 The pilot does not yet allocate across hosts or automatically account for
 reservations held outside its ledger.
+
+The staging client discovered the pilot in the real registry and completed
+acquire, SSH work, capacity rejection, renew and release over private TLS
+without using operator SSH or provider credentials. The operator supplied
+the task token and CA. An independent coding-agent run and automated
+credential issuance remain open.
+
+A task-side capture contained a committed Git baseline, real uncommitted
+changes and an evidence file. The central backup controller stored it in
+encrypted Drive. After release and slot reset, a clean replacement loaded
+the verified archive from Drive and recovered both the working diff and the
+evidence. This was an operator-driven backup integration check. Incremental
+exports, fully automated verification and restore, qualification after
+physical guest deletion, and policy-driven reclamation still remain open.
