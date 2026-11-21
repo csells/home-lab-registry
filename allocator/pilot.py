@@ -17,9 +17,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
-class Rejected(Exception):
-    def __init__(self, code, reason, status=409):
-        self.code, self.reason, self.status = code, reason, status
+from checkpoints import Checkpoints, Rejected
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -251,6 +249,7 @@ class Pilot:
                 ('export_error', 'TEXT'),
                 ('export_disposition', 'TEXT'),
                 ('checkpoint', 'TEXT'),
+                ('released_at', 'REAL'),
             ):
                 if column not in columns:
                     self.db.execute(f'ALTER TABLE lease ADD COLUMN {column} {definition}')
@@ -263,8 +262,14 @@ class Pilot:
                 lease_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL,
                 valid_until REAL NOT NULL, extension INTEGER NOT NULL
             )''')
+        ticket_columns = {row['name'] for row in self.db.execute('PRAGMA table_info(recovery_ticket)')}
+        if 'checkpoint_id' not in ticket_columns:
+            with self.db:
+                self.db.execute('ALTER TABLE recovery_ticket ADD COLUMN checkpoint_id TEXT')
+        self.checkpoints = Checkpoints(self.db)
         recovery = config.get('recovery', {})
         self.recovery_endpoint = recovery.get('endpoint')
+        self.upload_endpoint = self.recovery_endpoint if recovery.get('accept_uploads') is True else None
         if bool(self.recovery_endpoint) != bool(recovery.get('worker_token_file')):
             raise ValueError('Recovery needs an HTTPS endpoint and a dedicated worker credential')
         self.provider = Proxmox(config['proxmox'])
@@ -356,16 +361,19 @@ class Pilot:
         elif phase == 'resetting':
             if self.provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The reset slot did not return to the stopped state.')
-            if row['checkpoint']:
-                receipt = json.loads(row['checkpoint'])
-                receipt['retain_through'] = time.time() + CHECKPOINT_RETENTION_SECONDS
-                with self.db:
-                    self.db.execute(
-                        "UPDATE lease SET phase='released', upstream=NULL, address=NULL, prior_tasks=NULL, checkpoint=? WHERE id=?",
-                        (json.dumps(receipt), lease))
-                row = self.get(lease)
-            else:
-                row = self.update(lease, 'released')
+            released_at = time.time()
+            retention = released_at + CHECKPOINT_RETENTION_SECONDS
+            receipt = json.loads(row['checkpoint']) if row['checkpoint'] else None
+            if receipt:
+                receipt['retain_through'] = retention
+            with self.db:
+                self.db.execute("""UPDATE lease SET phase='released', upstream=NULL, address=NULL,
+                    prior_tasks=NULL, checkpoint=?, released_at=? WHERE id=?""",
+                                (json.dumps(receipt) if receipt else None, released_at, lease))
+                self.db.execute("""UPDATE incremental_checkpoint
+                    SET receipt=json_set(receipt, '$.retain_through', ?)
+                    WHERE lease_id=? AND receipt IS NOT NULL""", (retention, lease))
+            row = self.get(lease)
         status = row['phase']
         if status == 'ready' and time.time() >= row['deadline']:
             status = 'overdue'
@@ -374,6 +382,8 @@ class Pilot:
     def public(self, row, status=None):
         result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'export_start_tasks', 'checkpoint')}
         result['status'] = status or row['phase']
+        if incremental := self.checkpoints.list(row['id']):
+            result['incremental_checkpoints'] = incremental
         if row['checkpoint']:
             checkpoint = json.loads(row['checkpoint'])
             checkpoint.pop('purge_claim', None)
@@ -601,11 +611,38 @@ class Pilot:
                             (json.dumps(receipt), lease))
         return self.public(self.get(lease))
 
+    def grant_upload(self, lease, data, owner):
+        row = self.owned(lease, owner)
+        # A completed request remains inspectable by request key after release.
+        endpoint = self.upload_endpoint if row['phase'] == 'ready' and row['reclaim_on_expiry'] else None
+        return self.checkpoints.grant(lease, data, endpoint)
+
+    def redeem_upload(self, data):
+        if not self.upload_endpoint:
+            raise Rejected('checkpoint_unavailable', 'Incremental uploads are unavailable.', 503)
+        row = self.checkpoints.ticket(data.get('ticket'), redeemed=0)
+        if self.get(row['lease_id'])['phase'] != 'ready':
+            raise Rejected('checkpoint_unavailable', 'The lease is no longer ready for uploads.')
+        return self.checkpoints.redeem(data['ticket'])
+
+    def complete_upload(self, data):
+        row = self.checkpoints.ticket(data.get('ticket'), redeemed=1)
+        released_at = self.get(row['lease_id'])['released_at']
+        return self.checkpoints.complete(data, released_at + CHECKPOINT_RETENTION_SECONDS if released_at else None)
+
+    def checkpoint(self, row, checkpoint_id):
+        if checkpoint_id is not None:
+            if not isinstance(checkpoint_id, str) or not re.fullmatch(r'[a-f0-9]{32}', checkpoint_id):
+                raise Rejected('invalid_checkpoint', 'A checkpoint ID must be 32 lowercase hex characters.', 400)
+            return json.loads(self.checkpoints.get(row['id'], checkpoint_id)['receipt'] or '{}')
+        return json.loads(row['checkpoint'] or '{}')
+
     def set_pin(self, lease, data, owner):
         row = self.owned(lease, owner)
-        checkpoint = json.loads(row['checkpoint'] or '{}')
-        if not checkpoint.get('storage_managed') or row['phase'] != 'released':
-            raise Rejected('checkpoint_not_managed', 'Only a released, managed checkpoint can be pinned.')
+        checkpoint_id = data.get('checkpoint_id')
+        checkpoint = self.checkpoint(row, checkpoint_id)
+        if not checkpoint.get('storage_managed') or (checkpoint_id is None and row['phase'] != 'released'):
+            raise Rejected('checkpoint_not_managed', 'Only an available managed checkpoint can be pinned.')
         if checkpoint.get('purge_claim') or checkpoint.get('purged_at'):
             raise Rejected('checkpoint_expiring', 'This checkpoint has already entered expiry.')
         pinned, reason = data.get('pinned'), data.get('reason')
@@ -616,10 +653,13 @@ class Pilot:
             checkpoint['pin'] = {'reason': reason.strip(), 'at': time.time()}
         else:
             checkpoint.pop('pin', None)
-        self.save_checkpoint(lease, checkpoint)
+        self.save_checkpoint(lease, checkpoint, checkpoint_id)
         return self.public(self.get(lease))
 
-    def save_checkpoint(self, lease, checkpoint):
+    def save_checkpoint(self, lease, checkpoint, checkpoint_id=None):
+        if checkpoint_id is not None:
+            self.checkpoints.save(checkpoint_id, checkpoint)
+            return
         with self.db:
             self.db.execute('UPDATE lease SET checkpoint=? WHERE id=?',
                             (json.dumps(checkpoint), lease))
@@ -627,29 +667,37 @@ class Pilot:
     def claim_expired_checkpoint(self):
         if not self.retention_enabled:
             return {'expiry': None}
-        row = self.db.execute("""SELECT id, export_challenge, checkpoint FROM lease
-            WHERE phase='released' AND json_extract(checkpoint, '$.storage_managed')=1
-              AND json_extract(checkpoint, '$.pin') IS NULL
-              AND json_extract(checkpoint, '$.purged_at') IS NULL
-              AND json_extract(checkpoint, '$.retain_through') <= ?
-              AND NOT EXISTS (SELECT 1 FROM recovery_ticket
-                              WHERE lease_id=lease.id AND expires_at > ?)
-            ORDER BY json_extract(checkpoint, '$.retain_through'), id LIMIT 1""",
+        row = self.db.execute("""WITH artifacts AS (
+            SELECT id AS lease_id, NULL AS checkpoint_id, export_challenge AS challenge, checkpoint AS receipt
+                FROM lease WHERE phase='released'
+            UNION ALL
+            SELECT lease_id, id AS checkpoint_id, id AS challenge, receipt FROM incremental_checkpoint
+        )
+        SELECT * FROM artifacts
+        WHERE json_extract(receipt, '$.storage_managed')=1
+            AND json_extract(receipt, '$.pin') IS NULL
+            AND json_extract(receipt, '$.purged_at') IS NULL
+            AND json_extract(receipt, '$.retain_through') <= ?
+            AND NOT EXISTS (SELECT 1 FROM recovery_ticket
+                            WHERE lease_id=artifacts.lease_id AND expires_at > ?)
+        ORDER BY json_extract(receipt, '$.retain_through'), lease_id, checkpoint_id LIMIT 1""",
                               (time.time(), time.time())).fetchone()
         if row is None:
             return {'expiry': None}
-        checkpoint = json.loads(row['checkpoint'])
+        lease, checkpoint_id = row['lease_id'], row['checkpoint_id']
+        checkpoint = json.loads(row['receipt'])
         if not checkpoint.get('purge_claim'):
             checkpoint['purge_claim'] = uuid.uuid4().hex
             checkpoint['purge_started_at'] = time.time()
-            self.save_checkpoint(row['id'], checkpoint)
-        return {'expiry': {'lease_id': row['id'], 'challenge': row['export_challenge'],
-                           'claim': checkpoint['purge_claim'], 'snapshot': checkpoint['snapshot'],
-                           'path': checkpoint['path']}}
+            self.save_checkpoint(lease, checkpoint, checkpoint_id)
+        return {'expiry': {'lease_id': lease, 'challenge': row['challenge'],
+                           'checkpoint_id': checkpoint_id, 'claim': checkpoint['purge_claim'],
+                           'snapshot': checkpoint['snapshot'], 'path': checkpoint['path']}}
 
     def confirm_checkpoint_expiry(self, data):
         row = self.get(data.get('lease_id'))
-        checkpoint = json.loads(row['checkpoint'] or '{}')
+        checkpoint_id = data.get('checkpoint_id')
+        checkpoint = self.checkpoint(row, checkpoint_id)
         if (not self.retention_enabled or not checkpoint.get('purge_claim')
                 or data.get('claim') != checkpoint['purge_claim']
                 or data.get('snapshot') != checkpoint['snapshot']
@@ -657,32 +705,34 @@ class Pilot:
             raise Rejected('expiry_receipt_mismatch', 'No matching expiry claim and verified removal.')
         if not checkpoint.get('purged_at'):
             checkpoint['purged_at'] = time.time()
-            self.save_checkpoint(row['id'], checkpoint)
+            self.save_checkpoint(row['id'], checkpoint, checkpoint_id)
         return self.public(self.get(row['id']))
 
-    @staticmethod
-    def available_checkpoint(row, now):
-        checkpoint = json.loads(row['checkpoint'] or '{}')
-        if (row['phase'] != 'released' or not checkpoint.get('storage_managed')
+    def available_checkpoint(self, row, now, checkpoint_id):
+        checkpoint = self.checkpoint(row, checkpoint_id)
+        if ((checkpoint_id is None and row['phase'] != 'released')
+                or not checkpoint.get('storage_managed')
                 or checkpoint.get('purge_claim') or checkpoint.get('purged_at')
-                or (not checkpoint.get('pin') and checkpoint['retain_through'] <= now)):
+                or (not checkpoint.get('pin') and checkpoint.get('retain_through', float('inf')) <= now)):
             raise Rejected('checkpoint_unavailable', 'No retained checkpoint is available for this lease.', 404)
         return checkpoint
 
-    def recovery_ticket(self, lease, owner):
+    def recovery_ticket(self, lease, owner, data):
         if not self.recovery_endpoint:
             raise Rejected('recovery_unavailable', 'Checkpoint recovery is unavailable.', 503)
         row = self.owned(lease, owner)
         now = time.time()
-        checkpoint = self.available_checkpoint(row, now)
+        checkpoint_id = data.get('checkpoint_id')
+        checkpoint = self.available_checkpoint(row, now, checkpoint_id)
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode('ascii')).hexdigest()
         expiry = now + RECOVERY_TICKET_SECONDS
         with self.db:
             self.db.execute('DELETE FROM recovery_ticket WHERE expires_at <= ?', (now,))
             self.db.execute('DELETE FROM recovery_ticket WHERE lease_id=? AND redeemed=0', (lease,))
-            self.db.execute('INSERT INTO recovery_ticket (token_hash, lease_id, expires_at) VALUES (?,?,?)',
-                            (token_hash, lease, expiry))
+            self.db.execute('''INSERT INTO recovery_ticket (token_hash, lease_id, expires_at, checkpoint_id)
+                            VALUES (?,?,?,?)''',
+                            (token_hash, lease, expiry, checkpoint_id))
         return {'endpoint': self.recovery_endpoint, 'ticket': token, 'expires_at': expiry,
                 'sha256': checkpoint['sha256']}
 
@@ -696,7 +746,7 @@ class Pilot:
         if not ticket or ticket['redeemed'] or ticket['expires_at'] <= now:
             raise Rejected('ticket_unavailable', 'Recovery ticket is unavailable.', 404)
         row = self.get(ticket['lease_id'])
-        checkpoint = self.available_checkpoint(row, now)
+        checkpoint = self.available_checkpoint(row, now, ticket['checkpoint_id'])
         with self.db:
             self.db.execute('UPDATE recovery_ticket SET redeemed=1, expires_at=? WHERE token_hash=?',
                             (now + RECOVERY_TICKET_SECONDS, token_hash))
@@ -815,7 +865,8 @@ def main():
             delegated_route = len(parts) == 3 and parts[:2] == ['v1', 'delegated-renewal']
             export_route = len(parts) in (2, 3) and parts[:2] == ['v1', 'final-export']
             expiry_route = parts == ['v1', 'checkpoint-expiry']
-            recovery_route = parts == ['v1', 'redeem-checkpoint']
+            recovery_route = len(parts) == 2 and parts[0] == 'v1' and parts[1] in (
+                'redeem-checkpoint', 'redeem-upload', 'complete-upload')
             is_recovery_worker = recovery_token is not None and hmac.compare_digest(
                 supplied, ('Bearer ' + recovery_token).encode('ascii'))
             authorized = (is_recovery_worker if recovery_route
@@ -849,7 +900,10 @@ def main():
                         self.respond(controller.delegated_renew(parts[2], token))
                         return
                     if recovery_route:
-                        self.respond(controller.redeem_recovery_ticket(data))
+                        recovery_operation = {'redeem-checkpoint': controller.redeem_recovery_ticket,
+                                              'redeem-upload': controller.redeem_upload,
+                                              'complete-upload': controller.complete_upload}
+                        self.respond(recovery_operation[parts[1]](data))
                         return
                     if expiry_route:
                         self.respond(controller.confirm_checkpoint_expiry(data) if data
@@ -875,7 +929,10 @@ def main():
                             self.respond(controller.retry_export(parts[2], owner))
                             return
                         if parts[3] == 'checkpoint-recovery':
-                            self.respond(controller.recovery_ticket(parts[2], owner))
+                            self.respond(controller.recovery_ticket(parts[2], owner, data))
+                            return
+                        if parts[3] == 'checkpoint-upload':
+                            self.respond(controller.grant_upload(parts[2], data, owner))
                             return
                         if parts[3] == 'checkpoint-pin':
                             self.respond(controller.set_pin(parts[2], data, owner))

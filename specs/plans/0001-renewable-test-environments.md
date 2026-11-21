@@ -427,7 +427,26 @@ clean. Its first admission was refused while the host capacity observation
 was unavailable, and it started after a fresh capacity check.
 
 Stable still needs dedicated scoped capture and backup transports,
-incremental checkpoints, shared reservation coordination, automated agent
+shared reservation coordination, automated agent
 credential issuance, notification delivery, and delegated reviewer holds.
 The staged storage and recovery tests used short-lived operator adapters.
 Broader provider delivery and production approval remain open.
+
+
+### Staging milestone: versioned task checkpoints
+
+Two versions of a live task workspace and its evidence were uploaded using
+the ordinary task credential. Verification downloaded both from encrypted
+Drive before acknowledgement. An interrupted client recovered the first
+receipt by replaying its original request key. A different digest using
+the same key was denied, and a mismatched upload was retried under the
+same version ID.
+
+The owner retrieved an older version while the test VM was active after
+a controller restart. A deliberate failure of the final export left the
+disk held and the last acknowledged version independently recoverable.
+Cleanup of the owned test guest started the 30-day retention window for
+both versions. A staged systemd timer uploaded two archives without
+an inference session. The task runner controls when a consistent archive
+is ready. The unpinned version expired under an accelerated retention
+test while the other version remained restorable.

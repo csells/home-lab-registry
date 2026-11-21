@@ -13,6 +13,7 @@ import time
 import urllib.error
 from pathlib import Path
 
+from checkpoints import object_name
 from client import request
 
 TAG = 'lease-final-export'
@@ -62,14 +63,41 @@ def digest(file):
     return value
 
 
+def store(config, source, filename, challenge, timeout):
+    tag = 'lease-export-' + challenge
+    restic = config['restic_command']
+    limit = config.get('max_archive_bytes', 64 * 1024 ** 2)
+    expected = digest(source)
+    snapshots = json.loads(command_json(restic + ['snapshots', '--tag', tag, '--json'], timeout))
+    if not isinstance(snapshots, list) or len(snapshots) > 1:
+        raise ExportError('The export challenge has ambiguous backup history.')
+    if snapshots:
+        existing, = snapshots
+        if existing['paths'] != ['/' + filename] or not {TAG, tag} <= set(existing['tags']):
+            raise ExportError('The tagged snapshot belongs to a different checkpoint.')
+        snapshot = existing['id']
+    else:
+        upload = command_json(restic + ['backup', '--stdin', '--stdin-filename', filename,
+                                         '--tag', TAG, '--tag', tag, '--json'], timeout, source)
+        summaries = [entry for line in upload.splitlines() if line.strip()
+                     for entry in [json.loads(line)] if entry.get('message_type') == 'summary']
+        if len(summaries) != 1:
+            raise ExportError('Backup did not report one snapshot.')
+        snapshot = summaries[0]['snapshot_id']
+    if not isinstance(snapshot, str) or not re.fullmatch(r'[a-f0-9]{64}', snapshot):
+        raise ExportError('Backup did not return a full snapshot ID.')
+    with tempfile.TemporaryFile() as restored:
+        collect(restic + ['dump', snapshot, '/' + filename], restored, limit, timeout)
+        if digest(restored) != expected:
+            raise ExportError('Downloaded checkpoint differs from the source.')
+    return {'snapshot': snapshot, 'path': '/' + filename, 'sha256': expected}
+
+
 def export(config, job):
     lease, challenge, guest = (job[key] for key in ('lease_id', 'challenge', 'guest_id'))
     if (not re.fullmatch(r'[a-f0-9]{32}', lease) or not re.fullmatch(r'[a-f0-9]{32}', challenge)
             or guest != str(config['guest_id'])):
         raise ExportError('Export job does not match the configured slot.')
-    filename = f'lease-{lease}.tar.gz'
-    tag = 'lease-export-' + challenge
-    restic = config['restic_command']
     limit = config.get('max_archive_bytes', 64 * 1024 ** 2)
     timeout = config.get('command_timeout', 120)
     with tempfile.TemporaryFile() as source:
@@ -78,34 +106,17 @@ def export(config, job):
         if not source.read(1):
             raise ExportError('Capture produced no bytes.')
         source.seek(0)
-        expected = digest(source)
-        snapshots = json.loads(command_json(restic + ['snapshots', '--tag', tag, '--json'], timeout))
-        if not isinstance(snapshots, list) or len(snapshots) > 1:
-            raise ExportError('The export challenge has ambiguous backup history.')
-        if snapshots:
-            snapshot = snapshots[0]['id']
-        else:
-            upload = command_json(restic + ['backup', '--stdin', '--stdin-filename', filename,
-                                             '--tag', TAG, '--tag', tag, '--json'], timeout, source)
-            summaries = [entry for line in upload.splitlines() if line.strip()
-                         for entry in [json.loads(line)] if entry.get('message_type') == 'summary']
-            if len(summaries) != 1:
-                raise ExportError('Backup did not report one snapshot.')
-            snapshot = summaries[0]['snapshot_id']
-        if not isinstance(snapshot, str) or not re.fullmatch(r'[a-f0-9]{64}', snapshot):
-            raise ExportError('Backup did not return a full snapshot ID.')
-        with tempfile.TemporaryFile() as restored:
-            collect(restic + ['dump', snapshot, '/' + filename], restored, limit, timeout)
-            if digest(restored) != expected:
-                raise ExportError('Downloaded checkpoint differs from the source.')
-    return {'outcome': 'verified', 'challenge': challenge, 'snapshot': snapshot,
-            'path': '/' + filename, 'sha256': expected, 'storage_managed': True}
+        receipt = store(config, source, object_name(lease), challenge, timeout)
+    return {'outcome': 'verified', 'challenge': challenge, 'storage_managed': True, **receipt}
 
 
 def expire(config, job):
     lease, challenge, snapshot = (job[key] for key in ('lease_id', 'challenge', 'snapshot'))
+    checkpoint = job.get('checkpoint_id')
     if (not re.fullmatch(r'[a-f0-9]{32}', lease) or not re.fullmatch(r'[a-f0-9]{32}', challenge)
-            or not re.fullmatch(r'[a-f0-9]{64}', snapshot) or job['path'] != f'/lease-{lease}.tar.gz'):
+            or not re.fullmatch(r'[a-f0-9]{64}', snapshot)
+            or (checkpoint is not None and checkpoint != challenge)
+            or job['path'] != '/' + object_name(lease, checkpoint)):
         raise ExportError('Expiry job has an invalid checkpoint identity.')
     restic = config['restic_command']
     timeout = config.get('command_timeout', 120)
@@ -128,7 +139,8 @@ def expire(config, job):
         raise ExportError('Backup storage did not return a valid snapshot inventory.')
     if snapshot in stored_ids:
         raise ExportError('The expired checkpoint is still visible in storage.')
-    return {'lease_id': lease, 'snapshot': snapshot, 'claim': job['claim'], 'absent': True}
+    return {'lease_id': lease, 'checkpoint_id': checkpoint, 'snapshot': snapshot,
+            'claim': job['claim'], 'absent': True}
 
 
 def process(config):

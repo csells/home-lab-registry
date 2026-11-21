@@ -83,6 +83,26 @@ def download_checkpoint(grant, ca, destination):
     return {'path': str(destination), 'sha256': digest.hexdigest()}
 
 
+def upload_checkpoint(endpoint, ca, token_file, route, path, key):
+    with path.open('rb') as archive:
+        checksum = hashlib.file_digest(archive, 'sha256').hexdigest()
+        size = archive.tell()
+        archive.seek(0)
+        grant = request(endpoint, ca, token_file, route,
+                        {'size': size, 'sha256': checksum, 'request_key': key or 'sha256-' + checksum})
+        if 'checkpoint' in grant:
+            return grant['checkpoint']
+        if not re.fullmatch(r'[a-zA-Z0-9_-]{43}', grant['ticket']):
+            raise ValueError('Invalid upload ticket')
+        target = grant['endpoint']
+        opener = verified_opener(target, ca)
+        headers = {'Authorization': 'Bearer ' + grant['ticket'], 'Content-Length': str(size),
+                   'Content-Type': 'application/gzip'}
+        upload = urllib.request.Request(target.rstrip('/') + '/v1/checkpoint', data=archive, headers=headers)
+        with opener.open(upload, timeout=290) as response:
+            return json.load(response)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -99,7 +119,7 @@ def main():
     acquire.add_argument('--ssh-public-key', type=Path, required=True)
     acquire.add_argument('--recipe', default='debian13-amd64')
     acquire.add_argument('--reclaim-on-expiry', action='store_true')
-    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export'):
+    for operation in ('inspect', 'renew', 'release', 'hold', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export', 'checkpoint'):
         command = sub.add_parser(operation)
         command.add_argument('lease')
         if operation == 'renew':
@@ -115,12 +135,17 @@ def main():
             command.add_argument('--duration-seconds', type=int, required=True)
             command.add_argument('--extension-seconds', type=int, required=True)
             command.add_argument('--write-token', type=Path, required=True)
+        elif operation == 'checkpoint':
+            command.add_argument('--archive', type=Path, required=True)
+            command.add_argument('--request-key', help='Defaults to the content digest.')
         elif operation == 'recover':
             command.add_argument('--output', type=Path, required=True)
         elif operation in ('pin', 'retain-failed-export', 'discard-failed-export'):
             command.add_argument('--reason', required=True)
             if operation == 'discard-failed-export':
                 command.add_argument('--confirm-lease', required=True)
+        if operation in ('recover', 'pin', 'unpin'):
+            command.add_argument('--checkpoint-id')
     args = parser.parse_args()
     if args.record and not args.registry_client:
         parser.error('--record requires --registry-client')
@@ -171,15 +196,19 @@ def main():
                     os.link(secret.name, args.write_token)
                 print(json.dumps(grant))
                 return 0
+            elif args.command == 'checkpoint':
+                print(json.dumps(upload_checkpoint(endpoint, args.ca, args.token_file,
+                    route + '/checkpoint-upload', args.archive, args.request_key)))
+                return 0
             elif args.command == 'recover':
                 if args.output.exists() or args.output.is_symlink():
                     raise ValueError('Recovery output already exists')
-                grant = request(endpoint, args.ca, args.token_file, route + '/checkpoint-recovery', {})
+                grant = request(endpoint, args.ca, args.token_file, route + '/checkpoint-recovery', {'checkpoint_id': args.checkpoint_id})
                 print(json.dumps(download_checkpoint(grant, args.ca, args.output)))
                 return 0
             elif args.command in ('pin', 'unpin'):
                 route += '/checkpoint-pin'
-                payload = {'pinned': args.command == 'pin', 'reason': getattr(args, 'reason', None)}
+                payload = {'pinned': args.command == 'pin', 'reason': getattr(args, 'reason', None), 'checkpoint_id': args.checkpoint_id}
         print(json.dumps(request(endpoint, args.ca, args.token_file, route, payload)))
         return 0
     except urllib.error.HTTPError as error:

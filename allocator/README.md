@@ -177,3 +177,30 @@ The owner can issue a task runner a renewal-only credential with
 The runner has no access to task inspection, SSH, artifacts or release.
 It cannot extend a lease past the declared delegation window. Owner renewals
 remain independent and may keep a lease active beyond that window.
+
+
+### Incremental checkpoints
+
+Set `recovery.accept_uploads` in the controller configuration and
+`accept_uploads` in the recovery worker configuration to enable uploads.
+The worker then needs an allocator-only storage adapter that can write
+and verify these snapshots. Leave uploads disabled for a read-only worker.
+
+Have the task runner publish a consistent, immutable workspace archive at
+its declared checkpoint interval. Submit it with
+`checkpoint <id> --archive <archive.tar.gz> --request-key <checkpoint-key>`.
+Use a new key for new bytes and the same key when retrying a transmission.
+When the key is omitted, the client uses the digest. A periodic job can
+submit the current completed archive without creating another snapshot
+for unchanged bytes.
+The controller issues a short-lived grant for the declared size and digest.
+The worker reads the stored archive back before acknowledging the checkpoint.
+A failed upload leaves the existing acknowledged versions available.
+
+Inspect the lease for recent checkpoint IDs, request and verification times,
+and errors. Use `recover <id> --checkpoint-id <version-id> --output <file>`
+with an acknowledged version, including while a failed final export is held.
+Use the same `--checkpoint-id` with `pin` or `unpin` for that version.
+The same 30-day post-release retention policy applies to each version.
+The calling task runner owns archive consistency and checkpoint cadence.
+The pilot does not infer a consistent copy of files while they are changing.
