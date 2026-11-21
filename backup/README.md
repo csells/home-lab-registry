@@ -46,3 +46,10 @@ verification statements and remaining gaps. It serves exactly `/`, `/report.json
 and `/healthz`, never filesystem paths, credentials or backup archives. A separately
 owned authenticated relay may expose it for review; the page does not run tests or
 promote a build when refreshed.
+
+The review server can optionally take `--check /path/to/operator-owned-checks.py`
+and `--origin https://authenticated-review.example`. Its explicit POST action runs
+only that fixed command, admits one job at a time, enforces the configured browser
+origin, and returns bounded status without command output. Refresh remains read-only.
+Use a dedicated disposable staging runtime and the minimum permissions needed by
+those checks; qualification can collect real exports and write temporary staging.
