@@ -18,6 +18,7 @@ from pathlib import Path
 
 
 from checkpoints import Checkpoints, Rejected
+from reservations import Reservations
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -164,21 +165,21 @@ class Capacity:
             raise ValueError('Capacity values must be nonnegative MiB integers')
         return value * MIB
 
-    def check(self):
+    def check(self, reservations=(0, 0), *, require_slot=True, allow_running_slot=False):
         try:
-            observation = self.observe()
+            observation = self.observe(require_slot=require_slot, allow_running_slot=allow_running_slot)
         except (OSError, ValueError, TypeError, KeyError) as error:
             print(f'Capacity observation failed: {type(error).__name__}', flush=True)
             raise Rejected('capacity_unverified', 'Fresh host capacity could not be verified. Try again later.', 503) from error
 
         for value, minimum, code, label in (
-            (observation['memory_after_start'], self.memory_floor, 'host_memory_headroom', 'memory'),
-            (observation['storage_after_writes'], self.storage_floor, 'host_storage_headroom', 'storage'),
+            (observation['memory_after_start'] - reservations[0] * MIB, self.memory_floor, 'host_memory_headroom', 'memory'),
+            (observation['storage_after_writes'] - reservations[1] * MIB, self.storage_floor, 'host_storage_headroom', 'storage'),
         ):
             if value < minimum:
-                raise Rejected(code, f'Starting this slot would leave {max(0, value) // MIB} MiB of host {label} headroom; {minimum // MIB} MiB is required.')
+                raise Rejected(code, f'This request would leave {max(0, value) // MIB} MiB of host {label} headroom; {minimum // MIB} MiB is required.')
 
-    def observe(self):
+    def observe(self, *, require_slot=True, allow_running_slot=False):
         node = '/nodes/' + urllib.parse.quote(self.provider.node, safe='')
         def read(path):
             return self.provider.call(path, token=self.token)
@@ -198,7 +199,8 @@ class Capacity:
         if not self.protected_ids <= guests.keys():
             raise ValueError('Protected guests are missing from the capacity view')
         slot = guests[self.provider.guest_id]
-        if slot['name'] != self.provider.name or slot['status'] != 'stopped' or slot.get('template'):
+        if (slot['name'] != self.provider.name or slot.get('template')
+                or (slot['status'] != 'stopped' and not allow_running_slot)):
             raise ValueError('The capacity view does not match the stopped pilot guest')
         reserved = sum(self.positive(row['maxmem']) for row in guests.values()
                        if row['status'] == 'running' or str(row['vmid']) in self.protected_ids)
@@ -206,10 +208,12 @@ class Capacity:
         if available > total or not storage['active'] or not storage['enabled']:
             raise ValueError('Invalid node memory or inactive slot storage')
         available_storage = self.positive(storage['avail'])
+        pending_slot_memory = self.positive(slot['maxmem']) if require_slot and slot['status'] == 'stopped' else 0
+        slot_disk_reserve = self.positive(slot['maxdisk']) if require_slot else 0
         return {
             'memory_after_start': min(available, total - reserved)
-            - self.reserved_memory - self.positive(slot['maxmem']),
-            'storage_after_writes': available_storage - self.positive(slot['maxdisk']),
+            - self.reserved_memory - pending_slot_memory,
+            'storage_after_writes': available_storage - slot_disk_reserve,
         }
 
     @staticmethod
@@ -274,6 +278,7 @@ class Pilot:
             raise ValueError('Recovery needs an HTTPS endpoint and a dedicated worker credential')
         self.provider = Proxmox(config['proxmox'])
         self.capacity = Capacity(self.provider, config['capacity'])
+        self.reservations = Reservations(self.db, self.check_reservation_capacity)
         self.user = config['guest_user']
         self.host_key = public_key(config['guest_host_key'])
         policy = config.get('reclamation', {})
@@ -284,6 +289,10 @@ class Pilot:
         self.grace_seconds = policy.get('grace_seconds', 7200)
         if type(self.grace_seconds) is not int or self.grace_seconds < 1:
             raise ValueError('Grace must be a positive duration')
+
+    def check_reservation_capacity(self, reservations):
+        active = self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone()
+        self.capacity.check(reservations, require_slot=bool(active), allow_running_slot=bool(active))
 
     def update(self, lease, phase, upstream=None, address=None, prior_tasks=None):
         with self.db:
@@ -420,7 +429,7 @@ class Pilot:
         if self.provider.status() != 'stopped':
             raise Rejected('slot_unavailable', 'The pilot guest is already running outside the controller.')
         prior = json.dumps(sorted(self.provider.recent_tasks('starting')))
-        self.capacity.check()
+        self.capacity.check(self.reservations.totals())
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
@@ -821,6 +830,16 @@ def main():
             or recovery_token == verifier or recovery_token in task_tokens.values()):
         raise ValueError('Use a distinct recovery worker credential')
 
+    reservation_tokens = {owner: Path(path).read_text().strip()
+                          for owner, path in config.get('reservation_tokens', {}).items()}
+    all_tokens = [*task_tokens.values(), *reservation_tokens.values()]
+    all_tokens.extend(token for token in (recovery_token, verifier) if token)
+    if (any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner) for owner in reservation_tokens)
+            or any(not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', value)
+                   for value in reservation_tokens.values())
+            or len(set(all_tokens)) != len(all_tokens)):
+        raise ValueError('Configure separate credentials for reservation principals')
+
     class CheckedServer(HTTPServer):
         next_check = 0
         last_warning = None
@@ -869,12 +888,19 @@ def main():
                 'redeem-checkpoint', 'redeem-upload', 'complete-upload')
             is_recovery_worker = recovery_token is not None and hmac.compare_digest(
                 supplied, ('Bearer ' + recovery_token).encode('ascii'))
-            authorized = (is_recovery_worker if recovery_route
+            reservation_route = len(parts) >= 2 and parts[:2] == ['v1', 'capacity-reservations']
+            reservation_owner = next((principal for principal, value in reservation_tokens.items()
+                if hmac.compare_digest(supplied, ('Bearer ' + value).encode('ascii'))), None)
+            authorized = (reservation_owner is not None if reservation_route
+                          else is_recovery_worker if recovery_route
                           else is_verifier if export_route or expiry_route else owner is not None)
             if not authorized and not (delegated_route and self.command == 'POST'):
                 self.respond({'code': 'unauthorized'}, 401)
                 return
             try:
+                if reservation_route and self.command == 'GET' and len(parts) == 2:
+                    self.respond({'reservations': controller.reservations.list(reservation_owner)})
+                    return
                 if export_route and self.command == 'GET':
                     if len(parts) == 2:
                         self.respond(controller.next_export())
@@ -893,6 +919,12 @@ def main():
                         raise Rejected('invalid_body', 'Provide a JSON object.', 400)
                     if export_route and len(parts) == 3:
                         self.respond(controller.export_result(parts[2], data))
+                        return
+                    if reservation_route and len(parts) == 2:
+                        self.respond(controller.reservations.reserve(reservation_owner, data))
+                        return
+                    if reservation_route and len(parts) == 4 and parts[3] == 'release':
+                        self.respond(controller.reservations.release(reservation_owner, parts[2]))
                         return
                     if delegated_route:
                         header = self.headers.get('Authorization', '')

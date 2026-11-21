@@ -204,3 +204,31 @@ Use the same `--checkpoint-id` with `pin` or `unpin` for that version.
 The same 30-day post-release retention policy applies to each version.
 The calling task runner owns archive consistency and checkpoint cadence.
 The pilot does not infer a consistent copy of files while they are changing.
+
+
+### Shared capacity reservations
+
+Configure `reservation_tokens` with a separate credential for each
+orchestration principal. Use `reserve-capacity` with a request key,
+purpose, memory in MiB, and storage in MiB. Use `list-reservations` and
+`release-reservation <id>` with the same principal. A reservation
+persists until that principal releases it. Task credentials cannot
+modify reservations.
+
+Both lease admission and reservations check live host capacity and the
+same SQLite ledger. Requests that exceed protected headroom are rejected
+immediately with a memory or storage reason. Multiple hosts and deployers
+that act outside this allocator still need a shared admission authority.
+
+### Restricting backup access
+
+Run `restic_scope.py` on the storage side with a private configuration
+that sets `role` to `read`, `write`, or `expire` and binds the underlying
+`restic_command` to a dedicated encrypted allocator repository. Use
+separate credentials for the three command endpoints. Keep repository
+secrets on the storage side. The writer can upload and verify checkpoints.
+The reader can dump a verified allocator archive. The expiry credential
+can remove an exact managed snapshot and check the repository index.
+Set the exporter's optional `retention_command` to the expiry endpoint.
+The standalone restic role uses a trusted deployment configuration.
+Never allow a caller to supply that configuration or repository argument.

@@ -146,11 +146,31 @@ def main():
                 command.add_argument('--confirm-lease', required=True)
         if operation in ('recover', 'pin', 'unpin'):
             command.add_argument('--checkpoint-id')
+    reserve = sub.add_parser('reserve-capacity')
+    reserve.add_argument('--request-key', required=True)
+    reserve.add_argument('--purpose', required=True)
+    reserve.add_argument('--memory-mib', type=int, default=0)
+    reserve.add_argument('--storage-mib', type=int, default=0)
+    sub.add_parser('list-reservations')
+    release = sub.add_parser('release-reservation')
+    release.add_argument('reservation')
     args = parser.parse_args()
     if args.record and not args.registry_client:
         parser.error('--record requires --registry-client')
     try:
         endpoint = args.endpoint or discover(args.registry_client, args.record)
+        if args.command in ('reserve-capacity', 'list-reservations', 'release-reservation'):
+            route, payload = '/v1/capacity-reservations', None
+            if args.command == 'reserve-capacity':
+                payload = {'request_key': args.request_key, 'purpose': args.purpose,
+                           'memory_mib': args.memory_mib, 'storage_mib': args.storage_mib}
+            elif args.command == 'release-reservation':
+                if not re.fullmatch('[a-f0-9]{32}', args.reservation):
+                    raise ValueError('Invalid reservation ID')
+                route += '/' + args.reservation + '/release'
+                payload = {}
+            print(json.dumps(request(endpoint, args.ca, args.token_file, route, payload)))
+            return 0
         route, payload = '/v1/leases', None
         if args.command == 'acquire':
             key = ' '.join(args.ssh_public_key.read_text().split()[:2])

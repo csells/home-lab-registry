@@ -118,7 +118,7 @@ def expire(config, job):
             or (checkpoint is not None and checkpoint != challenge)
             or job['path'] != '/' + object_name(lease, checkpoint)):
         raise ExportError('Expiry job has an invalid checkpoint identity.')
-    restic = config['restic_command']
+    restic = config.get('retention_command') or config['restic_command']
     timeout = config.get('command_timeout', 120)
     tag = 'lease-export-' + challenge
     def observed(*filters):

@@ -450,3 +450,21 @@ both versions. A staged systemd timer uploaded two archives without
 an inference session. The task runner controls when a consistent archive
 is ready. The unpinned version expired under an accelerated retention
 test while the other version remained restorable.
+
+
+### Staging milestone: shared reservations and storage roles
+
+Two orchestration principals used the same durable ledger as task admission.
+A real reservation caused the controller to refuse a guest start before
+and after restart. Releasing it allowed the start. Two concurrent requests
+that could not both fit produced one reservation and one immediate storage
+rejection. A second principal could neither inspect nor release the first
+principal's reservation. This qualifies the fixed host and controller.
+
+A separate encrypted Drive repository was initialized using the backup
+service's existing storage interface. The scoped writer stored and verified
+a task archive, the scoped reader downloaded it, and only the expiry role
+could remove it. The expiry role confirmed the snapshot was gone. The
+role test used a temporary operator transport against the dedicated
+repository. Stable still needs durable authenticated connections to
+these roles and a narrowly scoped cold-capture provider.
