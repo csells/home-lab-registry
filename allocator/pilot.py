@@ -64,10 +64,10 @@ class Proxmox:
             urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=self.context), NoRedirect())
         self.name, self.snapshot = config['guest_name'], config['snapshot']
 
-    def call(self, route, fields=None):
+    def call(self, route, fields=None, *, token=None):
         data = None if fields is None else urllib.parse.urlencode(fields).encode()
         request = urllib.request.Request(self.base + route, data=data,
-                                         headers={'Authorization': 'PVEAPIToken=' + self.token})
+                                         headers={'Authorization': 'PVEAPIToken=' + (token or self.token)})
         with self.opener.open(request, timeout=5) as response:
             return json.load(response)['data']
 
@@ -128,6 +128,84 @@ class Proxmox:
         return None
 
 
+MIB = 1024 ** 2
+
+
+class Capacity:
+    def __init__(self, provider, config):
+        self.provider = provider
+        self.token = Path(config['token_file']).read_text().strip()
+        if not self.token or self.token.split('=', 1)[0] == provider.identity:
+            raise ValueError('Use a separate read-only Proxmox capacity token')
+        self.storage = config['storage']
+        self.memory_floor = self.bytes(config['minimum_memory_mib'])
+        self.storage_floor = self.bytes(config['minimum_storage_mib'])
+        self.reserved_memory = self.bytes(config['other_reserved_memory_mib'])
+        self.protected_ids = {str(int(value)) for value in config['protected_guest_ids']}
+        if not self.protected_ids or self.provider.guest_id in self.protected_ids:
+            raise ValueError('List protected guests separately from the pilot slot')
+
+    @staticmethod
+    def bytes(value):
+        if type(value) is not int or value < 0:
+            raise ValueError('Capacity values must be nonnegative MiB integers')
+        return value * MIB
+
+    def check(self):
+        try:
+            observation = self.observe()
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            print(f'Capacity observation failed: {type(error).__name__}', flush=True)
+            raise Rejected('capacity_unverified', 'Fresh host capacity could not be verified. Try again later.', 503) from error
+
+        for value, minimum, code, label in (
+            (observation['memory_after_start'], self.memory_floor, 'host_memory_headroom', 'memory'),
+            (observation['storage_after_writes'], self.storage_floor, 'host_storage_headroom', 'storage'),
+        ):
+            if value < minimum:
+                raise Rejected(code, f'Starting this slot would leave {max(0, value) // MIB} MiB of host {label} headroom; {minimum // MIB} MiB is required.')
+
+    def observe(self):
+        node = '/nodes/' + urllib.parse.quote(self.provider.node, safe='')
+        def read(path):
+            return self.provider.call(path, token=self.token)
+        memory = read(node + '/status')['memory']
+        rows = read('/cluster/resources?type=vm')
+        storage = read(node + '/storage/' + urllib.parse.quote(self.storage, safe='') + '/status')
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError('Invalid Proxmox resource inventory')
+        guests = {}
+        for row in rows:
+            if row.get('node') != self.provider.node:
+                continue
+            guest_id = str(row['vmid'])
+            if guest_id in guests or row['status'] not in ('running', 'stopped'):
+                raise ValueError('Duplicate guest or unobservable guest state')
+            guests[guest_id] = row
+        if not self.protected_ids <= guests.keys():
+            raise ValueError('Protected guests are missing from the capacity view')
+        slot = guests[self.provider.guest_id]
+        if slot['name'] != self.provider.name or slot['status'] != 'stopped' or slot.get('template'):
+            raise ValueError('The capacity view does not match the stopped pilot guest')
+        reserved = sum(self.positive(row['maxmem']) for row in guests.values()
+                       if row['status'] == 'running' or str(row['vmid']) in self.protected_ids)
+        total, available = self.positive(memory['total']), self.positive(memory['available'])
+        if available > total or not storage['active'] or not storage['enabled']:
+            raise ValueError('Invalid node memory or inactive slot storage')
+        available_storage = self.positive(storage['avail'])
+        return {
+            'memory_after_start': min(available, total - reserved)
+            - self.reserved_memory - self.positive(slot['maxmem']),
+            'storage_after_writes': available_storage - self.positive(slot['maxdisk']),
+        }
+
+    @staticmethod
+    def positive(value):
+        if type(value) is not int or value <= 0:
+            raise ValueError('Expected a positive byte count')
+        return value
+
+
 class Pilot:
     def __init__(self, config):
         self.db = sqlite3.connect(config['database'])
@@ -152,6 +230,7 @@ class Pilot:
                 if column not in columns:
                     self.db.execute(f'ALTER TABLE lease ADD COLUMN {column} {definition}')
         self.provider = Proxmox(config['proxmox'])
+        self.capacity = Capacity(self.provider, config['capacity'])
         self.user = config['guest_user']
         self.host_key = public_key(config['guest_host_key'])
 
@@ -259,8 +338,9 @@ class Pilot:
             raise Rejected('capacity_exhausted', 'The single pilot slot is already reserved.')
         if self.provider.status() != 'stopped':
             raise Rejected('slot_unavailable', 'The pilot guest is already running outside the controller.')
-        lease = uuid.uuid4().hex
         prior = json.dumps(sorted(self.provider.recent_tasks('starting')))
+        self.capacity.check()
+        lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
                 (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key)

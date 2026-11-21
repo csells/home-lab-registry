@@ -316,8 +316,8 @@ reset, and reacquisition. An old lease release left a later lease untouched.
 A missed renewal marked the lease overdue and kept the guest available for
 renewal. An unauthenticated request and a read of a protected guest were denied.
 
-Remaining for the Linux slice: live host admission and registry projection, a
-supported client transport with credential issuance, and incremental export and restore. The agreed grace, retention and hold policy
+Remaining for the Linux slice: shared reservation discovery and registry projection,
+a supported client transport with credential issuance, and incremental export and restore. The agreed grace, retention and hold policy
 still needs to be implemented and exercised before automatic reclamation.
 
 The pilot now journals a pre-dispatch view of recent tasks. When the provider
@@ -337,3 +337,12 @@ own key and rejected the previous key after rollback. SSH strict host
 verification continued across a DHCP address change. This was a staging
 harness over a private operator transport; fresh agent discovery and client
 credential issuance remain separate qualification.
+
+The pilot checks live Proxmox memory, configured guest commitments, and
+datastore headroom with a separate read-only token before dispatching a start.
+Configured protected guests count toward commitments even when stopped.
+Rejections for insufficient memory, insufficient storage, incomplete
+inventory, and an unauthorized capacity read were tested against the real
+host. Each left the lease journal and provider start history unchanged.
+The pilot does not yet allocate across hosts or automatically account for
+reservations held outside its ledger.
