@@ -7,12 +7,12 @@
 <main id="content">
 <section class="page-heading"><div><p class="eyebrow">YOUR CONTROL ROOM</p><h1>Make yourself at home.</h1><p class="intro">Open a machine. Check a service. Know what needs attention.</p></div><div class="refresh-block"><button id="refresh" class="button secondary">↻ Refresh</button><span id="updated">Connecting to the lab…</span></div></section>
 <section class="network-audit" aria-label="IP reservation audit"><p id="address-audit" role="status">IP reservation audit: not published yet. Audits run on demand from orca.</p></section>
-<section class="inventory-accuracy" aria-label="Inventory accuracy">
-<div class="accuracy-heading"><div><h2>Inventory accuracy</h2><p id="accuracy-summary" role="status">Waiting for verified inventory…</p></div><button id="reconcile" class="button secondary">Reconcile now</button></div>
-<p id="reconcile-status" role="status"></p><details id="accuracy-details" hidden><summary>Discrepancies and unverified checks</summary><p id="accuracy-scope"></p><div id="accuracy-findings"></div></details>
-</section>
-<nav aria-label="Inventory views"><button id="machines-tab" aria-pressed="true">Machines <span id="machine-count">—</span></button><button id="services-tab" aria-pressed="false">Services <span id="service-count">—</span></button><button id="backups-tab" aria-pressed="false">Backups <span id="backup-count">—</span></button><button id="map-tab" aria-pressed="false">Resources</button><button id="leases-tab" aria-pressed="false" title="Current leases" hidden>Leases <span id="lease-count">—</span></button></nav>
+<nav aria-label="Inventory views"><button id="machines-tab" aria-pressed="true">Machines <span id="machine-count">—</span></button><button id="discrepancies-tab" aria-pressed="false" aria-controls="discrepancies-panel">Discrepancies <span id="discrepancy-count" aria-live="polite">—</span></button><button id="services-tab" aria-pressed="false">Services <span id="service-count">—</span></button><button id="backups-tab" aria-pressed="false">Backups <span id="backup-count">—</span></button><button id="map-tab" aria-pressed="false">Resources</button><button id="leases-tab" aria-pressed="false" title="Current leases" hidden>Leases <span id="lease-count">—</span></button></nav>
 <div id="error" role="alert" hidden></div>
+<section id="discrepancies-panel" class="inventory-accuracy" aria-labelledby="discrepancies-title" hidden>
+<div class="accuracy-heading"><div><h2 id="discrepancies-title">Discrepancies</h2><p id="accuracy-summary" role="status">Waiting for verified inventory…</p></div><button id="reconcile" class="button secondary">Reconcile now</button></div>
+<p id="reconcile-status" role="status"></p><div id="accuracy-details" hidden><p id="accuracy-scope"></p><div id="accuracy-findings"></div></div>
+</section>
 <div id="inventory-panel">
 <section class="inventory-tools" aria-label="Inventory controls"><div class="inventory-title"><h2 id="title">Machines</h2><p id="view-description">Your hardware, with every way in.</p></div><div class="search-tools"><label class="search-field"><span class="sr-only">Search</span><input id="search" type="search" placeholder="Find a machine…" autocomplete="off"></label><label><span class="sr-only">Filter by host</span><select id="host"><option value="">All hosts</option></select></label></div></section>
 <section id="health-filters" class="filter-row" aria-label="Health filters"></section><p id="summary" class="inventory-summary" aria-live="polite">Loading inventory…</p>

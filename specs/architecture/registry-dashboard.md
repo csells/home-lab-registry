@@ -120,9 +120,10 @@ It reports guest mismatches, records for review and incomplete coverage separate
 An unverified collector produces a coverage warning. Missing-guest findings
 require a fresh complete report. **Reconcile now** reloads catalog metadata and
 reconnects to the current collector reports. Results flow through browser SSE.
-The inventory panel shows the comparison summary and any discrepancies or
-unverified checks. Machine cards show the hardware facts. Authenticated API
-consumers can retrieve the complete observed inventory.
+The Discrepancies tab shows the comparison summary, discrepancies and
+unverified checks. Its badge counts discrepancies across the lab independently
+of the Machines and Services filters. Machine cards show the hardware facts.
+Authenticated API consumers can retrieve the complete observed inventory.
 
 [`TestGuestStreamInitialChangeAndQuiet`](../../agent/guest_stream_test.go),
 [`InventoryStreamTests`](../../dashboard/test_inventory_stream.py) and

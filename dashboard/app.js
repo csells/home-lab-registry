@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const views = ['machines','services','backups','map','leases'];
+const views = ['machines','discrepancies','services','backups','map','leases'];
 if (location.pathname === '/leases') history.replaceState(null, '', '/' + location.search + '#leases');
 const initialView = location.hash.slice(1);
 let data={machines:[],services:[],backups:[]},view=views.includes(initialView)?initialView:'machines',filter='all',busy=false,offset=0,copying=0;
@@ -104,7 +104,6 @@ function machineCard(r){const c=el('article','card machine-card');c.dataset.id=r
 function serviceCard(r){const c=el('article','card service-card');c.dataset.id=r.id;c.append(cardHeader(r,false));const body=el('div','service-body');if(r.deployment)body.append(el('p','service-description',r.deployment));const links=el('div','service-links');for(const [label,value]of Object.entries(r.endpoints||{})){const u=safeUrl(value);if(!u)continue;if(['localhost','127.0.0.1','[::1]'].includes(u.hostname)){links.append(el('p','no-endpoint',label+' is local to '+r.host));continue}links.append(link('Open '+label+' ↗',u.href,'button secondary'))}if(!links.children.length)links.append(el('p','no-endpoint','No browser endpoint registered.'));body.append(links);for(const a of r.access||[]){const credentials=el('div','credential-line'),user=el('div','username');user.append(el('span','username-label','Username'),el('div','username-value',a.username||(a.username_required===false?'Not required':'Not recorded')));credentials.append(user);if(a.password_available)credentials.append(copyPassword(r,a,el('span')));body.append(credentials)}const tags=el('div','capabilities');for(const t of r.capabilities||[])tags.append(el('span','capability',t));body.append(tags);c.append(body);const foot=el('div','card-foot'),b=el('button','text-button','View '+r.host+' →');b.onclick=()=>{switchView('machines');$('host').value=r.host;render()};foot.append(b);c.append(foot);if(r.kind!=='backup')c.append(backup(r));else c.append(el('p','service-body',r.health?.evidence||'No backup result recorded.'));return c}
 function render(){
  disposeGraph();
- const machine=view==='machines',isBackup=view==='backups',map=view==='map',items=map?[...data.machines,...data.services]:data[view];
  for (const v of views) {
    const button = $(v+'-tab'), selected = view === v;
    if (selected && !button.hidden && button.getAttribute('aria-pressed') !== 'true') {
@@ -116,10 +115,13 @@ function render(){
  }
  $('machine-count').textContent=data.machines.length;$('service-count').textContent=data.services.length;$('backup-count').textContent=data.backups.length;
  const leases = view === 'leases';
+ const discrepancies = view === 'discrepancies';
  const enteringLeases = leases && $('lease-panel').hidden;
- $('inventory-panel').hidden = leases;
+ $('inventory-panel').hidden = leases || discrepancies;
  $('lease-panel').hidden = !leases;
+ $('discrepancies-panel').hidden = !discrepancies;
  $('updated').hidden = leases;
+ $('updated').textContent=data.fetched_at?'Updated '+new Date(data.fetched_at*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'Connecting to the lab…';
  if (leases) {
    if (enteringLeases) {
      refreshVisible();
@@ -127,12 +129,17 @@ function render(){
    }
    return;
  }
+ if (discrepancies) {
+   refreshVisible();
+   return;
+ }
+ const machine=view==='machines',isBackup=view==='backups',map=view==='map',items=map?[...data.machines,...data.services]:data[view];
  $('title').textContent=map?'Resources':machine?'Machines':isBackup?'Backups':'Services';
  $('view-description').textContent=map?'Physical machines, their VMs and containers, and the services they run.':machine?'Physical hosts and virtual environments. Stopped states are labeled with their observation time.':isBackup?'Scheduled jobs handled by the central backup service.':'Registered applications and infrastructure. Health reports do not imply every service is running.';
  $('search').placeholder=map?'Find a machine or service…':machine?'Find a machine…':isBackup?'Find a backup job…':'Find a service…';
  const selected=$('host').value,hosts=[...new Set(items.map(r=>r.host))].sort();$('host').replaceChildren(new Option('All hosts',''),...hosts.map(h=>new Option(h,h)));if(hosts.includes(selected))$('host').value=selected;
  const controls=document.createDocumentFragment();for(const state of ['all',...statuses]){const label=state==='all'?'All':machine?({healthy:'Reachable',unhealthy:'Check failed',unknown:'Unknown',running:'Running',stale:'Stale',stopped:'Stopped',running:'Running'}[state]):state[0].toUpperCase()+state.slice(1);const n=state==='all'?items.length:items.filter(r=>health(r)===state).length;const b=el('button','stat',label);b.append(el('span','count',n));b.dataset.filter=state;b.setAttribute('aria-pressed',String(filter===state));b.onclick=()=>{filter=state;render()};controls.append(b)}$('health-filters').replaceChildren(controls);
- const q=$('search').value.toLowerCase(),host=$('host').value,rows=items.filter(r=>(filter==='all'||health(r)===filter)&&(!host||r.host===host)&&[r.name,r.host,r.id,...r.capabilities].join(' ').toLowerCase().includes(q));const rank={unhealthy:0,stale:1,unknown:2,healthy:3,running:3,stopped:4};rows.sort((a,b)=>rank[health(a)]-rank[health(b)]||a.name.localeCompare(b.name));$('summary').textContent=rows.length+' of '+items.length+' '+(map?'resources':view);$('updated').textContent=data.fetched_at?'Updated '+new Date(data.fetched_at*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'Connecting to the lab…';
+ const q=$('search').value.toLowerCase(),host=$('host').value,rows=items.filter(r=>(filter==='all'||health(r)===filter)&&(!host||r.host===host)&&[r.name,r.host,r.id,...r.capabilities].join(' ').toLowerCase().includes(q));const rank={unhealthy:0,stale:1,unknown:2,healthy:3,running:3,stopped:4};rows.sort((a,b)=>rank[health(a)]-rank[health(b)]||a.name.localeCompare(b.name));$('summary').textContent=rows.length+' of '+items.length+' '+(map?'resources':view);
  const cards=$('cards');cards.className=map?'':machine?'machines':'services';cards.setAttribute('aria-label',map?'Resources':machine?'Machines':isBackup?'Backups':'Services');const root=document.createDocumentFragment();if(!map)for(const r of rows)root.append(machine?machineCard(r):serviceCard(r));if(!rows.length)root.append(el('p','empty-results','No '+(map?'resources':view)+' match these filters.'));cards.replaceChildren(root);if(map&&rows.length)disposeGraph=ResourceGraph.mount(cards,items.map(r=>({...r,name:r.display_name||r.name,kind:r.kind==='machine'?r.machine_type:'service',status:health(r)})),{matching:new Set(rows.map(r=>r.id))});queueMicrotask(refreshVisible);
 }
 async function refresh(){if(busy||document.hidden)return;busy=true;$('refresh').disabled=true;try{const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});if(!response.ok)throw Error('failed');data=await response.json();$('leases-tab').hidden=!data.lease_review_enabled;if(data.lease_review_enabled && view!=='leases')LeaseHistory.refreshCounts();if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}if(data.server_time)offset=data.server_time-Date.now()/1000;$('error').hidden=!data.error;$('error').textContent=data.error||'';showAddressAudit(data.address_audit);showAccuracy(data.inventory_accuracy);if(!copying&&!$('cards').contains(document.activeElement))render();}catch{$('error').hidden=false;$('error').textContent='Unable to refresh. Displayed readings may be stale.';}finally{busy=false;$('refresh').disabled=false}}
@@ -183,12 +190,15 @@ function hostInventory(machine){
  return panel;
 }
 function showAccuracy(a){
+ const count=$('discrepancy-count');
  const summary=$('accuracy-summary');
  const scope=$('accuracy-scope');
  const findings=$('accuracy-findings');
  const details=$('accuracy-details');
  findings.replaceChildren();
  if(!a){
+  if(count.textContent!=='—')count.textContent='—';
+  count.classList.remove('has-errors');
   summary.textContent='Inventory verification unavailable.';
   scope.textContent='';
   details.hidden=true;
@@ -208,6 +218,8 @@ function showAccuracy(a){
  }
  const unverified=visibleFindings.filter(f=>f.category==='coverage').length;
  const discrepancies=visibleFindings.length-unverified;
+ if(count.textContent!==String(discrepancies))count.textContent=String(discrepancies);
+ count.classList.toggle('has-errors',discrepancies>0);
  const result=stale?'Inventory needs a refresh':a.pending?'Checking coverage':
   discrepancies?discrepancies+' '+(discrepancies===1?'discrepancy':'discrepancies'):
   unverified||a.coverage_status!=='verified'?'No confirmed discrepancies':'No discrepancies';

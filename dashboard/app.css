@@ -47,3 +47,4 @@ nav{flex-wrap:nowrap;column-gap:20px;overflow-x:auto}nav button{flex:none;white-
 .accuracy-group h3{font-size:1rem;margin:16px 0 6px}
 
 #leases-tab[hidden], #inventory-panel[hidden], #lease-panel[hidden], #updated[hidden] { display: none; }
+#discrepancy-count.has-errors { background: #fbe9e9; color: var(--red); }
