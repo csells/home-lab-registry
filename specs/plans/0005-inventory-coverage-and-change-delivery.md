@@ -24,3 +24,6 @@ and [scope boundary](archive/0003-inventory-reconciliation.md#boundaries) carry 
 Keep change delivery deterministic. Observations inform discrepancy reports.
 Retirement and resource deletion require independent ownership verification
 through the authority responsible for the deployment.
+
+[Plan 0006](0006-dashboard-health-review.md) tracks the review corrections to
+manual comparison, catalog freshness and health delivery.

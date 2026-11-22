@@ -6,11 +6,10 @@ subscription: a cached initial report, content-change events, and 60-second fres
 heartbeats. No scheduled dashboard guest-list GETs occur. Resource streaming remains
 demand-driven. Browser inventory updates use Server-Sent Events.
 
-The collector's existing local hypervisor sampling remains at its configured interval
-(default 30 seconds); this change removes central fleet polling, not that local sampling.
-An idle subscriber triggers no additional hypervisor reads. OS-native lifecycle event
-collection is not implemented. **Reconcile now** reloads registry metadata and reconnects
-to the collectors' current caches; it does not force a hypervisor rescan or launch an agent.
+Collectors sample their local hypervisor at the configured interval, normally
+30 seconds. Enrolled native event sources can also wake a collector. An idle
+subscriber triggers no additional hypervisor reads. **Reconcile now** reloads
+registry metadata and reconnects to the collectors' current cached reports.
 The dashboard subscribes to authenticated registry catalog changes. The dashboard
 reports catalog feed loss independently from collector coverage and resumes after
 the connection recovers. **Refresh** requests an authoritative catalog read.

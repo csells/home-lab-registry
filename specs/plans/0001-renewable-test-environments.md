@@ -487,3 +487,12 @@ still needs authenticated provider operations and recovery. Windows
 and physical-device adapters, wider pool enrollment, in-place resize of active
 leases, and task grants for model and Bazel services remain open. The current
 voice binding returned the service endpoint and relies on its own authorization.
+
+### Initialize the managed Linux workspace before declaring readiness
+
+The dashboard health qualification found that the fixed Linux recipe can reach
+ready without the directory used for final capture. An untouched lease then
+holds its disk for export review even though no task files exist. Prepare the
+canonical workspace with the task account's ownership before reporting ready.
+Keep missing or redirected workspace paths as errors during capture. Verify
+renewal and verified release of a newly acquired guest whose task writes nothing.

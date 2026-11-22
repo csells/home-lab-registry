@@ -1,8 +1,8 @@
 # Dashboard health and reconciliation corrections
 
-Status — active. Review of the staged dashboard, health publisher, and collector
-found eight defects. Delivery requires the full candidate in disposable staging,
-with live dependencies and separate approval for promotion.
+Status — staged. The review found eight defects in the dashboard, health
+publisher, and collector. Runtime revision `d4f9607` contains the fixes.
+Production promotion remains pending.
 
 | Requirement | Regression evidence to capture |
 | --- | --- |
@@ -21,3 +21,30 @@ Exercise the authenticated dashboard, health publisher, registry, all configured
 collectors, and lease review in the full disposable candidate. Record the source
 revision and results. Compare the preview catalog against live active and retired
 records so old review metadata cannot produce false findings.
+
+## Verification
+
+- Red-green regression tests exercised all eight findings. The dashboard,
+  registry, allocator, backup and address-audit suites passed 132 tests.
+  Collector race tests, the resource graph, and browser comparison fixtures also
+  passed.
+- The complete disposable candidate used the normal registry, collector, and
+  allocator interfaces. A timestamped copy of live catalog records included
+  retirements, and all six configured collectors reported. No retired record
+  was listed as missing.
+- Mobile and desktop browser verification confirmed health-only updates,
+  catalog and allocator outage recovery, the Leases page, and authoritative
+  Refresh and request-specific Reconcile with browser SSE blocked.
+- A real lease crossed its deadline, then a missing workspace caused an export
+  failure that held the disk. Both findings appeared in the preview. After the
+  workspace was initialized, the retry cleared the finding, released the slot,
+  and produced a downloadable checkpoint that matched its receipt. The
+  [Linux recipe follow-up](0001-renewable-test-environments.md#initialize-the-managed-linux-workspace-before-declaring-readiness)
+  tracks workspace preparation at admission.
+- Transport enforcement and DHCP-change notifications passed focused regression
+  tests. The lab's production addresses stayed in place.
+
+The allocator currently exposes an authenticated issue summary. The dashboard
+shares one viewer-driven read, normally every twenty seconds, and uses its
+existing event stream to deliver changes. A reported deadline can trigger an
+earlier read. The read pauses once the last viewer disconnects.
