@@ -131,7 +131,7 @@ def resume_workspace(endpoint, args):
     # Emit the operation ID before network-dependent restore steps.
     print('Replacement lease ' + lease_id + '; retry with the same request key after interruption.', file=sys.stderr)
     until = time.monotonic() + 120
-    while lease['status'] in ('starting', 'waiting-for-guest-ip') and time.monotonic() < until:
+    while lease['status'] in ('cloning', 'starting', 'waiting-for-guest-ip') and time.monotonic() < until:
         time.sleep(1)
         lease = api('/v1/leases/' + lease_id)
     if lease['status'] != 'ready':

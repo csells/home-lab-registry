@@ -622,7 +622,8 @@ capacity on two independent Proxmox hosts. It rejected oversized requests
 and expired observations immediately. The selected host passed a disposable
 clone, actual task SSH, generation-bound registration and exact teardown. The
 fixture exercised operator provisioning. The shared controller now admits
-prequalified slots on independent Proxmox nodes. Dynamic cloning remains open.
+prequalified slots on independent Proxmox nodes. The on-demand Debian
+profile below uses the same authority.
 
 The existing Apple recipe compiled and ran a native Swift program in a fresh
 Tart clone alongside an existing review VM. XCUITest built and launched an
@@ -663,6 +664,46 @@ with the task inputs. With the predecessor’s slot occupied, the usual resume
 command restored the same acknowledged checkpoint on the other host. A retry
 returned the original replacement and kept the acknowledged recovery point.
 
-The shared controller uses pre-provisioned Linux slots. Arbitrary guest
-shapes and provider-managed cloning, Apple leases, other hardware adapters
-and the wider production rollout remain open.
+The original two-host run used pre-provisioned Linux slots. The on-demand
+profile below extends that design with bounded CPU and RAM sizing.
+
+### Staging milestone: on-demand Debian allocation and deletion
+
+The disposable controller provisioned a fresh Debian guest through a
+dedicated Proxmox pool. An oversized request was refused before cloning.
+The actual guest used its own DHCP lease, pinned task key, two CPUs and
+768 MiB of configured RAM. Restart and request replay preserved its
+clone intent. The worker captured and verified the declared workspace
+before deletion. Independent host-side inventory confirmed physical
+volume removal, and the owner recovered the same bytes after deletion.
+
+The staging run exposed two provider constraints. Proxmox can filter a
+storage listing by permission, and deletion removes the guest-specific
+ACL. The stage now checks its dedicated storage through a read-only
+physical inventory and grants allocation through the dedicated pool.
+The same pool recreated a matching guest, restored its acknowledged
+workspace and returned the same replacement on request replay.
+
+The qualified Linux disk recipe is fixed at 8 GiB. Flexible disk sizing,
+additional dynamic pools, and automatic catalog reconciliation for
+on-demand guests remain open.
+
+### Staging milestone: Apple and CUDA provider groundwork
+
+A disposable Tart guest wrote to a workspace shared from a dedicated
+directory on the actual Mac host. The archive rejected a link that
+escaped the workspace. After the clone was deleted, encrypted Drive
+readback matched the archived bytes. This qualifies a workspace export
+path for Apple guests and leaves their lease integration open.
+
+A fresh Linux CUDA container allocated, wrote and read back GPU memory
+on the registered CUDA host. Its network interfaces were removed before
+boot. The proof used the existing template, protected other running
+guests, and removed the container, disks and reservation afterward.
+CUDA admission and lifecycle through the allocator remain open.
+
+The private model service accepted a catalog read through a temporary
+authenticated relay from the disposable stage. Its service listener stayed
+on loopback and the relay was removed. The build service responded to a
+health check inside its VM. Ordinary task grants for model and build use,
+Windows and physical-device adapters, and wider rollout remain open.

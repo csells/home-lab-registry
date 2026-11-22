@@ -91,9 +91,20 @@ def main():
     parser.add_argument('config', type=Path)
     parser.add_argument('guest')
     parser.add_argument('lease')
+    parser.add_argument('scope', nargs='*')
     args = parser.parse_args()
     try:
-        capture(json.loads(args.config.read_text()), args.guest, args.lease, '/dev/stdout')
+        config = json.loads(args.config.read_text())
+        if config.get('dynamic_source') is True:
+            if (len(args.scope) != 3
+                    or not all(re.fullmatch(r'[a-f0-9-]{36}', value) for value in args.scope[:2])
+                    or not re.fullmatch(r'[A-Za-z0-9-]+:[0-9]+/vm-[0-9]+-disk-[0-9]+\.raw', args.scope[2])
+                    or not re.fullmatch(r'[a-f0-9]{32}', args.lease)):
+                raise ValueError('Invalid dynamic capture source identity.')
+            config['source_command'] = config['source_command'] + ['read-dynamic', args.lease, *args.scope]
+        elif args.scope:
+            raise ValueError('A fixed capture does not accept dynamic source parameters.')
+        capture(config, args.guest, args.lease, '/dev/stdout')
     except (OSError, EOFError, subprocess.SubprocessError, RuntimeError, TypeError, ValueError, KeyError) as error:
         print(f'Cold capture failed: {error}', file=sys.stderr)
         return 1

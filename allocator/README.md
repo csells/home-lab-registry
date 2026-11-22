@@ -477,3 +477,35 @@ operator reservations, use `reserve-capacity --slot SLOT`; requests without
 The exporter uses the lease's recorded slot to select the capture command.
 Only a verified retained checkpoint permits reset. A blocked slot continues to
 own its lease while an independent host can admit work or finish cleanup.
+
+### On-demand Debian clones
+
+A slot can materialize one disposable QEMU guest at a time from an enrolled
+template. Keep its VM ID reserved for that scope. Use a dedicated Proxmox
+pool, a distinct local directory storage and a clean, pinned Debian DHCP
+template. The template should contain the task user, an SSH configuration
+that uses the task key file, and QEMU Guest Agent. The qualified profile
+adjusts CPU and RAM within configured bounds while retaining the enrolled
+raw disk size.
+
+Add a `dynamic` object to the slot. It declares the pool, template ID, name,
+hardware UUID and boot volume, default and maximum CPU/RAM/disk, and an
+`inventory_command` for the exact enrolled storage scope. Enroll the mutation
+token on the pool. The guest-specific ACL disappears when Proxmox deletes a
+VM, so the pool grant must remain valid after release. Grant template clone,
+pool allocation and configuration, scoped storage, and the existing bridge
+separately. Use a distinct audit-only token for capacity.
+
+Configure the exporter slot with `dynamic_capture: true`. Its restricted
+`export_dynamic_disk.pl` command checks the lease-derived name, hardware UUID,
+generation, pinned raw file and stopped state under the Proxmox lock.
+The helper's inventory invocation exposes only the enrolled VM directory.
+Keep this independent physical listing: a Proxmox API listing can omit files
+when the caller lacks the volume permission.
+
+The controller persists intent before submitting clone, start, stop and
+delete. A missing acknowledgment is reconciled against uniquely matching
+provider task history. A verified checkpoint must precede ordinary
+deletion. Release is acknowledged after the provider reports success and
+the guest, pool membership and physical volumes are absent. The owner can
+reuse the retained checkpoint to create a matching replacement.

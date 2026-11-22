@@ -1,6 +1,7 @@
 """Private, single-slot Linux lease pilot. Run on loopback in a disposable VM."""
 import base64
 import binascii
+import copy
 import hashlib
 import hmac
 import json
@@ -22,6 +23,7 @@ from checkpoints import object_name, Checkpoints, Rejected, recoverable, restore
 from capabilities import PLATFORM, RECIPE, match, requirements, validate_bindings
 from credentials import TaskCredentials
 from ledger import Ledger
+from pve_dynamic import DynamicScope
 from reservations import Reservations
 from review import lease_page
 
@@ -41,6 +43,7 @@ PROVIDER_TASK_TYPES = {
     'stopping': 'qmshutdown',
     'export-stopping': 'qmshutdown',
     'resetting': 'qmrollback',
+    'deleting': 'qmdestroy',
 }
 
 
@@ -58,7 +61,7 @@ def public_key(value):
 
 
 class Proxmox:
-    def __init__(self, config):
+    def __init__(self, config, *, bound=True):
         self.base = config['url'].rstrip('/') + '/api2/json'
         url = urllib.parse.urlsplit(config['url'])
         if (url.scheme != 'https' or not url.hostname or url.username or
@@ -75,14 +78,16 @@ class Proxmox:
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=self.context), NoRedirect())
         self.initial_rollback = config.get('initial_rollback')
+        if not bound:
+            return
         self.name, self.snapshot = config['guest_name'], config['snapshot']
         self.uuid, self.volume = config.get('guest_uuid'), config.get('guest_volume')
         if not self.uuid or not self.volume:
             raise ValueError('Pin both the slot hardware UUID and boot volume')
 
-    def call(self, route, fields=None, *, token=None):
+    def call(self, route, fields=None, *, token=None, method=None):
         data = None if fields is None else urllib.parse.urlencode(fields).encode()
-        request = urllib.request.Request(self.base + route, data=data,
+        request = urllib.request.Request(self.base + route, data=data, method=method,
                                          headers={'Authorization': 'PVEAPIToken=' + (token or self.token)})
         with self.opener.open(request, timeout=5) as response:
             return json.load(response)['data']
@@ -141,6 +146,21 @@ class Proxmox:
         snap = urllib.parse.quote(self.snapshot, safe='')
         return self.call(self.guest + '/snapshot/' + snap + '/rollback', {'start': 0})
 
+    def delete(self):
+        if self.status() != 'stopped':
+            raise Rejected('unexpected_guest_state', 'Stop the captured guest before deleting it.')
+        return self.call(self.guest, method='DELETE')
+
+    def ready_host_key(self):
+        try:
+            self.call(self.guest + '/agent/file-read?file=%2Fvar%2Flib%2Fcloud%2Finstance%2Fboot-finished')
+            public = self.call(self.guest + '/agent/file-read?file=%2Fetc%2Fssh%2Fssh_host_ed25519_key.pub')
+        except urllib.error.HTTPError as error:
+            if error.code == 500:
+                return None
+            raise
+        return public_key(' '.join(public['content'].split()[:2]))
+
     def matches_task(self, upid, phase):
         parts = upid.split(':') if isinstance(upid, str) else []
         return (len(parts) == 9 and parts[0] == 'UPID' and parts[1] == self.node
@@ -192,8 +212,9 @@ MIB = 1024 ** 2
 
 
 class Capacity:
-    def __init__(self, provider, config):
+    def __init__(self, provider, config, dynamic=None):
         self.provider = provider
+        self.dynamic = dynamic
         self.token = Path(config['token_file']).read_text().strip()
         if not self.token or self.token.split('=', 1)[0] == provider.identity:
             raise ValueError('Use a separate read-only Proxmox capacity token')
@@ -211,15 +232,15 @@ class Capacity:
             raise ValueError('Capacity values must be nonnegative MiB integers')
         return value * MIB
 
-    def read_observation(self, *, require_slot=True, allow_running_slot=False):
+    def read_observation(self, *, require_slot=True, allow_running_slot=False, shape=None):
         try:
-            return self.observe(require_slot=require_slot, allow_running_slot=allow_running_slot)
+            return self.observe(require_slot=require_slot, allow_running_slot=allow_running_slot, shape=shape)
         except (OSError, ValueError, TypeError, KeyError) as error:
             print(f'Capacity observation failed: {type(error).__name__}', flush=True)
             raise Rejected('capacity_unverified', 'Fresh host capacity could not be verified. Try again later.', 503) from error
 
-    def check(self, reservations=(0, 0), *, require_slot=True, allow_running_slot=False):
-        observation = self.read_observation(require_slot=require_slot, allow_running_slot=allow_running_slot)
+    def check(self, reservations=(0, 0), *, require_slot=True, allow_running_slot=False, shape=None):
+        observation = self.read_observation(require_slot=require_slot, allow_running_slot=allow_running_slot, shape=shape)
         for value, minimum, code, label in (
             (observation['memory_after_start'] - reservations[0] * MIB, self.memory_floor, 'host_memory_headroom', 'memory'),
             (observation['storage_after_writes'] - reservations[1] * MIB, self.storage_floor, 'host_storage_headroom', 'storage'),
@@ -229,7 +250,7 @@ class Capacity:
 
         return observation
 
-    def observe(self, *, require_slot=True, allow_running_slot=False):
+    def observe(self, *, require_slot=True, allow_running_slot=False, shape=None):
         node = '/nodes/' + urllib.parse.quote(self.provider.node, safe='')
         def read(path):
             return self.provider.call(path, token=self.token)
@@ -248,22 +269,31 @@ class Capacity:
             guests[guest_id] = row
         if not self.protected_ids <= guests.keys():
             raise ValueError('Protected guests are missing from the capacity view')
-        slot = guests[self.provider.guest_id]
-        if (slot['name'] != self.provider.name or slot.get('template')
-                or (slot['status'] != 'stopped' and not allow_running_slot)):
-            raise ValueError('The capacity view does not match the stopped pilot guest')
+        slot = guests.get(self.provider.guest_id)
+        if self.dynamic:
+            if slot and (not allow_running_slot or slot.get('template') or
+                         not re.fullmatch(r'lease-[a-f0-9]{32}', slot['name'])):
+                raise ValueError('The reserved dynamic guest ID is unexpectedly occupied')
+            recipe = self.dynamic.bounds
+        else:
+            if (not slot or slot['name'] != self.provider.name or slot.get('template')
+                    or (slot['status'] != 'stopped' and not allow_running_slot)):
+                raise ValueError('The capacity view does not match the stopped pilot guest')
+            recipe = {'memory_mib': self.positive(slot['maxmem']) // MIB,
+                      'disk_mib': self.positive(slot['maxdisk']) // MIB,
+                      'vcpus': self.positive(slot['maxcpu'])}
         reserved = sum(self.positive(row['maxmem']) for row in guests.values()
                        if row['status'] == 'running' or str(row['vmid']) in self.protected_ids)
         total, available = self.positive(memory['total']), self.positive(memory['available'])
         if available > total or not storage['active'] or not storage['enabled'] or storage.get('shared', 1):
             raise ValueError('Invalid node memory or inactive slot storage')
         available_storage = self.positive(storage['avail'])
-        pending_slot_memory = self.positive(slot['maxmem']) if require_slot and slot['status'] == 'stopped' else 0
-        slot_disk_reserve = self.positive(slot['maxdisk']) if require_slot else 0
+        admission = shape or (self.dynamic.default if self.dynamic else recipe)
+        pending_slot_memory = admission['memory_mib'] * MIB if require_slot and (
+            not slot or slot['status'] == 'stopped') else 0
+        slot_disk_reserve = admission['disk_mib'] * MIB if require_slot else 0
         return {
-            'slot_resources': {'memory_mib': self.positive(slot['maxmem']) // MIB,
-                               'disk_mib': self.positive(slot['maxdisk']) // MIB,
-                               'vcpus': self.positive(slot['maxcpu'])},
+            'slot_resources': recipe,
             'memory_after_start': min(available, total - reserved)
             - self.reserved_memory - pending_slot_memory,
             'storage_after_writes': available_storage - slot_disk_reserve,
@@ -284,16 +314,27 @@ class Slot:
     provider: Proxmox
     capacity: Capacity
     user: str
-    host_key: str
+    host_key: str | None
+    dynamic: DynamicScope | None = None
 
     @classmethod
     def configure(cls, config):
-        provider = Proxmox(config['proxmox'])
-        capacity = Capacity(provider, config['capacity'])
+        if 'dynamic' in config:
+            provider = Proxmox(config['proxmox'], bound=False)
+            dynamic = DynamicScope(provider, config['dynamic'], config['capacity']['storage'])
+            capacity = Capacity(provider, config['capacity'], dynamic)
+            host_key = None
+        else:
+            provider = Proxmox(config['proxmox'])
+            dynamic = None
+            capacity = Capacity(provider, config['capacity'])
+            host_key = public_key(config['guest_host_key'])
         provider.audit_token = capacity.token
-        return cls(provider, capacity, config['guest_user'], public_key(config['guest_host_key']))
+        return cls(provider, capacity, config['guest_user'], host_key, dynamic)
 
     def identity(self):
+        if self.dynamic:
+            return json.dumps([*self.dynamic.identity(), self.user], sort_keys=True)
         return json.dumps([self.provider.base, self.provider.node, self.provider.guest_id,
                            self.provider.uuid, self.provider.volume, self.provider.name,
                            self.provider.snapshot, self.provider.identity, self.capacity.storage, self.user, self.host_key])
@@ -325,13 +366,11 @@ class Pilot:
                                         token=self.capacity.token)
                 return str(uuid.UUID(vm['vmgenid']))
             if enroll:
-                if any(slot.provider.status() != 'stopped' for slot in self.slots.values()):
-                    raise ValueError('Enrollment requires idle verified slots.')
                 existing = self.db.execute("SELECT 1 FROM sqlite_master WHERE name='lease'").fetchone()
                 if existing and self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone():
                     raise ValueError('Reconcile active lease ownership before enrollment.')
                 for slot in self.slots.values():
-                    slot.provider.verify_clean(slot.provider.initial_rollback)
+                    self.verify_idle_slot(slot)
             self.db.attach(config['ledger_witness'], controller_generation, enroll=enroll)
         self.db.execute('''CREATE TABLE IF NOT EXISTS lease (
             id TEXT PRIMARY KEY, request_key TEXT UNIQUE NOT NULL,
@@ -343,6 +382,7 @@ class Pilot:
             self.db.execute('BEGIN IMMEDIATE')
             for column, definition in (
                 ('slot_id', "TEXT NOT NULL DEFAULT 'primary'"),
+                ('dynamic_guest', 'TEXT'), ('dynamic_host_key', 'TEXT'),
                 ('generation', 'TEXT'), ('clean_rollback', 'TEXT'), ('restore_completed_at', 'REAL'),
                 ('resume_point', 'TEXT'),
                 ('requirements', "TEXT NOT NULL DEFAULT '{}'"),
@@ -434,17 +474,60 @@ class Pilot:
                 if stored and stored[0] != identity:
                     raise ValueError(f'Slot {slot_id} differs from its enrolled identity.')
                 if stored is None:
-                    if slot_id != 'primary':
-                        if slot.provider.status() != 'stopped':
-                            raise ValueError(f'Slot {slot_id} must be stopped at enrollment.')
-                        slot.provider.verify_clean(slot.provider.initial_rollback)
+                    if slot_id != 'primary' or slot.dynamic:
+                        self.verify_idle_slot(slot)
                     self.db.execute('INSERT INTO slot_binding VALUES (?,?)', (slot_id, identity))
+
+    @staticmethod
+    def verify_idle_slot(slot):
+        if slot.dynamic:
+            slot.dynamic.template_config()
+            slot.dynamic.verify_absent()
+        elif slot.provider.status() == 'stopped':
+            slot.provider.verify_clean(slot.provider.initial_rollback)
+        else:
+            raise ValueError('Enrollment requires idle verified slots.')
 
     def slot(self, row):
         try:
             return self.slots[row['slot_id']]
         except KeyError:
             raise Rejected('slot_unavailable', 'This lease has no configured slot binding.') from None
+
+    def provider_for(self, row):
+        slot = self.slot(row)
+        if not slot.dynamic:
+            return slot.provider
+        if not row['dynamic_guest']:
+            raise Rejected('dynamic_outcome_unknown', 'The clone has not established a verifiable identity.')
+        pins = json.loads(row['dynamic_guest'])
+        provider = copy.copy(slot.provider)
+        provider.name = slot.dynamic.name(row['id'])
+        provider.uuid, provider.volume = pins['uuid'], pins['volume']
+        return provider
+
+    def prepare_slot(self, slot_id, slot, requested):
+        memory, storage = self.reservations.totals(slot_id)
+        provider = slot.provider
+        if slot.dynamic and not slot.dynamic.pool:
+            raise Rejected('dynamic_scope_unverified', 'The slot needs its dedicated allocation pool.')
+        shape = slot.dynamic.shape(requested) if slot.dynamic else None
+        observed = slot.capacity.check((memory, storage), shape=shape) if shape else slot.capacity.check((memory, storage))
+        match(requested, observed['slot_resources'], self.dependency_bindings)
+        if slot.dynamic:
+            self.verify_idle_slot(slot)
+            phase, generation, before = 'cloning', None, slot.dynamic.recent_clone_tasks()
+        else:
+            if provider.status() != 'stopped':
+                raise Rejected('slot_unavailable', 'The slot is running outside the controller.')
+            last = self.db.execute("""SELECT clean_rollback FROM lease
+                WHERE slot_id=? AND clean_rollback IS NOT NULL ORDER BY rowid DESC LIMIT 1""",
+                (slot_id,)).fetchone()
+            provider.verify_clean(last[0] if last else provider.initial_rollback)
+            phase, generation, before = 'starting', provider.generation(), provider.recent_tasks('starting')
+        return (observed['memory_after_start'] - memory * MIB,
+                observed['storage_after_writes'] - storage * MIB, slot_id, phase, generation,
+                json.dumps(sorted(before)))
 
     def check_reservation_capacity(self, reservations, slot_id):
         if slot_id not in self.slots:
@@ -460,28 +543,13 @@ class Pilot:
             if slot_id in busy:
                 refused[slot_id] = Rejected('capacity_exhausted', 'The slot already has an active lease.')
                 continue
-            provider = slot.provider
             try:
-                memory, storage = self.reservations.totals(slot_id)
-                observed = slot.capacity.check((memory, storage))
-                match(requested, observed['slot_resources'], self.dependency_bindings)
-                if provider.status() != 'stopped':
-                    raise Rejected('slot_unavailable', 'The slot is running outside the controller.')
-                last = self.db.execute("""SELECT clean_rollback FROM lease
-                    WHERE slot_id=? AND clean_rollback IS NOT NULL ORDER BY rowid DESC LIMIT 1""",
-                    (slot_id,)).fetchone()
-                provider.verify_clean(last[0] if last else provider.initial_rollback)
-                generation = provider.generation()
-                prior = json.dumps(sorted(provider.recent_tasks('starting')))
+                available.append(self.prepare_slot(slot_id, slot, requested))
             except Rejected as error:
                 refused[slot_id] = error
             except (OSError, KeyError, ValueError, TypeError) as error:
                 print(f'Slot {slot_id} could not be verified: {type(error).__name__}', flush=True)
                 refused[slot_id] = Rejected('capacity_unverified', 'The provider could not be verified.', 503)
-            else:
-                available.append((observed['memory_after_start'] - memory * MIB,
-                                  observed['storage_after_writes'] - storage * MIB,
-                                  slot_id, generation, prior))
         if available:
             return min(available)[2:]
         if len(self.slots) == 1:
@@ -495,7 +563,10 @@ class Pilot:
         dependencies = sorted(self.dependency_bindings)
         for slot_id, slot in self.slots.items():
             try:
-                slot.provider.verified_config()
+                if slot.dynamic:
+                    slot.dynamic.template_config()
+                else:
+                    slot.provider.verified_config()
                 observation = slot.capacity.read_observation(allow_running_slot=True)
             except (Rejected, OSError, KeyError, ValueError, TypeError) as error:
                 print(f'Slot {slot_id} capabilities unverified: {getattr(error, "code", type(error).__name__)}', flush=True)
@@ -532,12 +603,12 @@ class Pilot:
 
     def verify_generation(self, row):
         self.db.verify()
-        if not row['generation'] or self.slot(row).provider.generation() != row['generation']:
+        if not row['generation'] or self.provider_for(row).generation() != row['generation']:
             raise Rejected('slot_reconciliation_required', 'Provider generation differs from the recorded lease. Hold for operator reconciliation.')
 
     def dispatch(self, lease, phase, *, recorded=False):
         row = self.get(lease)
-        provider = self.slot(row).provider
+        provider = self.provider_for(row)
         self.verify_generation(row)
         if not recorded:
             prior = json.dumps(sorted(provider.recent_tasks(phase)))
@@ -546,7 +617,8 @@ class Pilot:
         # provider task to this intent. With zero or multiple matches, hold.
         self.verify_generation(self.get(lease))
         operation = {'starting': provider.start, 'stopping': provider.shutdown,
-                     'export-stopping': provider.shutdown, 'resetting': provider.reset}[phase]
+                     'export-stopping': provider.shutdown, 'resetting': provider.reset,
+                     'deleting': lambda: self.delete_dynamic(row, provider)}[phase]
         task = operation()
         if not provider.matches_task(task, phase):
             raise Rejected('operation_outcome_unknown', 'Proxmox returned no matching task identifier. The slot remains held.')
@@ -555,7 +627,7 @@ class Pilot:
     def recover_task(self, row):
         if row['prior_tasks'] is None:
             return row
-        provider = self.slot(row).provider
+        provider = self.provider_for(row)
         prior = set(json.loads(row['prior_tasks']))
         new = provider.recent_tasks(row['phase']) - prior
         if len(new) != 1:
@@ -567,15 +639,17 @@ class Pilot:
         phase = row['phase']
         if phase == 'released':
             return self.public(row)
-        provider = self.slot(row).provider
-        if phase in ('starting', 'stopping', 'export-stopping', 'resetting'):
+        if phase == 'cloning':
+            return self.inspect_clone(row)
+        provider = self.provider_for(row)
+        if phase in ('starting', 'stopping', 'export-stopping', 'resetting', 'deleting'):
             if not row['upstream']:
                 row = self.recover_task(row)
                 if not row['upstream']:
                     return self.public(row, 'outcome-unknown')
             if not provider.task(row['upstream']):
                 return self.public(row, phase)
-        if phase != 'released' and phase != 'resetting':
+        if phase not in ('resetting', 'deleting'):
             self.verify_generation(row)
         if phase == 'starting':
             if provider.status() != 'running':
@@ -592,8 +666,16 @@ class Pilot:
                 raise Rejected('missing_lease_key', 'The lease has no task SSH key. The slot remains held.')
             # Replaying this fixed-path write installs the same key for the
             # same lease. The guest is not handed out until it succeeds.
+            dynamic_key = None
+            if self.slot(row).dynamic:
+                dynamic_key = provider.ready_host_key()
+                if not dynamic_key:
+                    return self.public(row, 'waiting-for-guest-ip')
             provider.install_guest_key(row['ssh_key'], lease)
-            row = self.update(lease, 'ready', address=address)
+            with self.db:
+                self.db.execute("UPDATE lease SET phase='ready',upstream=NULL,prior_tasks=NULL,address=?,"
+                                "dynamic_host_key=? WHERE id=?", (address, dynamic_key, lease))
+            row = self.get(lease)
         elif phase == 'stopping':
             if provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The guest did not stop. The slot remains held.')
@@ -608,20 +690,10 @@ class Pilot:
             provider.verify_clean(row['upstream'])
             if provider.generation() == row['generation']:
                 raise Rejected('slot_reconciliation_required', 'Rollback has not advanced the slot generation.')
-            released_at = time.time()
-            retention = released_at + CHECKPOINT_RETENTION_SECONDS
-            receipt = json.loads(row['checkpoint']) if row['checkpoint'] else None
-            if receipt:
-                receipt['retain_through'] = retention
-            with self.db:
-                self.db.execute("""UPDATE lease SET phase='released', clean_rollback=upstream, upstream=NULL, address=NULL,
-                    prior_tasks=NULL, checkpoint=?, released_at=? WHERE id=?""",
-                                (json.dumps(receipt) if receipt else None, released_at, lease))
-                self.db.execute("""UPDATE incremental_checkpoint
-                    SET receipt=json_set(receipt, '$.retain_through', ?)
-                    WHERE lease_id=? AND receipt IS NOT NULL""", (retention, lease))
-                self.db.execute('DELETE FROM restore_hold WHERE replacement=?', (lease,))
-            row = self.get(lease)
+            row = self.finish_release(row, row['upstream'])
+        elif phase == 'deleting':
+            self.slot(row).dynamic.verify_absent()
+            row = self.finish_release(row, None)
         elif phase == 'ready':
             power = provider.status()
             address = provider.ip() if power == 'running' else None
@@ -634,8 +706,52 @@ class Pilot:
             status = 'overdue'
         return self.public(row, status)
 
+    def delete_dynamic(self, row, provider):
+        scope = self.slot(row).dynamic
+        if scope.describe(row['id']) != json.loads(row['dynamic_guest']):
+            raise Rejected('dynamic_identity_changed', 'Guest or disk identity changed before deletion.')
+        return provider.delete()
+
+    def inspect_clone(self, row):
+        slot, key = self.slot(row), row['id']
+        scope = slot.dynamic
+        if not row['upstream']:
+            seen = scope.recent_clone_tasks() - set(json.loads(row['prior_tasks']))
+            if len(seen) != 1:
+                return self.public(row, 'outcome-unknown')
+            row = self.update(key, 'cloning', upstream=seen.pop())
+        if not slot.provider.task(row['upstream']):
+            return self.public(row, 'cloning')
+        pins = scope.describe(key)
+        if row['dynamic_guest'] and pins != json.loads(row['dynamic_guest']):
+            raise Rejected('dynamic_identity_changed', 'Provisioned guest identity changed after the clone.')
+        if not row['dynamic_guest']:
+            with self.db:
+                self.db.execute('UPDATE lease SET dynamic_guest=?,generation=? WHERE id=?',
+                                (json.dumps(pins), pins['generation'], key))
+        self.db.verify()
+        scope.set_shape(key, pins, scope.shape(json.loads(row['requirements'])))
+        return self.public(self.dispatch(key, 'starting'))
+
+    def finish_release(self, row, rollback):
+        released_at = time.time()
+        retention = released_at + CHECKPOINT_RETENTION_SECONDS
+        lease = row['id']
+        receipt = json.loads(row['checkpoint']) if row['checkpoint'] else None
+        if receipt:
+            receipt['retain_through'] = retention
+        with self.db:
+            self.db.execute("""UPDATE lease SET phase='released', clean_rollback=?, upstream=NULL, address=NULL,
+                prior_tasks=NULL, checkpoint=?, released_at=? WHERE id=?""",
+                            (rollback, json.dumps(receipt) if receipt else None, released_at, lease))
+            self.db.execute("""UPDATE incremental_checkpoint
+                SET receipt=json_set(receipt, '$.retain_through', ?)
+                WHERE lease_id=? AND receipt IS NOT NULL""", (retention, lease))
+            self.db.execute('DELETE FROM restore_hold WHERE replacement=?', (lease,))
+        return self.get(lease)
+
     def public(self, row, status=None):
-        result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'storage_challenge', 'export_start_tasks', 'checkpoint')}
+        result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'storage_challenge', 'export_start_tasks', 'checkpoint', 'dynamic_guest', 'dynamic_host_key')}
         result['requirements'] = json.loads(row['requirements'])
         result['status'] = status or row['phase']
         requested_bindings = result['requirements'].get('dependencies', [])
@@ -661,7 +777,8 @@ class Pilot:
         if row['address'] and row['phase'] != 'released':
             slot = self.slot(row)
             result['ssh'] = {'host': row['address'], 'user': slot.user,
-                             'host_key_alias': slot.provider.name, 'host_key': slot.host_key}
+                             'host_key_alias': self.provider_for(row).name,
+                             'host_key': row['dynamic_host_key'] if slot.dynamic else slot.host_key}
         return result
 
     def matching_point(self, source, owner, requested_id, replacement_key):
@@ -729,15 +846,22 @@ class Pilot:
             requested = point['requirements']
             encoded = requirements(requested)
         self.db.verify()
-        slot_id, generation, prior = self.select_slot(requested)
+        slot_id, phase, generation, prior = self.select_slot(requested)
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
                 (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements, resume_point, generation, slot_id)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded, json.dumps(point) if point else None, generation, slot_id))
+                            (lease, key, task, seconds, phase, time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded, json.dumps(point) if point else None, generation, slot_id))
             if point:
                 self.db.execute('INSERT INTO restore_hold VALUES (?,?,?)', (lease, point['lease'], point['checkpoint_id']))
+        if phase == 'cloning':
+            self.db.verify()
+            scope = self.slots[slot_id].dynamic
+            task = scope.clone(lease)
+            if not scope.matches_clone(task):
+                raise Rejected('operation_outcome_unknown', 'Clone task cannot be confirmed. The slot remains held.')
+            return self.public(self.update(lease, 'cloning', upstream=task))
         return self.public(self.dispatch(lease, 'starting', recorded=True))
 
     @staticmethod
@@ -854,7 +978,7 @@ class Pilot:
     def request_export(self, lease):
         row = self.get(lease)
         self.verify_generation(row)
-        start_tasks = self.slot(row).provider.slot_start_tasks()
+        start_tasks = self.provider_for(row).slot_start_tasks()
         challenge = uuid.uuid4().hex
         with self.db:
             self.db.execute("""UPDATE lease SET phase='awaiting-export', upstream=NULL,
@@ -898,14 +1022,15 @@ class Pilot:
         if row['reviewer_hold']:
             raise Rejected('lease_held', 'Resolve the designated reviewer hold before discarding this disk.')
         self.check_export_source(row)
-        provider = self.slot(row).provider
-        prior = json.dumps(sorted(provider.recent_tasks('resetting')))
+        provider = self.provider_for(row)
+        phase = 'deleting' if self.slot(row).dynamic else 'resetting'
+        prior = json.dumps(sorted(provider.recent_tasks(phase)))
         # Persist the explicit data disposition and provider intent together.
         with self.db:
-            self.db.execute("""UPDATE lease SET phase='resetting', upstream=NULL, prior_tasks=?,
+            self.db.execute("""UPDATE lease SET phase=?, upstream=NULL, prior_tasks=?,
                 export_disposition=?, hold_mode=NULL, hold_reason=NULL WHERE id=?""",
-                            (prior, decision, lease))
-        return self.public(self.dispatch(lease, 'resetting', recorded=True))
+                            (phase, prior, decision, lease))
+        return self.public(self.dispatch(lease, phase, recorded=True))
 
     def next_export(self):
         row = self.db.execute(
@@ -921,13 +1046,17 @@ class Pilot:
             raise Rejected('export_not_pending', 'This lease is not waiting for a final export.')
         if row['export_failed_at'] and time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS:
             raise Rejected('export_decision_required', 'Export has failed for 24 hours. Owner disposition is required.')
-        return {'lease_id': lease, 'challenge': row['export_challenge'], 'storage_challenge': row['storage_challenge'],
+        reply = {'lease_id': lease, 'challenge': row['export_challenge'], 'storage_challenge': row['storage_challenge'],
                 'slot_id': row['slot_id'], 'guest_id': self.slot(row).provider.guest_id,
                 'requested_at': row['export_requested_at']}
+        if self.slot(row).dynamic:
+            pins = json.loads(row['dynamic_guest'])
+            reply['dynamic_source'] = [pins[k] for k in ('uuid', 'generation', 'volume')]
+        return reply
 
     def check_export_source(self, row):
         self.verify_generation(row)
-        provider = self.slot(row).provider
+        provider = self.provider_for(row)
         if (provider.status() != 'stopped' or
                 provider.slot_start_tasks() != row['export_start_tasks']):
             raise Rejected('export_source_changed', 'The guest start history or power state changed. Preserve its disk for review.')
@@ -1186,14 +1315,14 @@ class Pilot:
 
     def advance_lease(self, row):
         key, phase = row['id'], row['phase']
-        if phase == 'starting':
+        if phase in ('starting', 'cloning'):
             self.inspect(key, row['owner'])
         elif phase == 'ready' and time.time() >= row['deadline'] + self.grace_seconds and 'running' not in (row['hold_mode'], row['reviewer_hold']):
-            if self.slot(row).provider.status() == 'stopped':
+            if self.provider_for(row).status() == 'stopped':
                 self.request_export(key)
             else:
                 self.dispatch(key, 'export-stopping')
-        elif phase in ('export-stopping', 'resetting'):
+        elif phase in ('export-stopping', 'resetting', 'deleting'):
             self.inspect(key, row['owner'])
         elif phase == 'awaiting-export' and row['checkpoint'] and not (row['hold_mode'] or row['reviewer_hold']):
             if not json.loads(row['checkpoint']).get('restore_verified'):
@@ -1202,11 +1331,11 @@ class Pilot:
                     self.db.execute('UPDATE lease SET checkpoint=NULL WHERE id=?', (key,))
                 return
             self.check_export_source(row)
-            self.dispatch(key, 'resetting')
+            self.dispatch(key, 'deleting' if self.slot(row).dynamic else 'resetting')
 
     def release(self, lease, data, owner):
         row = self.owned(lease, owner)
-        if row['phase'] in ('released', 'stopping', 'export-stopping', 'awaiting-export', 'resetting'):
+        if row['phase'] in ('released', 'stopping', 'export-stopping', 'awaiting-export', 'resetting', 'deleting'):
             return self.inspect(lease, owner)
         if row['phase'] != 'ready':
             raise Rejected('lease_not_releasable', 'Inspect the start operation before requesting release.')
@@ -1215,12 +1344,12 @@ class Pilot:
                 raise Rejected('final_export_required', 'Enrolled leases require verified export before reset.')
             if row['hold_mode'] or row['reviewer_hold']:
                 raise Rejected('lease_held', 'Clear the review hold before releasing the guest.')
-            if self.slot(row).provider.status() == 'stopped':
+            if self.provider_for(row).status() == 'stopped':
                 return self.public(self.request_export(lease))
             return self.public(self.dispatch(lease, 'export-stopping'))
         if data.get('discard_disposable_data') is not True:
             raise Rejected('release_requires_disposition', 'Confirm discard of the pilot workspace after saving any required data.', 400)
-        if self.slot(row).provider.status() == 'stopped':
+        if self.provider_for(row).status() == 'stopped':
             return self.public(self.dispatch(lease, 'resetting'))
         return self.public(self.dispatch(lease, 'stopping'))
 

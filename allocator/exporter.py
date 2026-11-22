@@ -65,6 +65,7 @@ def collect(command, output, limit, timeout, source=None, *, stage='storage'):
                     (b'no space left', 'storage full'), (b'permission denied', 'permission denied'),
                     (b'connection refused', 'connection refused'), (b'timed out', 'connection timeout'),
                     (b'slot identity changed', 'slot identity changed'),
+                    (b'stopped-slot source was incomplete', 'stopped disk source was incomplete'),
                     (b'another lease', 'lease identity mismatch'),
                     (b'repository is already locked', 'repository locked'),
                 ) if fragment in diagnostics.lower()), 'unclassified command failure')
@@ -135,13 +136,20 @@ def export(config, job):
     if (not re.fullmatch(r'[a-f0-9]{32}', lease) or not re.fullmatch(r'[a-f0-9]{32}', challenge)
             or not slot or guest != str(slot['guest_id'])):
         raise ExportError('Export job does not match the configured slot.')
+    source = job.get('dynamic_source')
+    if slot.get('dynamic_capture') is True:
+        if (not isinstance(source, list) or len(source) != 3
+                or any(not isinstance(value, str) or not value for value in source)):
+            raise ExportError('Missing enrolled dynamic capture identity.')
+    elif source is not None:
+        raise ExportError('A dynamic guest cannot use a fixed capture command.')
     storage_challenge = job['storage_challenge']
     if not re.fullmatch(r'[a-f0-9]{32}', storage_challenge):
         raise ExportError('Invalid storage operation identity.')
     limit = config.get('max_archive_bytes', 64 * 1024 ** 2)
     timeout = config.get('command_timeout', 120)
     with tempfile.TemporaryFile() as source:
-        capture = slot['capture_command'] + [guest, lease]
+        capture = slot['capture_command'] + [guest, lease] + (job.get('dynamic_source') or [])
         collect(capture, source, limit, timeout, stage='stopped disk capture')
         if not source.read(1):
             raise ExportError('Capture produced no bytes.')

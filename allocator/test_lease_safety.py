@@ -11,6 +11,8 @@ from unittest.mock import Mock, patch
 from checkpoints import Rejected
 from exporter import ExportError, collect, export, store
 from pilot import Pilot, Slot
+from pve_dynamic import DynamicScope
+from workspace_archive import archive_workspace
 from review import lease_page
 
 
@@ -85,6 +87,38 @@ class SafetyTest(unittest.TestCase):
             with self.assertRaisesRegex(ExportError, 'does not match'):
                 export({'guest_id': '97', 'capture_command': ['primary-capture']}, job)
             capture.assert_not_called()
+
+    def test_dynamic_capture_cannot_fall_back_to_a_fixed_command(self):
+        job = {'lease_id': 'a' * 32, 'challenge': 'b' * 32, 'storage_challenge': 'c' * 32,
+               'guest_id': '97', 'slot_id': 'primary',
+               'dynamic_source': ['hardware', 'generation', 'boot-volume']}
+        with patch('exporter.collect') as capture:
+            with self.assertRaisesRegex(ExportError, 'cannot use a fixed'):
+                export({'guest_id': '97', 'capture_command': ['fixed']}, job)
+            capture.assert_not_called()
+
+    def test_failed_physical_inventory_cannot_prove_a_guest_absent(self):
+        provider = Mock(node='node', guest_id='97')
+        provider.call.return_value = []
+        scope = DynamicScope(provider, {
+            'template_id': 98, 'template_name': 'template',
+            'template_uuid': '3bd16a39-a08b-427d-a32f-aeaa6014444b',
+            'template_volume': 'scope:98/base-98-disk-0.raw',
+            'inventory_command': ['inventory'],
+            'default': {'vcpus': 1, 'memory_mib': 512, 'disk_mib': 8192},
+            'maximum': {'vcpus': 4, 'memory_mib': 4096, 'disk_mib': 8192},
+        }, 'scope')
+        with patch('pve_dynamic.subprocess.check_output', return_value=b'{}'):
+            with self.assertRaisesRegex(Rejected, 'inventory was invalid'):
+                scope.verify_absent()
+
+    def test_archive_rejects_links_outside_workspace(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryFile() as archive:
+            workspace = Path(directory).resolve() / 'workspace'
+            workspace.mkdir()
+            (workspace / 'outside').symlink_to('../outside')
+            with self.assertRaisesRegex(ValueError, 'points outside'):
+                archive_workspace(workspace, archive)
 
     def test_stale_generation_cannot_stop_or_rekey_guest(self):
         lease = self.lease()
