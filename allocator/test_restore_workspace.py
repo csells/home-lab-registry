@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from restore_workspace import extract_workspace
+from restore_workspace import extract_legacy_member, extract_workspace
 
 
 class WorkspaceRestoreTest(unittest.TestCase):
@@ -64,6 +64,19 @@ class WorkspaceRestoreTest(unittest.TestCase):
         self.assertNotEqual(self.recover().returncode, 0)
         self.assertEqual(list(self.workspace.iterdir()), [self.workspace/'existing'])
         self.assertEqual(list(self.home.iterdir()), [self.workspace])
+
+    def test_legacy_restore_preserves_regular_data_and_safe_links(self):
+        with tarfile.open(fileobj=io.BytesIO(self.archive), mode='r:gz') as archive:
+            extract_legacy_member(archive, archive.next(), self.home)
+            entry = tarfile.TarInfo('work-link')
+            entry.type = tarfile.SYMTYPE
+            entry.linkname = 'work.txt'
+            extract_legacy_member(archive, entry, self.home)
+            self.assertEqual((self.home/'work-link').read_bytes(), b'hello')
+            entry.name = 'outside-link'
+            entry.linkname = '../outside.txt'
+            with self.assertRaisesRegex(ValueError, 'outside the workspace'):
+                extract_legacy_member(archive, entry, self.home)
 
 
 if __name__ == '__main__':

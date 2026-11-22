@@ -1,10 +1,17 @@
-# Linux lease pilot
+# Environment lease pilot
 
-This controller is a disposable staging experiment with one pre-provisioned
-Proxmox VM. The operator prepares a verified Debian 13 guest and a stopped,
+The disposable staging controller supports restricted Debian pools and one
+qualified Tart macOS/Xcode recipe. A single journal holds admission and release
+intents for all enrolled slots. The fixed Proxmox setup below remains supported.
+See [Apple worker enrollment](#apple-worker-enrollment) for the second provider.
+
+### Fixed Proxmox slot
+
+The original slot uses one pre-provisioned Proxmox VM. The operator prepares
+a verified Debian 13 guest and a stopped,
 clean disk snapshot. The controller receives a TLS-verified Proxmox token
 scoped to that guest for status, guest-agent audit and file writes, power and
-snapshot rollback. It cannot clone arbitrary guests or expand the pool.
+snapshot rollback. This credential is confined to its enrolled guest.
 Before starting the fixed slot the controller checks live Proxmox memory, guest
 commitments, and storage. It preserves the configured host floors and protected
 guests, including protected guests that are currently stopped. Prepare a non-admin
@@ -521,3 +528,34 @@ provider task history. A verified checkpoint must precede ordinary
 deletion. Release is acknowledged after the provider reports success and
 the guest, pool membership and physical volumes are absent. The owner can
 reuse the retained checkpoint to create a matching replacement.
+
+### Apple worker enrollment
+
+Run `tart_worker.py` as the operator-managed Tart account on the Mac. Enroll a
+single stopped template with its configuration digest, a dedicated private
+worker state directory, measured memory and storage floors, and an allowed
+DHCP IPv4 scope. Connect the staging controller through a pinned SSH tunnel.
+The worker HTTP listener binds to loopback. Supply different control and
+capture credentials. Tasks receive neither credential and connect directly to
+the guest with their scoped SSH key.
+
+In the controller's `additional_slots`, supply the local tunnel URL, the
+worker identity, guest user and exact qualified shape under a `tart`
+configuration. The worker records clone, start, stop and delete intents on
+disk. Uncertain operations retain the slot. Before readiness, the clone
+creates its own SSH host identity and installs the task public key. The
+task's declared workspace is the project directory in its dedicated share.
+
+Enroll the matching export slot with `workspace_capture: true` and call
+`tart_capture.py` with the private capture configuration. Capture reads the
+exact stopped workspace. The normal exporter validates the archive and
+checks an encrypted readback before the controller permits deletion.
+
+The trusted launcher runs `prepare_task.py` with a private registry client
+configuration, the registered controller ID, its CA, and a scoped issuer
+credential. The task receives only a private access directory and passes
+its `session.json` to `client.py --session`. It can query `capabilities`
+and request `{"os":"macos","architecture":"arm64"}` through the usual
+`acquire` command. A replacement uses a fresh SSH key. Revoke the task
+credential and clean up its local access files after the task's environment
+has been released or explicitly handed over.

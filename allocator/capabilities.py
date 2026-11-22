@@ -51,8 +51,8 @@ def requirements(value):
     return json.dumps(canonical, sort_keys=True, separators=(',', ':'))
 
 
-def match(requested, capacity, dependencies=()):
-    offered = {**PLATFORM, **capacity, 'gpu': 'none'}
+def match(requested, capacity, dependencies=(), *, platform=PLATFORM):
+    offered = {**platform, **capacity, 'gpu': 'none'}
     for key, wanted in requested.items():
         if key == 'dependencies':
             unavailable = sorted(set(wanted).difference(dependencies))

@@ -130,7 +130,7 @@ def resume_workspace(endpoint, args):
     lease_id = lease['id']
     # Emit the operation ID before network-dependent restore steps.
     print('Replacement lease ' + lease_id + '; retry with the same request key after interruption.', file=sys.stderr)
-    until = time.monotonic() + 120
+    until = time.monotonic() + 220
     while lease['status'] in ('cloning', 'resizing', 'starting', 'waiting-for-guest-ip') and time.monotonic() < until:
         time.sleep(1)
         lease = api('/v1/leases/' + lease_id)
@@ -139,7 +139,8 @@ def resume_workspace(endpoint, args):
     point, ssh = lease['resume_point'], lease['ssh']
     if point['lease'] != args.predecessor:
         raise ValueError('Replacement lineage differs from the requested predecessor')
-    result = {'lease': lease_id, 'workspace': '~/workspace', 'recovery_point': point,
+    workspace = lease.get('workspace')
+    result = {'lease': lease_id, 'workspace': workspace or '~/workspace', 'recovery_point': point,
               'coverage': ('Declared workspace at final capture.' if point['capture'] == 'final'
                            else 'Declared checkpoint only. Later unacknowledged changes are unavailable.')}
     if lease.get('restore_completed_at'):
@@ -163,9 +164,12 @@ def resume_workspace(endpoint, args):
                    '-o', 'StrictHostKeyChecking=yes', '-o', 'GlobalKnownHostsFile=/dev/null',
                    '-o', 'UserKnownHostsFile='+str(pin), '-o', 'HostKeyAlias='+ssh['host_key_alias'],
                    '-i', str(args.identity), ssh['user']+'@'+ip,
-                   shlex.join(['python3','-c',helper,point['sha256'],lease_id])]
+                   shlex.join(['python3','-c',helper,point['sha256'],lease_id] + ([workspace] if workspace else []))]
         with archive.open('rb') as stream:
-            acknowledgment = subprocess.check_output(command, stdin=stream, timeout=180, text=True).strip()
+            try:
+                acknowledgment = subprocess.check_output(command, stdin=stream, timeout=180, text=True).strip()
+            except subprocess.CalledProcessError as error:
+                raise ValueError(f'The replacement guest refused the checkpoint with exit code {error.returncode}.') from error
         if acknowledgment not in ('restored','previously-restored'):
             raise ValueError('The guest did not acknowledge the restore')
     api('/v1/leases/' + lease_id + '/restore-complete', {'sha256': point['sha256']})
@@ -177,9 +181,10 @@ def main():
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--endpoint')
     source.add_argument('--record')
+    source.add_argument('--session', type=Path, help='Task access manifest supplied by an authorized launcher')
     parser.add_argument('--registry-client', type=Path)
-    parser.add_argument('--ca', required=True, type=Path)
-    parser.add_argument('--token-file', required=True, type=Path)
+    parser.add_argument('--ca', type=Path)
+    parser.add_argument('--token-file', type=Path)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('capabilities')
     resume = sub.add_parser('resume')
@@ -187,14 +192,14 @@ def main():
     resume.add_argument('--task', required=True)
     resume.add_argument('--request-key', required=True)
     resume.add_argument('--seconds', type=int, required=True)
-    resume.add_argument('--identity', required=True, type=Path)
+    resume.add_argument('--identity', type=Path)
     resume.add_argument('--checkpoint-id')
     acquire = sub.add_parser('acquire')
     acquire.add_argument('--task', required=True)
     acquire.add_argument('--request-key', required=True)
     acquire.add_argument('--seconds', type=int, required=True)
-    acquire.add_argument('--ssh-public-key', type=Path, required=True)
-    acquire.add_argument('--recipe', default='debian13-amd64')
+    acquire.add_argument('--ssh-public-key', type=Path)
+    acquire.add_argument('--recipe')
     acquire.add_argument('--requirements', type=json.loads, help='Required OS, architecture, GPU, vCPUs, memory_mib, disk_mib or dependencies as JSON')
     acquire.add_argument('--reclaim-on-expiry', action='store_true', help=argparse.SUPPRESS)
     for operation in ('inspect', 'renew', 'release', 'hold', 'assign-reviewer', 'remove-reviewer', 'reviewer-hold', 'override-reviewer', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export', 'checkpoint'):
@@ -247,9 +252,29 @@ def main():
     args = parser.parse_args()
     if args.record and not args.registry_client:
         parser.error('--record requires --registry-client')
+    if args.session and (args.ca or args.token_file or args.registry_client):
+        parser.error('--session supplies its own endpoint, CA and task credential')
+    if not args.session and (not args.ca or not args.token_file):
+        parser.error('Supply --ca and --token-file, or a task --session')
     try:
-        endpoint = args.endpoint or discover(args.registry_client, args.record)
+        if args.session:
+            session = json.loads(args.session.read_text())
+            if session.get('version') != 1 or set(session) != {'version', 'endpoint', 'expires_at'}:
+                raise ValueError('Invalid launcher session manifest')
+            if time.time() >= session['expires_at']:
+                raise ValueError('Task credential expired. Reconnect through the launcher.')
+            endpoint = session['endpoint']
+            parent = args.session.parent
+            args.ca, args.token_file = parent/'ca.pem', parent/'task.token'
+            if args.command == 'acquire' and args.ssh_public_key is None:
+                args.ssh_public_key = parent/'identity.pub'
+            if args.command == 'resume' and args.identity is None:
+                raise ValueError('A replacement requires a new SSH private key.')
+        else:
+            endpoint = args.endpoint or discover(args.registry_client, args.record)
         if args.command == 'resume':
+            if args.identity is None:
+                raise ValueError('Provide the replacement SSH private key.')
             print(json.dumps(resume_workspace(endpoint, args)))
             return 0
         if args.command == 'capabilities':
@@ -282,9 +307,13 @@ def main():
             return 0
         route, payload = '/v1/leases', None
         if args.command == 'acquire':
+            if args.ssh_public_key is None:
+                raise ValueError('Provide a task SSH public key or launcher session.')
             key = ' '.join(args.ssh_public_key.read_text().split()[:2])
             payload = {'task': args.task, 'request_key': args.request_key, 'seconds': args.seconds,
-                       'recipe': args.recipe, 'ssh_public_key': key}
+                       'ssh_public_key': key}
+            if args.recipe is not None:
+                payload['recipe'] = args.recipe
             if args.reclaim_on_expiry:
                 payload['reclaim_on_expiry'] = True
             if args.requirements is not None:

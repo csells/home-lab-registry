@@ -1,8 +1,7 @@
 # Renewable test environments as a home-lab service
 
-Status: in progress. A bounded Linux pilot runs in disposable staging.
-Created 2026-10-19; expanded 2026-11-20 with heterogeneous placement, Apple workers
-and the usage audit. No allocator or provider migration is claimed deployed.
+Status: in progress. A disposable staging allocator runs Linux leases and one
+Tart macOS/Xcode recipe. Production remains on hold.
 
 Context: [vision](../vision/home-lab.md), [current architecture](../architecture/current.md).
 
@@ -226,6 +225,63 @@ Return approved shared voice/model/build bindings rather than duplicating runtim
 Exercise uncommitted-work recovery and evidence retrieval after guest deletion.
 Native clustering or hypervisor replacement needs a separate guest-data preservation
 and authorized cutover plan. Windows/GPU/device adapters remain explicit later work.
+
+### Next milestone: one unattended Apple lease
+
+Keep the qualified Proxmox path available and use the same allocator API and
+durable ledger for one prepared Tart macOS/Xcode recipe in disposable staging.
+The allocator owns admission, renewal, holds, checkpoint receipts and release.
+The registry publishes capabilities and observations. The Tart adapter owns
+guest operations, verifies exact provider identity and reports uncertain outcomes
+without making the capacity available. Use one Apple slot initially and return an
+immediate, actionable rejection if a second request cannot fit.
+
+Use the previously qualified Tart image and give each lease its own task access
+and workspace. Reuse the existing verification and encrypted storage path for
+checkpoint readback, retention and exact release. Place a provider-specific
+operation behind the adapter as the second backend needs it. Preserve the Linux
+workflow and its safety checks through the change.
+
+The BB launcher supplies the discovered allocator endpoint, trust material and
+task-scoped credential. The task agent derives capabilities from the work and
+acquires and renews the environment itself. The operator supplies no host name,
+VM ID, guest credential or cleanup instruction.
+
+- [x] A fresh agent handles an ordinary request to run the iOS simulator tests
+  for a change. It discovers and acquires the recipe, accesses the guest,
+  runs a real test and verifies a checkpoint.
+- [x] Interrupt the task or restart the controller. Verify reconnect or matching
+  replacement from the last acknowledged checkpoint and check that a replay
+  keeps the original operation identity.
+- [x] Verify immediate contention rejection, exact release of the owned clone
+  and workspace, and independent evidence retrieval after release.
+- [x] Record every manual setup, access, recovery and cleanup intervention.
+  The normal path requires zero operator interventions and preserves existing
+  household workloads. Compare the result and elapsed time with the runbook.
+
+Staging has exercised the same allocator API on Linux and one Tart Xcode
+recipe. The Apple lease renewed during cloning, refused a competing request,
+and retained its identity after a controller restart. The project ran a real
+iPhone Simulator UI test. Verified export preceded exact clone and workspace
+deletion. The ordinary task client then restored the acknowledged workspace
+into a fresh Tart clone, verified its unfinished work, replayed the replacement
+request, and recovered the workspace again after deleting that clone.
+
+Separate control and capture credentials refused cross-role access. The
+launcher supplied a scoped access manifest. A fresh BB task chose the Apple
+recipe, passed one real iPhone Simulator UI test and recovered 14 working
+files after release. Independent verification checked the input evidence,
+workspace content and exact cleanup. The task recorded zero operator
+interventions.
+
+In one run, timestamps showed about 172 seconds from accepted lease to the
+test screenshot and 291 seconds to verified release. The prior direct
+Tart harness took about 191 seconds from its pre-clone marker to its screenshot
+record. These runs used different timing boundaries and provide a reference
+for a future repeatable latency benchmark.
+
+Dashboard polish and wider recipe/provider enrollment follow this milestone.
+Production promotion remains on hold.
 
 ## Implementation sequence and acceptance
 

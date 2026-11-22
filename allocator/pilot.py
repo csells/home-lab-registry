@@ -26,6 +26,7 @@ from ledger import Ledger
 from pve_dynamic import DynamicScope
 from reservations import Reservations
 from review import lease_inventory, lease_page
+from tart_backend import APPLE_PLATFORM, APPLE_RECIPE, TartScope
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -46,6 +47,7 @@ PROVIDER_TASK_TYPES = {
     'deleting': 'qmdestroy',
     'resizing': 'resize',
 }
+RENEWABLE_PHASES = ('cloning', 'resizing', 'starting', 'ready')
 
 
 def public_key(value):
@@ -312,14 +314,18 @@ SLOT_ID = re.compile(r'[a-z][a-z0-9-]{0,31}')
 
 @dataclass
 class Slot:
-    provider: Proxmox
-    capacity: Capacity
+    provider: Proxmox | TartScope
+    capacity: Capacity | TartScope
     user: str
     host_key: str | None
     dynamic: DynamicScope | None = None
+    apple: TartScope | None = None
 
     @classmethod
     def configure(cls, config):
+        if 'tart' in config:
+            apple = TartScope(config['tart'])
+            return cls(apple, apple, config['guest_user'], None, apple=apple)
         if 'dynamic' in config:
             provider = Proxmox(config['proxmox'], bound=False)
             dynamic = DynamicScope(provider, config['dynamic'], config['capacity']['storage'])
@@ -334,11 +340,25 @@ class Slot:
         return cls(provider, capacity, config['guest_user'], host_key, dynamic)
 
     def identity(self):
+        if self.apple:
+            return json.dumps([*self.apple.identity(), self.user], sort_keys=True)
         if self.dynamic:
             return json.dumps([*self.dynamic.identity(), self.user], sort_keys=True)
         return json.dumps([self.provider.base, self.provider.node, self.provider.guest_id,
                            self.provider.uuid, self.provider.volume, self.provider.name,
                            self.provider.snapshot, self.provider.identity, self.capacity.storage, self.user, self.host_key])
+
+    @property
+    def recipe(self):
+        return APPLE_RECIPE if self.apple else RECIPE
+
+    @property
+    def platform(self):
+        return APPLE_PLATFORM if self.apple else PLATFORM
+
+    @property
+    def deletes_on_release(self):
+        return self.dynamic is not None or self.apple is not None
 
 
 class Pilot:
@@ -383,6 +403,7 @@ class Pilot:
             self.db.execute('BEGIN IMMEDIATE')
             for column, definition in (
                 ('slot_id', "TEXT NOT NULL DEFAULT 'primary'"),
+                ('recipe', "TEXT NOT NULL DEFAULT 'debian13-amd64'"),
                 ('dynamic_guest', 'TEXT'), ('dynamic_host_key', 'TEXT'),
                 ('generation', 'TEXT'), ('clean_rollback', 'TEXT'), ('restore_completed_at', 'REAL'),
                 ('resume_point', 'TEXT'),
@@ -481,7 +502,9 @@ class Pilot:
 
     @staticmethod
     def verify_idle_slot(slot):
-        if slot.dynamic:
+        if slot.apple:
+            slot.apple.verify_idle()
+        elif slot.dynamic:
             slot.dynamic.template_config()
             slot.dynamic.verify_absent()
         elif slot.provider.status() == 'stopped':
@@ -497,11 +520,13 @@ class Pilot:
 
     def provider_for(self, row):
         slot = self.slot(row)
-        if not slot.dynamic:
+        if not slot.deletes_on_release:
             return slot.provider
         if not row['dynamic_guest']:
             raise Rejected('dynamic_outcome_unknown', 'The clone has not established a verifiable identity.')
         pins = json.loads(row['dynamic_guest'])
+        if slot.apple:
+            return slot.apple.bind(row['id'], pins)
         provider = copy.copy(slot.provider)
         provider.name = slot.dynamic.name(row['id'])
         provider.uuid, provider.volume = pins['uuid'], pins['volume']
@@ -514,8 +539,11 @@ class Pilot:
             raise Rejected('dynamic_scope_unverified', 'The slot needs its dedicated allocation pool.')
         shape = slot.dynamic.shape(requested) if slot.dynamic else None
         observed = slot.capacity.check((memory, storage), shape=shape) if shape else slot.capacity.check((memory, storage))
-        match(requested, observed['slot_resources'], self.dependency_bindings)
-        if slot.dynamic:
+        match(requested, observed['slot_resources'], self.dependency_bindings, platform=slot.platform)
+        if slot.apple:
+            slot.apple.verify_idle()
+            phase, generation, before = 'cloning', None, slot.apple.tasks('clone')
+        elif slot.dynamic:
             self.verify_idle_slot(slot)
             phase, generation, before = 'cloning', None, slot.dynamic.recent_clone_tasks()
         else:
@@ -537,10 +565,12 @@ class Pilot:
             "SELECT 1 FROM lease WHERE slot_id=? AND phase!='released'", (slot_id,)).fetchone()
         self.slots[slot_id].capacity.check(reservations, require_slot=bool(active), allow_running_slot=bool(active))
 
-    def select_slot(self, requested):
+    def select_slot(self, requested, recipe=RECIPE):
         available, refused = [], {}
         busy = {row[0] for row in self.db.execute("SELECT slot_id FROM lease WHERE phase!='released'")}
         for slot_id, slot in self.slots.items():
+            if slot.recipe != recipe:
+                continue
             if slot_id in busy:
                 refused[slot_id] = Rejected('capacity_exhausted', 'The slot already has an active lease.')
                 continue
@@ -553,6 +583,8 @@ class Pilot:
                 refused[slot_id] = Rejected('capacity_unverified', 'The provider could not be verified.', 503)
         if available:
             return min(available)[2:]
+        if not refused:
+            raise Rejected('unsupported_recipe', 'The requested recipe has no enrolled provider.', 422)
         if len(self.slots) == 1:
             raise next(iter(refused.values()))
         details = ', '.join(f'{key}: {error.code}' for key, error in sorted(refused.items()))
@@ -564,19 +596,24 @@ class Pilot:
         dependencies = sorted(self.dependency_bindings)
         for slot_id, slot in self.slots.items():
             try:
-                if slot.dynamic:
+                if slot.apple:
+                    observation = slot.apple.check(allow_running_slot=True)
+                elif slot.dynamic:
                     slot.dynamic.template_config()
+                    observation = slot.capacity.read_observation(allow_running_slot=True)
                 else:
                     slot.provider.verified_config()
-                observation = slot.capacity.read_observation(allow_running_slot=True)
+                    observation = slot.capacity.read_observation(allow_running_slot=True)
             except (Rejected, OSError, KeyError, ValueError, TypeError) as error:
                 print(f'Slot {slot_id} capabilities unverified: {getattr(error, "code", type(error).__name__)}', flush=True)
                 slots.append({'id': slot_id, 'admission': 'unverified'})
                 continue
-            slots.append({'id': slot_id, 'admission': 'reserved' if slot_id in reserved else 'assess_at_acquire',
-                          'capabilities': {**PLATFORM, 'gpu': 'none', **observation['slot_resources'],
+            slots.append({'id': slot_id, 'recipe': slot.recipe,
+                          'admission': 'reserved' if slot_id in reserved else 'assess_at_acquire',
+                          'capabilities': {**slot.platform, 'gpu': 'none', **observation['slot_resources'],
                                            'dependencies': dependencies}})
-        response = {'recipe': RECIPE, 'observed_at': time.time(), 'slots': slots}
+        response = {'recipe': RECIPE, 'recipes': sorted({s.recipe for s in self.slots.values()}),
+                    'observed_at': time.time(), 'slots': slots}
         # Keep the existing one-slot response available to older agent clients.
         if len(slots) == 1:
             if 'capabilities' not in slots[0]:
@@ -617,13 +654,17 @@ class Pilot:
         # Dispatch once. Recovery can only attach a newly observed, matching
         # provider task to this intent. With zero or multiple matches, hold.
         self.verify_generation(self.get(lease))
-        operation = {'starting': provider.start, 'stopping': provider.shutdown,
-                     'export-stopping': provider.shutdown, 'resetting': provider.reset,
-                     'deleting': lambda: self.delete_dynamic(row, provider),
-                     'resizing': lambda: self.resize_dynamic(row)}[phase]
+        operations = {'starting': 'start', 'stopping': 'shutdown', 'export-stopping': 'shutdown',
+                      'resetting': 'reset'}
+        if phase == 'deleting':
+            operation = lambda: self.delete_dynamic(row, provider)
+        elif phase == 'resizing':
+            operation = lambda: self.resize_dynamic(row)
+        else:
+            operation = getattr(provider, operations[phase])
         task = operation()
         if not provider.matches_task(task, phase):
-            raise Rejected('operation_outcome_unknown', 'Proxmox returned no matching task identifier. The slot remains held.')
+            raise Rejected('operation_outcome_unknown', 'The provider returned no matching task identifier. The slot remains held.')
         return self.update(lease, phase, upstream=task)
 
     def recover_task(self, row):
@@ -669,7 +710,7 @@ class Pilot:
             # Replaying this fixed-path write installs the same key for the
             # same lease. The guest is not handed out until it succeeds.
             dynamic_key = None
-            if self.slot(row).dynamic:
+            if self.slot(row).deletes_on_release:
                 dynamic_key = provider.ready_host_key()
                 if not dynamic_key:
                     return self.public(row, 'waiting-for-guest-ip')
@@ -699,7 +740,11 @@ class Pilot:
                 raise Rejected('slot_reconciliation_required', 'Rollback has not advanced the slot generation.')
             row = self.finish_release(row, row['upstream'])
         elif phase == 'deleting':
-            self.slot(row).dynamic.verify_absent()
+            slot = self.slot(row)
+            if slot.apple:
+                slot.apple.verify_idle()
+            else:
+                slot.dynamic.verify_absent()
             row = self.finish_release(row, None)
         elif phase == 'ready':
             power = provider.status()
@@ -714,9 +759,13 @@ class Pilot:
         return self.public(row, status)
 
     def delete_dynamic(self, row, provider):
-        scope = self.slot(row).dynamic
+        slot = self.slot(row)
+        scope = slot.apple or slot.dynamic
         if scope.describe(row['id']) != json.loads(row['dynamic_guest']):
             raise Rejected('dynamic_identity_changed', 'Guest or disk identity changed before deletion.')
+        if slot.apple:
+            disposition = json.loads(row['export_disposition'] or '{}')
+            return provider.delete(discard=disposition.get('mode') == 'discard')
         return provider.delete()
 
     def resize_dynamic(self, row):
@@ -725,9 +774,10 @@ class Pilot:
 
     def inspect_clone(self, row):
         slot, key = self.slot(row), row['id']
-        scope = slot.dynamic
+        scope = slot.apple or slot.dynamic
         if not row['upstream']:
-            seen = scope.recent_clone_tasks() - set(json.loads(row['prior_tasks']))
+            tasks = scope.tasks('clone', key) if slot.apple else scope.recent_clone_tasks()
+            seen = tasks - set(json.loads(row['prior_tasks']))
             if len(seen) != 1:
                 return self.public(row, 'outcome-unknown')
             row = self.update(key, 'cloning', upstream=seen.pop())
@@ -741,6 +791,8 @@ class Pilot:
                 self.db.execute('UPDATE lease SET dynamic_guest=?,generation=? WHERE id=?',
                                 (json.dumps(pins), pins['generation'], key))
         self.db.verify()
+        if slot.apple:
+            return self.public(self.dispatch(key, 'starting'))
         shape = scope.shape(json.loads(row['requirements']))
         disk = scope.set_shape(key, pins, shape)
         if disk > shape['disk_mib']:
@@ -792,7 +844,9 @@ class Pilot:
             slot = self.slot(row)
             result['ssh'] = {'host': row['address'], 'user': slot.user,
                              'host_key_alias': self.provider_for(row).name,
-                             'host_key': row['dynamic_host_key'] if slot.dynamic else slot.host_key}
+                             'host_key': row['dynamic_host_key'] if slot.deletes_on_release else slot.host_key}
+            if slot.apple:
+                result['workspace'] = '/Volumes/My Shared Files/workspace/project'
         return result
 
     def matching_point(self, source, owner, requested_id, replacement_key):
@@ -819,7 +873,7 @@ class Pilot:
             return {'lease': source, 'requested_checkpoint': requested_id, 'checkpoint_id': candidate,
                     'sha256': receipt['sha256'], 'verified_at': receipt['verified_at'],
                     'scope': 'declared workspace', 'capture': 'incremental' if candidate else 'final',
-                    'requirements': json.loads(previous['requirements'])}
+                    'recipe': previous['recipe'], 'requirements': json.loads(previous['requirements'])}
         raise Rejected('checkpoint_unavailable', 'No acknowledged recoverable version remains.', 404)
 
     def acquire(self, data, owner):
@@ -834,8 +888,9 @@ class Pilot:
         ssh_key = public_key(data.get('ssh_public_key'))
         requested = data.get('requirements', {})
         encoded = requirements(requested)
-        if data.get('recipe', RECIPE) != RECIPE:
-            raise Rejected('unsupported_recipe', 'The pilot provides only debian13-amd64.', 422)
+        recipe = data.get('recipe')
+        if recipe is not None and recipe not in (RECIPE, APPLE_RECIPE):
+            raise Rejected('unsupported_recipe', 'Choose a recipe advertised by the allocator.', 422)
         prev = self.db.execute('SELECT * FROM lease WHERE request_key=?', (key,)).fetchone()
         resume_from = data.get('resume_from')
         requested_checkpoint = data.get('checkpoint_id')
@@ -848,7 +903,9 @@ class Pilot:
                 raise Rejected('request_key_conflict', 'This request key identifies another recovery source.')
             if resume_from and 'requirements' not in data:
                 encoded = requirements(point['requirements'])
-            if prev['requirements'] != encoded or prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key or ('reclaim_on_expiry' in data and bool(prev['reclaim_on_expiry']) != reclaim):
+            if ((recipe or prev['recipe']) != prev['recipe'] or prev['requirements'] != encoded
+                    or prev['task'] != task or prev['initial_seconds'] != seconds or prev['ssh_key'] != ssh_key
+                    or ('reclaim_on_expiry' in data and bool(prev['reclaim_on_expiry']) != reclaim)):
                 raise Rejected('request_key_conflict', 'This request key is already bound to different inputs.')
             return self.inspect(prev['id'], owner)
         if not reclaim:
@@ -859,21 +916,27 @@ class Pilot:
                 raise Rejected('not_matching', 'A matching replacement uses the predecessor requirements.', 422)
             requested = point['requirements']
             encoded = requirements(requested)
+            if recipe is not None and recipe != point['recipe']:
+                raise Rejected('not_matching', 'A matching replacement uses the predecessor recipe.', 422)
+            recipe = point['recipe']
+        recipe = recipe or (APPLE_RECIPE if requested.get('os') == 'macos' else RECIPE)
         self.db.verify()
-        slot_id, phase, generation, prior = self.select_slot(requested)
+        slot_id, phase, generation, prior = self.select_slot(requested, recipe)
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
-                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements, resume_point, generation, slot_id)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                            (lease, key, task, seconds, phase, time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded, json.dumps(point) if point else None, generation, slot_id))
+                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements, resume_point, generation, slot_id, recipe)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                            (lease, key, task, seconds, phase, time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded, json.dumps(point) if point else None, generation, slot_id, recipe))
             if point:
                 self.db.execute('INSERT INTO restore_hold VALUES (?,?,?)', (lease, point['lease'], point['checkpoint_id']))
         if phase == 'cloning':
             self.db.verify()
-            scope = self.slots[slot_id].dynamic
+            slot = self.slots[slot_id]
+            scope = slot.apple or slot.dynamic
             task = scope.clone(lease)
-            if not scope.matches_clone(task):
+            matches = task == 'clone:' + lease if slot.apple else scope.matches_clone(task)
+            if not matches:
                 raise Rejected('operation_outcome_unknown', 'Clone task cannot be confirmed. The slot remains held.')
             return self.public(self.update(lease, 'cloning', upstream=task))
         return self.public(self.dispatch(lease, 'starting', recorded=True))
@@ -887,7 +950,7 @@ class Pilot:
         seconds = data.get('seconds')
         self.check_duration(seconds)
         row = self.owned(lease, owner)
-        if row['phase'] not in ('starting', 'ready'):
+        if row['phase'] not in RENEWABLE_PHASES:
             raise Rejected('lease_not_renewable', 'Only starting or ready leases can renew.')
         with self.db:
             self.db.execute('UPDATE lease SET deadline=? WHERE id=?',
@@ -900,7 +963,7 @@ class Pilot:
             with self.db:
                 self.db.execute('DELETE FROM renewal_delegate WHERE lease_id=?', (lease,))
             return {'revoked': True}
-        if row['phase'] not in ('starting', 'ready'):
+        if row['phase'] not in RENEWABLE_PHASES:
             raise Rejected('lease_not_renewable', 'Only a live or starting lease can delegate renewal.')
         duration, extension = data.get('duration_seconds'), data.get('extension_seconds')
         self.check_duration(duration)
@@ -928,7 +991,7 @@ class Pilot:
                 or not hmac.compare_digest(token_hash, delegation['token_hash'])):
             raise Rejected('delegation_unavailable', 'No valid renewal delegation.', 401)
         row = self.get(lease)
-        if row['phase'] not in ('starting', 'ready'):
+        if row['phase'] not in RENEWABLE_PHASES:
             raise Rejected('lease_not_renewable', 'Reclamation has already begun.')
         deadline = max(row['deadline'], min(now + delegation['extension'], delegation['valid_until']))
         with self.db:
@@ -1037,7 +1100,8 @@ class Pilot:
             raise Rejected('lease_held', 'Resolve the designated reviewer hold before discarding this disk.')
         self.check_export_source(row)
         provider = self.provider_for(row)
-        phase = 'deleting' if self.slot(row).dynamic else 'resetting'
+        slot = self.slot(row)
+        phase = 'deleting' if slot.deletes_on_release else 'resetting'
         prior = json.dumps(sorted(provider.recent_tasks(phase)))
         # Persist the explicit data disposition and provider intent together.
         with self.db:
@@ -1068,6 +1132,8 @@ class Pilot:
             scope = self.slot(row).dynamic
             size = scope.shape(json.loads(row['requirements']))['disk_mib']
             reply['dynamic_source'] = [pins[k] for k in ('uuid', 'generation', 'volume')] + [str(size)]
+        elif self.slot(row).apple:
+            reply['workspace_source'] = row['generation']
         return reply
 
     def check_export_source(self, row):
@@ -1347,7 +1413,8 @@ class Pilot:
                     self.db.execute('UPDATE lease SET checkpoint=NULL WHERE id=?', (key,))
                 return
             self.check_export_source(row)
-            self.dispatch(key, 'deleting' if self.slot(row).dynamic else 'resetting')
+            slot = self.slot(row)
+            self.dispatch(key, 'deleting' if slot.deletes_on_release else 'resetting')
 
     def release(self, lease, data, owner):
         row = self.owned(lease, owner)

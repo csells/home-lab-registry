@@ -1,10 +1,11 @@
-"""Install a verified checkpoint in the task user's new Linux workspace."""
+"""Install a verified checkpoint in the task user's declared workspace."""
 import gzip
 import hashlib
 import json
 import os
 import re
 import resource
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -13,6 +14,7 @@ from pathlib import Path
 MAX_ARCHIVE = 64 * 1024 ** 2
 MAX_EXPANDED = 512 * 1024 ** 2
 MAX_MEMBERS = 20000
+APPLE_WORKSPACE = '/Volumes/My Shared Files/workspace/project'
 
 
 def extract_workspace(source, target):
@@ -40,7 +42,10 @@ def extract_tar(tar, target, marker):
             if Path(entry.name) == Path(marker):
                 continue
             if entry.isdir() or entry.isreg() or entry.issym() or entry.islnk():
-                archive.extract(entry, target, filter='data', set_attrs=True)
+                if hasattr(tarfile, 'data_filter'):
+                    archive.extract(entry, target, filter='data', set_attrs=True)
+                else:
+                    extract_legacy_member(archive, entry, target)
             else:
                 raise ValueError('Unsupported file type in checkpoint.')
     # Reserve this exact path before acknowledging that receipt installation can succeed.
@@ -48,15 +53,51 @@ def extract_tar(tar, target, marker):
         pass
 
 
-def restore(digest, lease):
+def inside(root, path):
+    if path.is_absolute() or not (root/path).resolve().is_relative_to(root):
+        raise ValueError('Archive entry or link points outside the workspace.')
+    return root/path
+
+
+def extract_legacy_member(archive, entry, root):
+    """Extract only data on guest Python versions predating tarfile filters."""
+    root = root.resolve(strict=True)
+    path = inside(root, Path(entry.name))
+    if entry.isdir():
+        if path.is_symlink():
+            raise ValueError('Archive directory is redirected.')
+        path.mkdir(parents=True, exist_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if entry.isreg():
+        with archive.extractfile(entry) as source, path.open('xb') as output:
+            shutil.copyfileobj(source, output, length=65536)
+        path.chmod(0o600 | (entry.mode & 0o111))
+    elif entry.issym():
+        link = Path(entry.linkname)
+        if link.is_absolute():
+            raise ValueError('Archive link points outside the workspace.')
+        inside(root, path.parent.relative_to(root)/link)
+        path.symlink_to(link)
+    elif entry.islnk():
+        original = inside(root, Path(entry.linkname))
+        if original.is_symlink() or not original.is_file():
+            raise ValueError('Archive hard link has no earlier regular source.')
+        os.link(original,path)
+
+
+def restore(digest, lease, destination=None):
     if not re.fullmatch('[a-f0-9]{64}', digest) or not re.fullmatch('[a-f0-9]{32}', lease):
         raise ValueError('Invalid restore identity.')
-    home = Path.home()
-    workspace = home / 'workspace'
+    if destination not in (None, APPLE_WORKSPACE):
+        raise ValueError('Invalid declared workspace.')
+    workspace = Path(destination) if destination else Path.home()/'workspace'
+    if not workspace.parent.is_dir() or workspace.parent.is_symlink():
+        raise ValueError('The declared workspace parent is unavailable.')
     marker = '.lease-restore-receipt'
     identity = {'sha256': digest, 'lease': lease}
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(dir=home) as tmp:
+    with tempfile.TemporaryDirectory(dir=workspace.parent) as tmp:
         target = Path(tmp) / 'workspace'
         target.mkdir()
         checksum = hashlib.sha256()

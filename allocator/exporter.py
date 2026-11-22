@@ -137,6 +137,12 @@ def export(config, job):
             or not slot or guest != str(slot['guest_id'])):
         raise ExportError('Export job does not match the configured slot.')
     source = job.get('dynamic_source')
+    workspace = job.get('workspace_source')
+    if slot.get('workspace_capture') is True:
+        if not isinstance(workspace, str) or not re.fullmatch(r'[0-9a-f]{64}', workspace) or source is not None:
+            raise ExportError('Missing exact Apple workspace generation.')
+    elif workspace is not None:
+        raise ExportError('An Apple workspace requires the enrolled capture role.')
     if slot.get('dynamic_capture') is True:
         if (not isinstance(source, list) or len(source) != 4
                 or any(not isinstance(value, str) or not value for value in source)):
@@ -149,7 +155,8 @@ def export(config, job):
     limit = config.get('max_archive_bytes', 64 * 1024 ** 2)
     timeout = config.get('command_timeout', 120)
     with tempfile.TemporaryFile() as source:
-        capture = slot['capture_command'] + [guest, lease] + (job.get('dynamic_source') or [])
+        refs = [workspace] if workspace else (job.get('dynamic_source') or [])
+        capture = slot['capture_command'] + [guest, lease] + refs
         collect(capture, source, limit, timeout, stage='stopped disk capture')
         if not source.read(1):
             raise ExportError('Capture produced no bytes.')
