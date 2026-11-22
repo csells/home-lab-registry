@@ -13,9 +13,10 @@ class RegistryTest(unittest.TestCase):
         headers={'Authorization':'Bearer '+token, 'Content-Type':'application/json'}
         if revision is not None: headers['If-Match']=str(revision)
         req=urllib.request.Request(self.base+path, data=None if body is None else json.dumps(body).encode(), headers=headers, method=method)
-        try: r=urllib.request.urlopen(req)
-        except urllib.error.HTTPError as e: r=e
-        return r.status,json.load(r)
+        try: response = urllib.request.urlopen(req)
+        except urllib.error.HTTPError as error: response = error
+        with response:
+            return response.status, json.load(response)
     def record(self):
         return dict(name='Voice', host='desktop-node', owner='example-owner', capabilities=['tts','stt'], endpoints={'api':'https://example.test'}, lifecycle='active', runbook='https://example.test/runbook', notes='test', dependencies=[])
     def test_access_validation_and_conflicts(self):
@@ -39,6 +40,26 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(len(self.call('GET','/v1/services/voice/history')[1]['history']),3)
         other=make_server(('127.0.0.1',0),self.tmp.name+'/catalog.db','test-reader','test-writer')
         self.assertEqual(other.catalog.get('voice')['revision'],3); other.server_close()
+    def test_change_stream_tracks_only_committed_metadata(self):
+        path = '/v1/catalog/changes'
+        self.assertEqual(self.call('GET', path, token='invalid')[0], 401)
+        req = urllib.request.Request(self.base + path,
+                                     headers={'Authorization': 'Bearer test-reader'})
+        with urllib.request.urlopen(req, timeout=3) as stream:
+            self.assertEqual(stream.headers.get_content_type(), 'application/x-ndjson')
+            self.assertEqual(json.loads(stream.readline()), {'version': 0})
+            self.assertEqual(self.call('PUT', '/v1/services/voice', self.record(), revision=0)[0], 201)
+            self.assertEqual(json.loads(stream.readline()), {'version': 1})
+            observation = {'status': 'healthy', 'evidence': 'test'}
+            self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation)[0], 200)
+            self.assertEqual(self.call('PUT', '/v1/services/voice', self.record(), revision=0)[0], 409)
+            doc = self.record()
+            doc['lifecycle'] = 'retired'
+            self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=1)[0], 200)
+            self.assertEqual(json.loads(stream.readline()), {'version': 2})
+        with urllib.request.urlopen(req, timeout=3) as stream:
+            self.assertEqual(json.loads(stream.readline()), {'version': 2})
+
     def test_health_is_separate_and_expires(self):
         self.call('PUT','/v1/services/voice',self.record(),revision=0)
         self.assertEqual(self.call('GET','/v1/services/voice')[1]['health']['status'],'unknown')

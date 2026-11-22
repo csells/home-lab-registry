@@ -81,6 +81,9 @@ def validate(d):
 class Catalog:
     def __init__(self,path):
         self.path=path;self.presence_verifier=None
+        self.changes = threading.Condition()
+        self.change_subscribers = threading.BoundedSemaphore(16)
+        self.change_version = 0
         with self.db() as db:
             db.executescript('''PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS services (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, document TEXT NOT NULL, updated REAL NOT NULL);
@@ -147,6 +150,9 @@ class Catalog:
             db.execute('INSERT OR REPLACE INTO services VALUES(?,?,?,?)',(id,current+1,value,now))
             db.execute('INSERT INTO history(id,revision,document,actor,updated) VALUES(?,?,?,?,?)',(id,current+1,value,'writer',now))
             db.execute('DELETE FROM health WHERE id=?',(id,))
+        with self.changes:
+            self.change_version += 1
+            self.changes.notify_all()
         return self.get(id)
     def observe(self,id,d,revision=None):
         self.get(id)
@@ -230,6 +236,31 @@ class Handler(BaseHTTPRequestHandler):
         if not 0<length<=65536: raise Problem(413,'Body must be 1..65536 bytes')
         try: return json.loads(self.rfile.read(length))
         except (ValueError,UnicodeError): raise Problem(400,'Invalid JSON')
+    def catalog_changes(self, catalog):
+        if not catalog.change_subscribers.acquire(blocking=False):
+            raise Problem(503, 'Catalog change subscription limit reached')
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/x-ndjson')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Accel-Buffering', 'no')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.close_connection = True
+            last = None
+            while True:
+                with catalog.changes:
+                    changed = catalog.changes.wait_for(
+                        lambda: catalog.change_version != last, timeout=15)
+                    last = catalog.change_version
+                event = {'version': last} if changed else {'heartbeat': True}
+                self.wfile.write((json.dumps(event) + '\n').encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return
+        finally:
+            catalog.change_subscribers.release()
+
     def handle_api(self):
         try:
             u=urlsplit(self.path); parts=u.path.strip('/').split('/'); cat=self.server.catalog
@@ -245,6 +276,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command!='GET' and not writer: raise Problem(403,'Write credential required')
             if self.command=='GET' and u.path=='/v1/export': return self.send(200,cat.export())
             if self.command=='GET' and u.path=='/v1/services': return self.send(200,{'services':cat.listing(parse_qs(u.query))})
+            if self.command=='GET' and u.path=='/v1/catalog/changes': return self.catalog_changes(cat)
             if len(parts)<3 or parts[:2]!=['v1','services'] or not ID.fullmatch(parts[2]): raise Problem(404,'Unknown route')
             id=parts[2]
             if self.command=='GET' and len(parts)==3: return self.send(200,cat.get(id))

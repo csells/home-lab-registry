@@ -122,3 +122,23 @@ audit account and review route were removed.
 
 Remaining follow-up: registry metadata change delivery, OS-native lifecycle
 events, native/cloud presence discovery and deployment-tool registration.
+
+
+## Catalog metadata change candidate
+
+The registry can send a bounded, reader-authenticated change stream. A committed
+catalog edit wakes the dashboard, which reloads current registry records.
+Heartbeats carry no catalog data and do not reload it. Connection and reconnection
+invalidate the dashboard cache so a missed change does not require event replay.
+Health checks and machine presence do not trigger metadata reloads.
+
+Configure `catalog_change_stream: true` in the dashboard reader configuration
+after its registry exposes `GET /v1/catalog/changes` on the trusted HTTPS origin.
+The feature defaults off for older registry versions. Manual reconciliation
+continues to work independently.
+
+A run in the disposable staging VM used an isolated copy of real catalog records
+and the actual lab collector streams. Retiring the copy of an existing staging
+record updated the candidate dashboard without a manual refresh. All six
+configured collectors remained verified. Staging writes used a separately
+generated credential and stayed in the isolated catalog.

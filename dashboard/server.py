@@ -1,5 +1,6 @@
 import base64,hmac,json,pathlib,threading,time,logging
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
+from catalog_updates import subscribe_catalog
 from client import request
 from model import inventory,address_audit_summary
 from reconciliation import reconcile as reconcile_inventory
@@ -13,6 +14,11 @@ def reconcile():
     global STATE,VERSION
     cfg=json.loads((PRIVATE/'reader.json').read_text())
     records=None
+    if cfg.get('catalog_change_stream') is True:
+        def invalidate():
+            CATALOG_REFRESH.set()
+            WAKE.set()
+        threading.Thread(target=subscribe_catalog, args=(cfg, invalidate), daemon=True).start()
     while True:
         WAKE.clear()
         try:
