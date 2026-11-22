@@ -142,3 +142,52 @@ and the actual lab collector streams. Retiring the copy of an existing staging
 record updated the candidate dashboard without a manual refresh. All six
 configured collectors remained verified. Staging writes used a separately
 generated credential and stayed in the isolated catalog.
+
+## Native and externally managed deployment observations
+
+A service can bind to an exact native or external deployment through
+`resources.runtime_binding` with `kind`, `provider`, and `instance`.
+The operator enrolls an observer for that exact binding in the candidate
+registry's `runtime_publishers` configuration. Its credential permits posting
+only to the bound record. A changed or retired binding invalidates the observed
+state and rejects reports from the previous enrollment.
+
+A trusted local observer can use `registry/publish_runtime.py CONFIG --systemd`
+with an exact unit. An external provider adapter uses the same publisher with
+`--state` after verifying the provider-side identity. An observer reports
+`missing` only for an explicit absence. Provider failure, denied access and stale
+data are unverified. Runtime presence is separate from functional service health.
+The registry pushes bounded freshness updates alongside catalog changes.
+
+## Deployment-tool registration
+
+New deployment tooling should call `registry/register_deployment.py` with the
+trusted registry client and a manifest after confirming the provider identity.
+The manifest declares the owner, exact runtime binding, and immutable
+`resources.deployment_generation`. A retry can verify the same active
+generation after an interrupted acknowledgment. A different generation or
+retired record cannot be overwritten. After checking provider teardown, the
+same tool retires the matching generation and verifies the registry readback.
+The helper has no provider-mutation permissions.
+
+The candidate exercised registration retry and wrong-generation retirement
+against an actual disposable Proxmox clone. Runtime publishers used the real
+systemd service and authenticated Eero network identity. The staging dashboard
+updated from the catalog stream, with all six configured guest collectors
+verified. The native observation route rejected updates after the deployment
+binding changed.
+
+## Native Proxmox wake events
+
+On a Linux Proxmox collector, optionally configure
+`guests.task_events_directory` to the local Proxmox task directory.
+Linux inotify invalidates the guest snapshot when Proxmox updates active tasks
+or the completed task index. The collector reads the authenticated Proxmox API
+to determine guest state and coalesces rapid task updates. The local
+`interval_seconds` sample remains a freshness fallback for unavailable or
+unsupported event sources. The dashboard does not poll the fleet.
+
+A temporary local collector on the actual Proxmox host observed a disposable
+guest's start and removal before its five-minute fallback sample. The candidate
+did not replace the installed collector. Tart still uses its existing local
+sampling path.

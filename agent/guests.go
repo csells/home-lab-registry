@@ -46,14 +46,15 @@ type GuestReport struct {
 // GuestConfig selects the local inventory. Proxmox uses the local API with a
 // read-only token (PVEAuditor on /vms); Tart runs `tart list` as the service user.
 type GuestConfig struct {
-	Source          string `json:"source"`
-	URL             string `json:"url,omitempty"`
-	TokenFile       string `json:"token_file,omitempty"`
-	CAFile          string `json:"ca_file,omitempty"`
-	ServerName      string `json:"server_name,omitempty"`
-	Binary          string `json:"binary,omitempty"`
-	TartHome        string `json:"tart_home,omitempty"`
-	IntervalSeconds int    `json:"interval_seconds,omitempty"`
+	Source              string `json:"source"`
+	URL                 string `json:"url,omitempty"`
+	TokenFile           string `json:"token_file,omitempty"`
+	CAFile              string `json:"ca_file,omitempty"`
+	ServerName          string `json:"server_name,omitempty"`
+	Binary              string `json:"binary,omitempty"`
+	TartHome            string `json:"tart_home,omitempty"`
+	IntervalSeconds     int    `json:"interval_seconds,omitempty"`
+	TaskEventsDirectory string `json:"task_events_directory,omitempty"`
 }
 
 func (c GuestConfig) interval() time.Duration {
@@ -124,6 +125,14 @@ func parseTart(raw []byte) ([]Guest, error) {
 type guestCollector func(context.Context) GuestReport
 
 func newGuestCollector(cfg GuestConfig) (guestCollector, error) {
+	if cfg.TaskEventsDirectory != "" {
+		if cfg.Source != "proxmox" {
+			return nil, errors.New("guest task events require the Proxmox provider")
+		}
+		if err := validateTaskDirectory(cfg.TaskEventsDirectory); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.IntervalSeconds != 0 && (cfg.IntervalSeconds < 10 || cfg.IntervalSeconds > 300) {
 		return nil, errors.New("guest interval must be 10-300 seconds")
 	}
@@ -300,6 +309,10 @@ func (s *guestState) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func runGuests(ctx context.Context, s *guestState, interval time.Duration, collect guestCollector) {
+	runGuestsWithEvents(ctx, s, interval, collect, nil)
+}
+
+func runGuestsWithEvents(ctx context.Context, s *guestState, interval time.Duration, collect guestCollector, wake <-chan struct{}) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -308,6 +321,17 @@ func runGuests(ctx context.Context, s *guestState, interval time.Duration, colle
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+		case <-wake:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			// The wake channel is bounded and already coalesces busy task bursts.
+			select {
+			case <-wake:
+			default:
+			}
 		}
 	}
 }

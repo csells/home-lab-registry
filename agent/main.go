@@ -326,7 +326,14 @@ func main() {
 			log.Fatal(err)
 		}
 		guests = &guestState{}
-		go runGuests(ctx, guests, cfg.Guests.interval(), collector)
+		var wake <-chan struct{}
+		if directory := cfg.Guests.TaskEventsDirectory; directory != "" {
+			wake, err = guestTaskEvents(ctx, directory)
+			if err != nil {
+				log.Printf("guest task event source unavailable: %v", err)
+			}
+		}
+		go runGuestsWithEvents(ctx, guests, cfg.Guests.interval(), collector, wake)
 	}
 	if cfg.Registration != nil {
 		go registerMachine(ctx, *cfg.Registration)

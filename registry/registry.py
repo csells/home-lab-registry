@@ -2,6 +2,7 @@
 """Private service catalog. TLS and read/write bearer credentials are required in production."""
 from contextlib import contextmanager
 import presence
+import runtime_presence
 import argparse, concurrent.futures, hmac, json, logging, re, sqlite3, ssl, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
@@ -89,6 +90,8 @@ class Catalog:
             CREATE TABLE IF NOT EXISTS services (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, document TEXT NOT NULL, updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS history (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, revision INTEGER NOT NULL, document TEXT NOT NULL, actor TEXT NOT NULL, updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS presence (id TEXT PRIMARY KEY, address TEXT NOT NULL, interface TEXT NOT NULL, checked REAL NOT NULL, expires REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS runtime_observation (
+                id TEXT PRIMARY KEY, state TEXT NOT NULL, checked REAL NOT NULL, expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS health (id TEXT PRIMARY KEY, status TEXT NOT NULL, evidence TEXT NOT NULL, checked REAL NOT NULL, expires REAL NOT NULL);
             ''')
     @contextmanager
@@ -99,13 +102,17 @@ class Catalog:
         finally: db.close()
     def get(self,id):
         with self.db() as db:
+            db.execute('BEGIN')
             row=db.execute('SELECT * FROM services WHERE id=?',(id,)).fetchone()
             h=db.execute('SELECT * FROM health WHERE id=?',(id,)).fetchone()
             p=db.execute('SELECT address,interface,checked,expires FROM presence WHERE id=?',(id,)).fetchone()
+            runtime=db.execute('SELECT state,checked,expires FROM runtime_observation WHERE id=?',(id,)).fetchone()
         if not row: raise Problem(404,'Service not found')
         health={'status':'unknown'} if not h else dict(h)
         if h and h['expires']<time.time(): health['status']='stale'
         record=presence.overlay({'id':id,'revision':row['revision'],'updated_at':row['updated'],'spec':json.loads(row['document']),'health':health},dict(p) if p else None)
+        if runtime:
+            record['runtime_observation'] = dict(runtime)
         # Service placement is explicit: the physical parent is not the guest IP.
         bindings=record['spec'].get('resources',{}).get('address_bindings',[])
         with self.db() as db:
@@ -150,10 +157,37 @@ class Catalog:
             db.execute('INSERT OR REPLACE INTO services VALUES(?,?,?,?)',(id,current+1,value,now))
             db.execute('INSERT INTO history(id,revision,document,actor,updated) VALUES(?,?,?,?,?)',(id,current+1,value,'writer',now))
             db.execute('DELETE FROM health WHERE id=?',(id,))
+            db.execute('DELETE FROM runtime_observation WHERE id=?',(id,))
+        self.notify_change()
+        return self.get(id)
+
+    def notify_change(self):
         with self.changes:
             self.change_version += 1
             self.changes.notify_all()
-        return self.get(id)
+
+    def report_runtime(self, id, body, binding):
+        try:
+            state, ttl = runtime_presence.validate(body)
+        except ValueError as error:
+            raise Problem(400, str(error)) from error
+        now = time.time()
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT document FROM services WHERE id=?', (id,)).fetchone()
+            if row is None:
+                raise Problem(404, 'Service not found')
+            spec = json.loads(row['document'])
+            if (spec['lifecycle'] != 'active'
+                    or spec.get('resources', {}).get('runtime_binding') != binding):
+                raise Problem(409, 'Enrollment no longer matches the active runtime binding')
+            old = db.execute('SELECT state,checked,expires FROM runtime_observation WHERE id=?', (id,)).fetchone()
+            if old and old['state'] == state and now + ttl / 2 <= old['expires'] <= now + ttl:
+                return dict(old)
+            db.execute('INSERT OR REPLACE INTO runtime_observation VALUES (?,?,?,?)',
+                       (id, state, now, now + ttl))
+        self.notify_change()
+        return {'state': state, 'checked': now, 'expires': now + ttl}
     def observe(self,id,d,revision=None):
         self.get(id)
         if not isinstance(d,dict) or set(d)-{'status','evidence','ttl_seconds'}: raise Problem(400,'Invalid observation')
@@ -270,6 +304,11 @@ class Handler(BaseHTTPRequestHandler):
                 enrollment=presence.authenticate(self.server.enrollments,parts[2],auth)
                 if enrollment is None:raise Problem(401,'Machine credential required')
                 return self.send(200,cat.announce(parts[2],self.body(),enrollment))
+            if self.command == 'POST' and len(parts) == 4 and parts[:2] == ['v1','services'] and parts[3] == 'runtime' and ID.fullmatch(parts[2]):
+                binding = runtime_presence.authenticate(self.server.runtime_publishers, parts[2], auth)
+                if binding is None:
+                    raise Problem(401, 'Enrolled runtime publisher required')
+                return self.send(200, cat.report_runtime(parts[2], self.body(), binding))
             writer=hmac.compare_digest(auth,'Bearer '+self.server.writer)
             reader=hmac.compare_digest(auth,'Bearer '+self.server.reader)
             if not (writer or reader): raise Problem(401,'Authentication required')
@@ -299,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
     do_GET=handle_api; do_PUT=handle_api; do_POST=handle_api
 
 def make_server(address,database,reader,writer):
-    s=ThreadingHTTPServer(address,Handler); s.catalog=Catalog(database); s.reader=reader; s.writer=writer; s.enrollments={}; return s
+    s=ThreadingHTTPServer(address,Handler); s.catalog=Catalog(database); s.reader=reader; s.writer=writer; s.enrollments={}; s.runtime_publishers={}; return s
 
 def main():
     from pathlib import Path
@@ -308,6 +347,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
     s=make_server((c.get('bind','0.0.0.0'),c.get('port',8443)),c['database'],c['reader_token'],c['writer_token'])
     s.enrollments=c.get('machine_enrollments',{})
+    s.runtime_publishers = runtime_presence.enrollment(c.get('runtime_publishers', {}), s.reader, s.writer)
     if s.enrollments:s.catalog.presence_verifier=presence.verifier(c['presence_tls'])
     s.catalog.probe_credentials=c.get('probe_credentials',{})
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.minimum_version=ssl.TLSVersion.TLSv1_2

@@ -121,7 +121,7 @@ let reconcileRequested=0;
 const findingGroups=[
  ['guest-mismatch','Confirmed guest mismatches'],
  ['record-review','Records to review'],
- ['coverage','Collectors we could not verify']
+ ['coverage','Sources we could not verify']
 ];
 function findingItem(f){
  return el('li','',f.target+(f.guest_id?' / '+f.guest_id:'')+' — '+f.message+(f.name?' ('+f.name+')':''));
@@ -167,6 +167,19 @@ function showAccuracy(a){
  const reviews=visibleFindings.filter(f=>f.category==='record-review').length;
  summary.textContent=label+' · '+coverage+' · '+(stale?'Refresh required':mismatches+' confirmed guest mismatches')+' · '+reviews+' records to review';
  scope.textContent=a.scope+' '+c.unconfigured+' hosts have no configured guest collector.';
+ if(a.deployments?.length){
+  const sections=el('section','accuracy-group');
+  sections.append(el('h3','','Native and external deployments'));
+  const list=el('ul');
+  for(const deployment of a.deployments){
+   const state=data.error||deployment.expires<=now()?'unverified':deployment.state;
+   const title={present:'Present',missing:'Missing',unverified:'Unverified'}[state];
+   const row=el('li','',deployment.record_id+' · '+title);
+   if(state!=='unverified'&&deployment.checked)row.append(document.createTextNode(' · '),timeElement(deployment.checked));
+   list.append(row);
+  }
+  sections.append(list);findings.append(sections);
+ }
  for(const [category,title] of findingGroups){
   const items=visibleFindings.filter(f=>f.category===category);
   if(!items.length)continue;

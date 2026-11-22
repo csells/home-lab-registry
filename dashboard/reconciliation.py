@@ -32,10 +32,10 @@ def reconcile(records, observations, now=None):
     now = time.time() if now is None else now
     active = [r for r in records if r['spec'].get('lifecycle') != 'retired' and entity_type(r) != 'archive']
     hosts = {r['id']: r for r in active if entity_type(r) == 'machine' and not binding(r['spec'])[1]}
-    claims, findings, reports = {}, [], []
+    claims, findings, reports, deployments = {}, [], [], []
     def issue(code, target, message, **fields):
         category = ('guest-mismatch' if code in GUEST_MISMATCHES else
-                    'coverage' if code == 'collector-unverified' else 'record-review')
+                    'coverage' if code in ('collector-unverified', 'deployment-unverified') else 'record-review')
         findings.append(dict(code=code, category=category, target=target, message=message, **fields))
     for record in active:
         spec, key = record['spec'], record['id']
@@ -45,6 +45,21 @@ def reconcile(records, observations, now=None):
             claims.setdefault((parent, guest), []).append(record)
         elif entity_type(record) == 'service' and not (isinstance(resources.get('runtime_binding'), dict) and resources['runtime_binding'].get('kind') in ('native', 'external')):
             issue('deployment-unmapped', key, 'Deployment has no structured runtime binding; presence is unverified.')
+        runtime = resources.get('runtime_binding')
+        if (spec.get('lifecycle') == 'active' and isinstance(runtime, dict)
+                and runtime.get('kind') in ('native', 'external')):
+            value = record.get('runtime_observation') or {}
+            checked, expires = value.get('checked'), value.get('expires')
+            observed_state = value.get('state', 'unverified')
+            fresh_runtime = (all(type(t) in (int, float) and math.isfinite(t) for t in (checked, expires))
+                             and checked <= now + 5 and checked <= expires
+                             and now < min(expires, checked + 3600))
+            state = observed_state if fresh_runtime and observed_state in ('present', 'missing') else 'unverified'
+            deployments.append(dict(record_id=key, kind=runtime['kind'], state=state, checked=checked, expires=expires))
+            if state == 'missing':
+                issue('deployment-missing', key, 'Enrolled provider reports the bound deployment missing.')
+            elif state == 'unverified' and runtime.get('provider') and runtime.get('instance'):
+                issue('deployment-unverified', key, 'No fresh verified observation for the bound deployment.')
         if not spec.get('owner'):
             issue('owner-missing', key, 'Record has no owner.')
         expiry = resources.get('expires_at')
@@ -98,5 +113,5 @@ def reconcile(records, observations, now=None):
     return dict(checked=now, coverage_status=coverage_status,
                 status='attention' if findings else coverage_status,
                 coverage=dict(verified=verified, expected=expected, unconfigured=len(hosts)-expected),
-                findings=findings, hosts=reports,
-                scope='Guest presence and registration metadata. Native/cloud service presence and application health are separate checks.')
+                findings=findings, hosts=reports, deployments=deployments,
+                scope='Deployment presence from guest inventories and enrolled runtime sources. Application health is reported separately.')

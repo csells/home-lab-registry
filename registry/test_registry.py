@@ -40,6 +40,27 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(len(self.call('GET','/v1/services/voice/history')[1]['history']),3)
         other=make_server(('127.0.0.1',0),self.tmp.name+'/catalog.db','test-reader','test-writer')
         self.assertEqual(other.catalog.get('voice')['revision'],3); other.server_close()
+    def test_runtime_report_is_scoped_to_the_registered_deployment(self):
+        binding = {'kind': 'native', 'provider': 'systemd', 'instance': 'host:test.service'}
+        doc = self.record()
+        doc['resources'] = {'runtime_binding': binding}
+        token = 'r' * 40
+        self.server.runtime_publishers = {'voice': {'token': token, 'binding': binding}}
+        self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=0)[0], 201)
+        body = {'state': 'present', 'ttl_seconds': 900}
+        route = '/v1/services/voice/runtime'
+        self.assertEqual(self.call('POST', route, body, token='test-writer')[0], 401)
+        self.assertEqual(self.call('GET', '/v1/services', token=token)[0], 401)
+        self.assertEqual(self.call('POST', '/v1/services/other/runtime', body, token=token)[0], 401)
+        status, value = self.call('POST', route, body, token=token)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.call('POST', route, body, token=token)[1], value)
+        self.assertEqual(self.call('GET', '/v1/services/voice')[1]['runtime_observation'], value)
+        doc['resources']['runtime_binding'] = {**binding, 'instance': 'host:replacement.service'}
+        self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=1)[0], 200)
+        self.assertEqual(self.call('POST', route, body, token=token)[0], 409)
+        self.assertNotIn('runtime_observation', self.call('GET', '/v1/services/voice')[1])
+
     def test_change_stream_tracks_only_committed_metadata(self):
         path = '/v1/catalog/changes'
         self.assertEqual(self.call('GET', path, token='invalid')[0], 401)
