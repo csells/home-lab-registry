@@ -5,6 +5,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from checkpoints import Rejected
@@ -135,6 +136,20 @@ class SafetyTest(unittest.TestCase):
                 with self.assertRaisesRegex(ExportError, "unsupported archive entry"):
                     store({"restic_command": ["unused"]}, archive, "example", "example", 3)
                 storage.assert_not_called()
+
+    def test_failed_validation_removes_partial_plaintext(self):
+        extracted = []
+        def interrupted(command, *args, **kwargs):
+            partial = Path(command[-1]) / "partial"
+            partial.write_bytes(b"task data")
+            extracted.append(partial)
+            raise ExportError("validator interrupted")
+
+        with tempfile.TemporaryFile() as archive, patch("exporter.collect", side_effect=interrupted):
+            archive.write(b"input")
+            with self.assertRaisesRegex(ExportError, "interrupted"):
+                store({"restic_command": ["unused"]}, archive, "file", "challenge", 5)
+        self.assertFalse(extracted[0].parent.exists())
 
     def test_stage_and_safe_subprocess_cause(self):
         with tempfile.TemporaryFile() as out, self.assertRaises(ExportError) as error:

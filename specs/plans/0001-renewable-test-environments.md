@@ -591,3 +591,11 @@ held. Explicit retry rotated the verifier challenge, reused the stored snapshot
 under its original storage tag, completed a fresh readback and released the slot.
 An inventory of the dedicated repository after retry matched every physical
 snapshot to an acknowledged receipt.
+
+For a separate upload, storage wrote the test archive before the worker reported
+an interrupted acknowledgment. After release the operator advanced eligibility
+in an isolated copy of the actual ledger. The existing off-VM expiry role
+removed exactly the unacknowledged snapshot from the dedicated repository.
+The independently verified final checkpoint remained available. The dashboard
+also excluded a verified final export from its downloadable count during a
+disk hold.

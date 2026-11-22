@@ -97,8 +97,9 @@ def store(config, source, filename, challenge, timeout):
     if not 0 < source.tell() <= MAX_ARCHIVE:
         raise ExportError('Archive exceeds the supported restore size.')
     source.seek(0)
-    with tempfile.TemporaryFile() as result:
-        collect([sys.executable, str(Path(__file__).with_name('restore_workspace.py')), '--validate'],
+    # The parent removes plaintext even when validation exceeds its limits and the child dies.
+    with tempfile.TemporaryDirectory() as target, tempfile.TemporaryFile() as result:
+        collect([sys.executable, str(Path(__file__).with_name('restore_workspace.py')), '--validate', target],
                 result, 1024, timeout, source, stage='Workspace restore validation')
     source.seek(0)
     expected = digest(source)

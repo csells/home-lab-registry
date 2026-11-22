@@ -88,12 +88,11 @@ def restore(digest, lease):
 
 if __name__ == '__main__':
     try:
-        if sys.argv[1:] == ['--validate']:
+        if len(sys.argv) == 3 and sys.argv[1] == '--validate':
             if sys.platform.startswith('linux'):
                 resource.setrlimit(resource.RLIMIT_AS, (192 * 1024**2, 192 * 1024**2))
                 resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
-            with tempfile.TemporaryDirectory() as target:
-                extract_workspace(sys.stdin.buffer, Path(target))
+            extract_workspace(sys.stdin.buffer, Path(sys.argv[2]))
         else:
             print(restore(*sys.argv[1:]))
     except (OSError, ValueError, tarfile.TarError) as error:
