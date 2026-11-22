@@ -684,9 +684,12 @@ physical inventory and grants allocation through the dedicated pool.
 The same pool recreated a matching guest, restored its acknowledged
 workspace and returned the same replacement on request replay.
 
-The qualified Linux disk recipe is fixed at 8 GiB. Flexible disk sizing,
-additional dynamic pools, and automatic catalog reconciliation for
-on-demand guests remain open.
+A separate run exercised a 9 GiB request through the normal lease API.
+It verified both the guest block device and the grown root filesystem.
+The stage admits bounded disk sizes from 8 through 12 GiB and records the
+resize before sending it to Proxmox. The exporter verifies the admitted
+disk length. Further dynamic pools and automatic catalog reconciliation
+for on-demand guests remain open.
 
 ### Staging milestone: Apple and CUDA provider groundwork
 

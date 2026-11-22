@@ -96,11 +96,17 @@ def main():
     try:
         config = json.loads(args.config.read_text())
         if config.get('dynamic_source') is True:
-            if (len(args.scope) != 3
+            if (len(args.scope) != 4
                     or not all(re.fullmatch(r'[a-f0-9-]{36}', value) for value in args.scope[:2])
                     or not re.fullmatch(r'[A-Za-z0-9-]+:[0-9]+/vm-[0-9]+-disk-[0-9]+\.raw', args.scope[2])
+                    or not re.fullmatch(r'[1-9][0-9]{0,6}', args.scope[3])
                     or not re.fullmatch(r'[a-f0-9]{32}', args.lease)):
                 raise ValueError('Invalid dynamic capture source identity.')
+            requested = int(args.scope[3]) * 1024 ** 2
+            if requested > config['disk_bytes']:
+                raise ValueError('Dynamic capture exceeds the enrolled disk scope.')
+            config['disk_bytes'] = requested
+            config['max_spool_bytes'] = min(config['max_spool_bytes'], requested)
             config['source_command'] = config['source_command'] + ['read-dynamic', args.lease, *args.scope]
         elif args.scope:
             raise ValueError('A fixed capture does not accept dynamic source parameters.')

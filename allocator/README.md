@@ -485,8 +485,9 @@ template. Keep its VM ID reserved for that scope. Use a dedicated Proxmox
 pool, a distinct local directory storage and a clean, pinned Debian DHCP
 template. The template should contain the task user, an SSH configuration
 that uses the task key file, and QEMU Guest Agent. The qualified profile
-adjusts CPU and RAM within configured bounds while retaining the enrolled
-raw disk size.
+adjusts CPU, RAM and raw disk size within configured bounds. Disk capacity
+rounds up to a whole GiB. The controller records a separate resize intent
+when it needs to grow the boot volume.
 
 Add a `dynamic` object to the slot. It declares the pool, template ID, name,
 hardware UUID and boot volume, default and maximum CPU/RAM/disk, and an
@@ -498,7 +499,8 @@ separately. Use a distinct audit-only token for capacity.
 
 Configure the exporter slot with `dynamic_capture: true`. Its restricted
 `export_dynamic_disk.pl` command checks the lease-derived name, hardware UUID,
-generation, pinned raw file and stopped state under the Proxmox lock.
+generation, pinned raw file, expected allocation size and stopped state
+under the Proxmox lock.
 The helper's inventory invocation exposes only the enrolled VM directory.
 Keep this independent physical listing: a Proxmox API listing can omit files
 when the caller lacks the volume permission.

@@ -138,7 +138,7 @@ def export(config, job):
         raise ExportError('Export job does not match the configured slot.')
     source = job.get('dynamic_source')
     if slot.get('dynamic_capture') is True:
-        if (not isinstance(source, list) or len(source) != 3
+        if (not isinstance(source, list) or len(source) != 4
                 or any(not isinstance(value, str) or not value for value in source)):
             raise ExportError('Missing enrolled dynamic capture identity.')
     elif source is not None:

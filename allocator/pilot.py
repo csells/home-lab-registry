@@ -44,6 +44,7 @@ PROVIDER_TASK_TYPES = {
     'export-stopping': 'qmshutdown',
     'resetting': 'qmrollback',
     'deleting': 'qmdestroy',
+    'resizing': 'resize',
 }
 
 
@@ -618,7 +619,8 @@ class Pilot:
         self.verify_generation(self.get(lease))
         operation = {'starting': provider.start, 'stopping': provider.shutdown,
                      'export-stopping': provider.shutdown, 'resetting': provider.reset,
-                     'deleting': lambda: self.delete_dynamic(row, provider)}[phase]
+                     'deleting': lambda: self.delete_dynamic(row, provider),
+                     'resizing': lambda: self.resize_dynamic(row)}[phase]
         task = operation()
         if not provider.matches_task(task, phase):
             raise Rejected('operation_outcome_unknown', 'Proxmox returned no matching task identifier. The slot remains held.')
@@ -642,7 +644,7 @@ class Pilot:
         if phase == 'cloning':
             return self.inspect_clone(row)
         provider = self.provider_for(row)
-        if phase in ('starting', 'stopping', 'export-stopping', 'resetting', 'deleting'):
+        if phase in ('starting', 'stopping', 'export-stopping', 'resetting', 'deleting', 'resizing'):
             if not row['upstream']:
                 row = self.recover_task(row)
                 if not row['upstream']:
@@ -676,6 +678,11 @@ class Pilot:
                 self.db.execute("UPDATE lease SET phase='ready',upstream=NULL,prior_tasks=NULL,address=?,"
                                 "dynamic_host_key=? WHERE id=?", (address, dynamic_key, lease))
             row = self.get(lease)
+        elif phase == 'resizing':
+            scope = self.slot(row).dynamic
+            pins = json.loads(row['dynamic_guest'])
+            scope.config_matches(lease, pins, scope.shape(json.loads(row['requirements'])), check_disk=True)
+            row = self.dispatch(lease, 'starting')
         elif phase == 'stopping':
             if provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The guest did not stop. The slot remains held.')
@@ -712,6 +719,10 @@ class Pilot:
             raise Rejected('dynamic_identity_changed', 'Guest or disk identity changed before deletion.')
         return provider.delete()
 
+    def resize_dynamic(self, row):
+        scope = self.slot(row).dynamic
+        return scope.resize(row['id'], json.loads(row['dynamic_guest']), scope.shape(json.loads(row['requirements'])))
+
     def inspect_clone(self, row):
         slot, key = self.slot(row), row['id']
         scope = slot.dynamic
@@ -730,8 +741,11 @@ class Pilot:
                 self.db.execute('UPDATE lease SET dynamic_guest=?,generation=? WHERE id=?',
                                 (json.dumps(pins), pins['generation'], key))
         self.db.verify()
-        scope.set_shape(key, pins, scope.shape(json.loads(row['requirements'])))
-        return self.public(self.dispatch(key, 'starting'))
+        shape = scope.shape(json.loads(row['requirements']))
+        disk = scope.set_shape(key, pins, shape)
+        if disk > shape['disk_mib']:
+            raise Rejected('dynamic_shape_unverified', 'Clone exceeds the admitted disk size.')
+        return self.public(self.dispatch(key, 'resizing' if disk < shape['disk_mib'] else 'starting'))
 
     def finish_release(self, row, rollback):
         released_at = time.time()
@@ -1051,7 +1065,9 @@ class Pilot:
                 'requested_at': row['export_requested_at']}
         if self.slot(row).dynamic:
             pins = json.loads(row['dynamic_guest'])
-            reply['dynamic_source'] = [pins[k] for k in ('uuid', 'generation', 'volume')]
+            scope = self.slot(row).dynamic
+            size = scope.shape(json.loads(row['requirements']))['disk_mib']
+            reply['dynamic_source'] = [pins[k] for k in ('uuid', 'generation', 'volume')] + [str(size)]
         return reply
 
     def check_export_source(self, row):
@@ -1322,7 +1338,7 @@ class Pilot:
                 self.request_export(key)
             else:
                 self.dispatch(key, 'export-stopping')
-        elif phase in ('export-stopping', 'resetting', 'deleting'):
+        elif phase in ('export-stopping', 'resetting', 'deleting', 'resizing'):
             self.inspect(key, row['owner'])
         elif phase == 'awaiting-export' and row['checkpoint'] and not (row['hold_mode'] or row['reviewer_hold']):
             if not json.loads(row['checkpoint']).get('restore_verified'):

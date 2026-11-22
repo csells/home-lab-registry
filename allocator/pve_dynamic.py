@@ -44,7 +44,7 @@ class DynamicScope:
                 or self.bounds.keys() != keys or self.default.keys() != keys
                 or not all(type(self.default[k]) is int and type(self.bounds[k]) is int
                            and 0 < self.default[k] <= self.bounds[k] for k in keys)
-                or self.default['disk_mib'] != self.bounds['disk_mib'] or self.default['disk_mib'] % 1024):
+                or self.default['disk_mib'] % 1024 or self.bounds['disk_mib'] % 1024):
             raise ValueError('Pin a distinct template, storage and bounded CPU, memory and disk recipe')
         self.boot_volume = re.compile(
             re.escape(storage) + r':' + re.escape(self.guest_id) + r'/vm-' +
@@ -91,7 +91,16 @@ class DynamicScope:
                 raise Rejected('dynamic_scope_occupied', 'The allocation pool has unexpected members.')
 
     def shape(self, request):
-        return {k: max(value, request.get(k, value)) for k, value in self.default.items()}
+        shape = {k: max(value, request.get(k, value)) for k, value in self.default.items()}
+        shape['disk_mib'] = ((shape['disk_mib'] + 1023) // 1024) * 1024
+        return shape
+
+    @staticmethod
+    def disk_mib(config):
+        sizes = [field.removeprefix('size=') for field in config['scsi0'].split(',') if field.startswith('size=')]
+        if len(sizes) != 1 or not re.fullmatch(r'[1-9][0-9]*G', sizes[0]):
+            raise Rejected('dynamic_shape_unverified', 'The provider boot volume size was not verified.')
+        return int(sizes[0][:-1]) * 1024
 
     def name(self, lease):
         if not isinstance(lease, str) or not LEASE_ID.fullmatch(lease):
@@ -163,13 +172,25 @@ class DynamicScope:
         volume = self.assert_disks(config)
         return {'uuid': hardware[0], 'volume': volume, 'generation': uuid_field(config.get('vmgenid'))}
 
+    def config_matches(self, lease, pins, shape, *, check_disk):
+        current = self.api.call(self.api.guest + '/config')
+        if (self.describe(lease) != pins or int(current['memory']) != shape['memory_mib']
+                or int(current['cores']) != shape['vcpus'] or current.get('lock')
+                or check_disk and self.disk_mib(current) != shape['disk_mib']):
+            raise Rejected('dynamic_shape_unverified', 'The provider did not confirm the requested clone resources.')
+        return self.disk_mib(current)
+
     def set_shape(self, lease, pins, shape):
         if self.describe(lease) != pins:
             raise Rejected('dynamic_identity_changed', 'The clone identity changed before sizing.')
         self.api.call(self.api.guest + '/config',
                       {'memory': shape['memory_mib'], 'cores': shape['vcpus'], 'sockets': 1,
                        'balloon': 0}, method='PUT')
-        current = self.api.call(self.api.guest + '/config')
-        if (self.describe(lease) != pins or int(current['memory']) != shape['memory_mib']
-                or int(current['cores']) != shape['vcpus'] or current.get('lock')):
-            raise Rejected('dynamic_shape_unverified', 'The provider did not confirm the requested clone resources.')
+        return self.config_matches(lease, pins, shape, check_disk=False)
+
+    def resize(self, lease, pins, shape):
+        old = self.config_matches(lease, pins, shape, check_disk=False)
+        if old >= shape['disk_mib']:
+            raise Rejected('dynamic_shape_unverified', 'Unexpected disk size before the enrolled growth operation.')
+        return self.api.call(self.api.guest + '/resize',
+                             {'disk': 'scsi0', 'size': str(shape['disk_mib'] // 1024) + 'G'}, method='PUT')

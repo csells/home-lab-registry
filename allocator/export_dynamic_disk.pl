@@ -11,9 +11,9 @@ use PVE::QemuConfig;
 use PVE::QemuServer;
 use PVE::Storage;
 
-my ($id, $store, $root, $bytes, $lease, $uuid, $generation, $volume) = @ARGV;
-die "Invalid capture scope\n" unless (@ARGV == 4 || @ARGV == 8) && $id =~ /^[0-9]+$/ &&
-    $store =~ /^[A-Za-z0-9-]+$/ && $root =~ m{^/[A-Za-z0-9_/-]+$} && $bytes =~ /^[1-9][0-9]+$/;
+my ($id, $store, $root, $max_bytes, $lease, $uuid, $generation, $volume, $disk_mib) = @ARGV;
+die "Invalid capture scope\n" unless (@ARGV == 4 || @ARGV == 9) && $id =~ /^[0-9]+$/ &&
+    $store =~ /^[A-Za-z0-9-]+$/ && $root =~ m{^/[A-Za-z0-9_/-]+$} && $max_bytes =~ /^[1-9][0-9]+$/;
 
 my $scfg = PVE::Storage::config();
 my $spec = PVE::Storage::storage_config($scfg, $store);
@@ -44,7 +44,10 @@ if (@ARGV == 4) {
 my $guid = qr/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/;
 die "Invalid capture lease identity\n" unless
     $lease =~ /^[a-f0-9]{32}$/ && $uuid =~ /^$guid$/ && $generation =~ /^$guid$/ &&
-    $volume =~ /^\Q$store:$id\/vm-$id-disk-\E[0-9]+\.raw$/;
+    $volume =~ /^\Q$store:$id\/vm-$id-disk-\E[0-9]+\.raw$/ &&
+    $disk_mib =~ /^[1-9][0-9]{0,6}$/ && $disk_mib % 1024 == 0 &&
+    $disk_mib * 1048576 <= $max_bytes;
+my $bytes = $disk_mib * 1048576;
 
 PVE::QemuConfig->lock_config($id, sub {
     my $conf = PVE::QemuConfig->load_config($id);
@@ -52,7 +55,8 @@ PVE::QemuConfig->lock_config($id, sub {
     die "Slot identity changed\n" unless ($conf->{name} // '') eq "lease-$lease"
         && !$conf->{template} && ($conf->{vmgenid} // '') eq $generation
         && ($conf->{smbios1} // '') =~ /(?:^|,)uuid=\Q$uuid\E(?:,|$)/
-        && (split /,/, $conf->{scsi0} // '')[0] eq $volume;
+        && (split /,/, $conf->{scsi0} // '')[0] eq $volume &&
+        grep { $_ eq 'size=' . ($disk_mib / 1024) . 'G' } split /,/, $conf->{scsi0};
     die "Capture requires a stopped slot\n" if PVE::QemuServer::check_running($id);
 
     my $path = PVE::Storage::path($scfg, $volume);
