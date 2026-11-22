@@ -163,6 +163,15 @@ function hostInventory(machine){
  const panel=el('div','host-inventory');
  panel.append(el('strong','',label));
  if(verified){panel.append(document.createTextNode(' · '),timeElement(host.checked))}
+ const hardware=host.hardware;
+ if(hardware && hardware.expires>now() && !data.error){
+  const facts=el('div','',hardware.architecture+' '+hardware.os+' · '+hardware.logical_cpus+
+   ' logical CPUs · '+bytes(hardware.memory_bytes)+' RAM · Hardware checked ');
+  facts.append(timeElement(hardware.checked));
+  panel.append(facts);
+ }else if(host.status!=='unconfigured'){
+  panel.append(el('div','',hardware && hardware.expires<=now()?'Hardware report expired':'Hardware not verified'));
+ }
  const issues=report.findings.filter(f=>
   (f.machine_id===machine.id||f.target===machine.id)&&
   (f.category!=='guest-mismatch'||verified));
@@ -177,37 +186,34 @@ function showAccuracy(a){
  const summary=$('accuracy-summary');
  const scope=$('accuracy-scope');
  const findings=$('accuracy-findings');
- const hosts=$('observed-guests');
- findings.replaceChildren();hosts.replaceChildren();
+ const details=$('accuracy-details');
+ findings.replaceChildren();
  if(!a){
   summary.textContent='Inventory verification unavailable.';
   scope.textContent='';
+  details.hidden=true;
   return;
  }
  const stale=Boolean(data.error)||now()-a.checked>90||
   a.hosts.some(h=>h.status==='verified'&&h.expires<=now());
  const c=a.coverage;
- const label=stale?'Stale coverage':a.pending?'Checking coverage':
-  a.coverage_status==='partial'?'Partial coverage':a.coverage_status==='verified'?'Coverage verified':'Inventory unverified';
  const coverage=c.verified+' of '+c.expected+' configured hosts verified';
- const visibleFindings=a.findings.filter(f=>!stale||f.category!=='guest-mismatch');
- const mismatches=visibleFindings.filter(f=>f.category==='guest-mismatch').length;
- const reviews=visibleFindings.filter(f=>f.category==='record-review').length;
- summary.textContent=label+' · '+coverage+' · '+(stale?'Refresh required':mismatches+' confirmed guest mismatches')+' · '+reviews+' records to review';
- scope.textContent=a.scope+' '+c.unconfigured+' hosts have no configured guest collector.';
- if(a.deployments?.length){
-  const sections=el('section','accuracy-group');
-  sections.append(el('h3','','Native and external deployments'));
-  const list=el('ul');
-  for(const deployment of a.deployments){
-   const state=data.error||deployment.expires<=now()?'unverified':deployment.state;
-   const title={present:'Present',missing:'Missing',unverified:'Unverified'}[state];
-   const row=el('li','',deployment.record_id+' · '+title);
-   if(state!=='unverified'&&deployment.checked)row.append(document.createTextNode(' · '),timeElement(deployment.checked));
-   list.append(row);
-  }
-  sections.append(list);findings.append(sections);
+ const expiredDeployments=new Set((a.deployments||[]).filter(d=>d.state==='missing'&&
+  (data.error||d.expires<=now())).map(d=>d.record_id));
+ const visibleFindings=a.findings.filter(f=>
+  (!stale||f.category!=='guest-mismatch')&&
+  (f.code!=='deployment-missing'||!expiredDeployments.has(f.target)));
+ for(const target of expiredDeployments){
+  visibleFindings.push({category:'coverage',target,message:'The deployment state could not be verified.'});
  }
+ const unverified=visibleFindings.filter(f=>f.category==='coverage').length;
+ const discrepancies=visibleFindings.length-unverified;
+ const result=stale?'Inventory needs a refresh':a.pending?'Checking coverage':
+  discrepancies?discrepancies+' '+(discrepancies===1?'discrepancy':'discrepancies'):
+  unverified||a.coverage_status!=='verified'?'No confirmed discrepancies':'No discrepancies';
+ summary.textContent=result+' · '+coverage+(unverified?' · '+unverified+' unverified '+(unverified===1?'check':'checks'):'');
+ details.hidden=visibleFindings.length===0;
+ scope.textContent=a.scope+' '+c.unconfigured+' hosts have no configured guest collector.';
  for(const [category,title] of findingGroups){
   const items=visibleFindings.filter(f=>f.category===category);
   if(!items.length)continue;
@@ -215,33 +221,6 @@ function showAccuracy(a){
   group.append(el('h3','',title+' ('+items.length+')'));
   const list=el('ul');for(const f of items)list.append(findingItem(f));
   group.append(list);findings.append(group);
- }
- for(const h of a.hosts){
-  const section=el('section','observed-host');
-  const verified=h.status==='verified'&&!stale;
-  const state=verified?'verified':h.status==='unconfigured'?'no collector configured':'unverified';
-  section.append(el('h3','',h.machine_id+' · '+state+(verified?' · '+age(h.checked):'')));
-  if(h.hardware && h.hardware.expires>now() && !data.error){
-   const facts=h.hardware;
-   section.append(el('p','',facts.architecture+' '+facts.os+' · '+facts.logical_cpus+
-    ' logical CPUs · '+bytes(facts.memory_bytes)+' RAM · Hardware checked '+age(facts.checked)));
-  }else if(h.status!=='unconfigured'){
-   section.append(el('p','',h.hardware?'Hardware report expired':'Hardware not verified'));
-  }
-  if(verified){
-   const list=el('ul');
-   for(const g of h.guests){
-    const row=el('li','',g.id+' · '+(g.name||g.id)+' · '+g.state+(g.template?' · template':''));
-    if(g.lease){
-     const link=el('a','','Managed lease');link.href='#leases';
-     row.append(document.createTextNode(' · '),link);
-    }
-    if(g.records.length||!g.lease)row.append(document.createTextNode(' · '+(g.records.join(', ')||'No service binding')));
-    list.append(row);
-   }
-   section.append(list);
-  }
-  hosts.append(section);
  }
  if(reconcileRequested&&!a.pending&&!stale&&a.checked>=reconcileRequested){
   reconcileRequested=0;

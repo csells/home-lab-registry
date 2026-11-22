@@ -9,7 +9,7 @@
 <section class="network-audit" aria-label="IP reservation audit"><p id="address-audit" role="status">IP reservation audit: not published yet. Audits run on demand from orca.</p></section>
 <section class="inventory-accuracy" aria-label="Inventory accuracy">
 <div class="accuracy-heading"><div><h2>Inventory accuracy</h2><p id="accuracy-summary" role="status">Waiting for verified inventory…</p></div><button id="reconcile" class="button secondary">Reconcile now</button></div>
-<p id="reconcile-status" role="status"></p><details id="accuracy-details"><summary>Discrepancies and observed guests</summary><p id="accuracy-scope"></p><div id="accuracy-findings"></div><div id="observed-guests"></div></details>
+<p id="reconcile-status" role="status"></p><details id="accuracy-details" hidden><summary>Discrepancies and unverified checks</summary><p id="accuracy-scope"></p><div id="accuracy-findings"></div></details>
 </section>
 <nav aria-label="Inventory views"><button id="machines-tab" aria-pressed="true">Machines <span id="machine-count">—</span></button><button id="services-tab" aria-pressed="false">Services <span id="service-count">—</span></button><button id="backups-tab" aria-pressed="false">Backups <span id="backup-count">—</span></button><button id="map-tab" aria-pressed="false">Resources</button><button id="leases-tab" aria-pressed="false" title="Current leases" hidden>Leases <span id="lease-count">—</span></button></nav>
 <div id="error" role="alert" hidden></div>
