@@ -1,4 +1,6 @@
 import json, tempfile, threading, unittest, urllib.request, urllib.error
+from io import BytesIO
+from unittest.mock import patch
 from registry import make_server, probe
 
 class RegistryTest(unittest.TestCase):
@@ -27,6 +29,17 @@ class RegistryTest(unittest.TestCase):
         probe(self.server.catalog, record)
         health = self.call('GET', '/v1/services/voice')[1]['health']
         self.assertEqual((health['status'], health['evidence']), ('healthy', 'HTTP 401'))
+
+    def test_probe_preserves_response_code_when_readiness_json_is_invalid(self):
+        doc = self.record()
+        doc['probe'] = {'url': self.base + '/healthz', 'json_not_in':{'status':['error']}}
+        _, record = self.call('PUT', '/v1/services/voice', doc, revision=0)
+        response = BytesIO(b'unexpected plain text')
+        response.code = 200
+        with patch('urllib.request.OpenerDirector.open', return_value=response):
+            probe(self.server.catalog, record)
+        health = self.call('GET', '/v1/services/voice')[1]['health']
+        self.assertEqual((health['status'], health['evidence']), ('unhealthy', 'HTTP 200; invalid readiness JSON'))
 
     def test_access_validation_and_conflicts(self):
         self.assertEqual(self.call('GET','/v1/services',token='wrong')[0],401)

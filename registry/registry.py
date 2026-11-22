@@ -262,13 +262,18 @@ def probe(catalog,record):
                 response = error
             with response:
                 code = response.code
-                body=json.loads(response.read(1048576)) if 'json_not_in' in p else None
-            ok=code==p.get('expected_status',200)
-            evidence='HTTP '+str(code)
-            if 'json_not_in' in p:
-                ready=isinstance(body,dict) and all(isinstance(body.get(k),str) and body[k] not in excluded for k,excluded in p['json_not_in'].items())
-                ok=ok and ready
-                evidence+='; application state '+('available' if ready else 'unavailable or missing')
+                ok = code == p.get('expected_status', 200)
+                evidence = 'HTTP ' + str(code)
+                if 'json_not_in' in p:
+                    try:
+                        body = json.loads(response.read(1048576))
+                    except (ValueError, UnicodeError):
+                        ok = False
+                        evidence += '; invalid readiness JSON'
+                    else:
+                        ready = isinstance(body,dict) and all(isinstance(body.get(k),str) and body[k] not in excluded for k,excluded in p['json_not_in'].items())
+                        ok = ok and ready
+                        evidence += '; application state ' + ('available' if ready else 'unavailable or missing')
     except Exception as e:
         ok=False; evidence='Probe failed: '+type(e).__name__
     try: catalog.observe(record['id'],{'status':'healthy' if ok else 'unhealthy','evidence':evidence,'ttl_seconds':1800},record['revision'])

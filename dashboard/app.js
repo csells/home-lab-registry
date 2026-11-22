@@ -146,14 +146,42 @@ function render(){
  const q=$('search').value.toLowerCase(),host=$('host').value,rows=items.filter(r=>(filter==='all'||health(r)===filter)&&(!host||r.host===host)&&[r.name,r.host,r.id,...r.capabilities].join(' ').toLowerCase().includes(q));const rank={unhealthy:0,stale:1,unknown:2,healthy:3,running:3,stopped:4};rows.sort((a,b)=>rank[health(a)]-rank[health(b)]||a.name.localeCompare(b.name));$('summary').textContent=rows.length+' of '+items.length+' '+(map?'resources':view);
  const cards=$('cards');cards.className=map?'':machine?'machines':'services';cards.setAttribute('aria-label',map?'Resources':machine?'Machines':isBackup?'Backups':'Services');const root=document.createDocumentFragment();if(!map)for(const r of rows)root.append(machine?machineCard(r):serviceCard(r));if(!rows.length)root.append(el('p','empty-results','No '+(map?'resources':view)+' match these filters.'));cards.replaceChildren(root);if(map&&rows.length)disposeGraph=ResourceGraph.mount(cards,items.map(r=>({...r,name:r.display_name||r.name,kind:r.kind==='machine'?r.machine_type:'service',status:health(r)})),{matching:new Set(rows.map(r=>r.id))});queueMicrotask(refreshVisible);
 }
-async function refresh(){if(busy||document.hidden)return;busy=true;$('refresh').disabled=true;try{const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});if(!response.ok)throw Error('failed');data=await response.json();$('leases-tab').hidden=!data.lease_review_enabled;if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}if(data.server_time)offset=data.server_time-Date.now()/1000;$('error').hidden=!data.error;$('error').textContent=data.error||'';showDiscrepancies();if(!copying&&!$('cards').contains(document.activeElement))render();}catch{$('error').hidden=false;$('error').textContent='Unable to refresh. Displayed readings may be stale.';}finally{busy=false;$('refresh').disabled=false}}
+function applyInventory(snapshot){
+ data=snapshot;
+ if(Object.hasOwn(data,'lease_review_enabled')){
+  $('leases-tab').hidden=!data.lease_review_enabled;
+  if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}
+ }
+ if(data.server_time)offset=data.server_time-Date.now()/1000;
+ $('error').hidden=!data.error;
+ $('error').textContent=data.error||'';
+ showDiscrepancies();
+ if(!copying&&!$('cards').contains(document.activeElement))render();
+}
+
+async function refresh(){
+ if(busy||document.hidden)return;
+ busy=true;
+ $('refresh').disabled=true;
+ try{
+  const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});
+  if(!response.ok)throw Error('failed');
+  applyInventory(await response.json());
+ }catch{
+  $('error').hidden=false;
+  $('error').textContent='Unable to refresh. Displayed readings may be stale.';
+ }finally{
+  busy=false;
+  $('refresh').disabled=false;
+ }
+}
 async function refreshCatalog(){
  const button=$('refresh');
  button.disabled=true;
  try{
-  const r=await fetch('api/refresh',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'refresh-catalog'},body:'{}',signal:AbortSignal.timeout(8000)});
+  const r=await fetch('api/refresh',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'refresh-catalog'},body:'{}',signal:AbortSignal.timeout(16000)});
   if(!r.ok)throw Error('HTTP '+r.status);
-  await refresh();
+  applyInventory(await r.json());
  }catch(e){
   $('error').hidden=false;
   $('error').textContent='Catalog refresh failed: '+e.message;
@@ -369,10 +397,9 @@ function connectInventory(){
  if(document.hidden)return;
  inventoryStream=new EventSource('api/inventory/stream');
  inventoryStream.addEventListener('inventory',event=>{
-  try{data=JSON.parse(event.data);inventoryRetryDelay=1000;if(data.server_time)offset=data.server_time-Date.now()/1000;
-   $('error').hidden=!data.error;$('error').textContent=data.error||'';
-   showDiscrepancies();
-   if(!copying&&!$('cards').contains(document.activeElement))render();
+  try{
+   applyInventory(JSON.parse(event.data));
+   inventoryRetryDelay=1000;
   }catch{$('error').hidden=false;$('error').textContent='Invalid inventory event; waiting for a valid update.'}
  });
  inventoryStream.onerror=()=>{

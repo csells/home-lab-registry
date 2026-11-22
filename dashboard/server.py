@@ -1,5 +1,6 @@
 import base64,hmac,json,pathlib,threading,time,logging
 from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
+from http.client import HTTPException
 from catalog_updates import subscribe_catalog
 from client import request
 from model import inventory,address_audit_summary
@@ -135,10 +136,31 @@ class Handler(BaseHTTPRequestHandler):
         if not action or self.headers.get('Origin') not in allowed or self.headers.get('X-Lab-Action')!=action or self.headers.get('Content-Type')!='application/json':
             self.send_error(403);return
         if self.path=='/api/refresh':
+            accepted = time.time()
+            deadline = time.monotonic() + 12
             LEASE_ISSUES.refresh()
             CATALOG_REFRESH.set()
             WAKE.set()
-            self.send_response(202);self.send_header('Content-Length','0');self.send_header('Cache-Control','no-store');self.end_headers()
+            with UPDATES:
+                while True:
+                    with LOCK:
+                        snapshot = dict(STATE)
+                    checked = (snapshot.get('catalog') or {}).get('checked')
+                    if checked and checked >= accepted and not snapshot['error']:
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self.send_error(503,'Authoritative catalog refresh did not complete')
+                        return
+                    UPDATES.wait(remaining)
+            snapshot.update(server_time=time.time(),lease_review_enabled=LEASE_ISSUES.enabled)
+            raw = json.dumps(snapshot).encode()
+            self.send_response(200)
+            self.send_header('Content-Type','application/json')
+            self.send_header('Content-Length',str(len(raw)))
+            self.send_header('Cache-Control','no-store')
+            self.end_headers()
+            self.wfile.write(raw)
             return
         if self.path=='/api/reconcile':
             with LOCK:
@@ -223,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
                 if query or (cursor is not None and (not cursor.isascii() or not cursor.isdigit() or len(cursor)>18 or cursor.startswith('0'))):raise ValueError()
             except ValueError:self.send_error(400,'Invalid lease query');return
             try:raw=json.dumps(lease_review_page(config,cursor,scope)).encode()
-            except (OSError,ValueError,KeyError):self.send_error(503,'Lease history unavailable');return
+            except (OSError,HTTPException,ValueError,KeyError):self.send_error(503,'Lease history unavailable');return
             kind='application/json'
         elif path in ['/api/inventory','/api/machines','/api/services','/api/backups','/api/reconciliation']:
             with LOCK:data=dict(STATE)

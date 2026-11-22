@@ -7,6 +7,7 @@ import ssl
 import time
 import urllib.request
 from contextlib import contextmanager
+from http.client import HTTPException
 from threading import Condition
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -87,7 +88,7 @@ class LeaseInventory:
                     result = page(self.path, None, 'inventory')
                     self.claims = self.match(self.nodes, observed, result['guests'])
                     self.retry_delay = 5
-                except (OSError, ValueError, TypeError, KeyError) as error:
+                except (OSError, HTTPException, ValueError, TypeError, KeyError) as error:
                     logging.warning('Lease inventory unavailable: %s', type(error).__name__)
                     self.unavailable = frozenset(row[:4] for row in observed)
                     self.retry_at = now + self.retry_delay
@@ -174,15 +175,16 @@ class LeaseIssueFeed:
                 report = page(self.config, None, 'issues')
                 current = {'status':'verified','issues':report['issues'],'counts':report['counts']}
                 deadline = report.get('next_deadline')
-                if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
-                    raise ValueError('Invalid lease deadline')
-            except (OSError, ValueError, TypeError, KeyError) as error:
+                lease_clock = report['as_of']
+                if not math.isfinite(lease_clock) or (deadline is not None and not math.isfinite(deadline)):
+                    raise ValueError('Invalid allocator timestamp')
+            except (OSError, HTTPException, ValueError, TypeError, KeyError) as error:
                 logging.warning('Lease issues unavailable: %s', type(error).__name__)
                 current = {'status':'unavailable'}
                 deadline = None
             with self.condition:
                 if deadline is not None:
-                    self.due = min(self.due, time.monotonic()+max(0.1, deadline-time.time()))
+                    self.due = min(self.due, time.monotonic()+max(0.1, deadline-lease_clock))
                 comparable = {key:value for key,value in self.current.items() if key!='as_of'}
                 if comparable != current:
                     self.current = {**current,'as_of':time.time()}

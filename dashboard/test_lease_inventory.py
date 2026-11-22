@@ -1,3 +1,4 @@
+from http.client import IncompleteRead
 import json
 from pathlib import Path
 import tempfile
@@ -18,7 +19,7 @@ class LeaseInventoryTests(unittest.TestCase):
             config.write_text(json.dumps({'inventory_machines':{'node':'machine-h'}}))
             join = LeaseInventory(config)
         projected = {'guests':[{**guest,'node':'node','lease':lease}]}
-        with patch('lease_review.page', side_effect=[OSError('temporary'),projected]) as page:
+        with patch('lease_review.page', side_effect=[IncompleteRead(b'truncated'),projected]) as page:
             _, unknown = join.reconcile({'machine-h':report}, now=100)
             self.assertTrue(unknown)
             join.reconcile({'machine-h':report}, now=101)

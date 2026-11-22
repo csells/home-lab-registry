@@ -1,3 +1,4 @@
+from http.client import IncompleteRead
 import tempfile
 import time
 import unittest
@@ -19,7 +20,7 @@ class LeaseIssueFeedTests(unittest.TestCase):
             worker = Thread(target=feed.run, daemon=True)
             with patch('lease_review.page') as fetch:
                 fetch.side_effect = [
-                    OSError('temporarily offline'),
+                    IncompleteRead(b'truncated'),
                     {'counts': counts, 'as_of': time.time(), 'next_deadline': None,
                      'issues': [{'code': 'export-failed', 'task': 'Build'}]},
                     {'counts': counts, 'as_of': time.time(), 'next_deadline': None, 'issues': []},
