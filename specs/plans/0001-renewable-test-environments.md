@@ -688,8 +688,21 @@ A separate run exercised a 9 GiB request through the normal lease API.
 It verified both the guest block device and the grown root filesystem.
 The stage admits bounded disk sizes from 8 through 12 GiB and records the
 resize before sending it to Proxmox. The exporter verifies the admitted
-disk length. Further dynamic pools and automatic catalog reconciliation
-for on-demand guests remain open.
+disk length.
+
+Guest inventory joins each observed clone to the controller's active lease
+using the configured registry host, guest ID, provider type and exact
+lease-specific name. The dashboard checks the read-only lease projection
+when those guest observations change or when an operator runs a comparison.
+It flags unavailable lease ownership separately. This comparison does not
+publish a second lifetime record or authorize deletion. Further dynamic pools
+remain open.
+
+The disposable dashboard showed the running clone as a managed lease and
+opened the Leases tab from its row. After release, the row disappeared from
+the authenticated host inventory. Both checks verified all six configured
+collectors and found no discrepancy for the owned clone. The task credential
+was denied access to the operator lease projection.
 
 ### Staging milestone: Apple and CUDA provider groundwork
 

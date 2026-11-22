@@ -5,6 +5,18 @@ import time
 from checkpoints import Rejected, recoverable, restore_held
 
 
+def lease_inventory(db, scopes):
+    """Project exact live clone intents without provider calls or task secrets."""
+    rows = db.execute("SELECT id, slot_id FROM lease WHERE phase != 'released'")
+    guests = []
+    for row in rows:
+        scope = scopes.get(row['slot_id'])
+        if scope is not None:
+            guests.append({'node': scope.node, 'id': scope.guest_id,
+                           'name': scope.name(row['id']), 'type': 'qemu', 'lease': row['id']})
+    return {'guests': guests}
+
+
 def lease_page(db, before, scope='all'):
     predicates = {'all': '1', 'current': "phase != 'released'", 'released': "phase = 'released'"}
     if scope not in (*predicates, 'counts'):

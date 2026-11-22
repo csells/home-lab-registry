@@ -25,7 +25,7 @@ from credentials import TaskCredentials
 from ledger import Ledger
 from pve_dynamic import DynamicScope
 from reservations import Reservations
-from review import lease_page
+from review import lease_inventory, lease_page
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1480,9 +1480,13 @@ def main():
                     query = urllib.parse.parse_qs(target.query, keep_blank_values=True)
                     cursor, = query.pop('before', [None])
                     scope, = query.pop('scope', ['all'])
-                    if query:
+                    if query or (scope == 'inventory' and cursor is not None):
                         raise ValueError()
-                    page = lease_page(controller.db, cursor, scope)
+                    if scope == 'inventory':
+                        scopes = {key: slot.dynamic for key, slot in controller.slots.items() if slot.dynamic}
+                        page = lease_inventory(controller.db, scopes)
+                    else:
+                        page = lease_page(controller.db, cursor, scope)
                 except Rejected as error:
                     self.respond({'code': error.code}, 400)
                     return

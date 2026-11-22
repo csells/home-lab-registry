@@ -28,14 +28,15 @@ def fresh(sample, now):
             and all(isinstance(v, (int, float)) and math.isfinite(v) for v in (checked, expires))
             and checked <= now + 5 and checked <= expires and now < min(expires, checked + MAX_AGE))
 
-def reconcile(records, observations, now=None):
+def reconcile(records, observations, now=None, *, lease_claims=None, lease_unverified=()):
     now = time.time() if now is None else now
     active = [r for r in records if r['spec'].get('lifecycle') != 'retired' and entity_type(r) != 'archive']
     hosts = {r['id']: r for r in active if entity_type(r) == 'machine' and not binding(r['spec'])[1]}
     claims, findings, reports = {}, [], []
+    lease_claims = lease_claims or {}
     def issue(code, target, message, **fields):
         category = ('guest-mismatch' if code in GUEST_MISMATCHES else
-                    'coverage' if code == 'collector-unverified' else 'record-review')
+                    'coverage' if code in ('collector-unverified', 'lease-ownership-unverified') else 'record-review')
         findings.append(dict(code=code, category=category, target=target, message=message, **fields))
     for record in active:
         spec, key = record['spec'], record['id']
@@ -79,8 +80,16 @@ def reconcile(records, observations, now=None):
         for guest in entries:
             linked = claims.get((key, guest['id']), [])
             template = guest.get('template', False) or guest['id'] in template_ids
-            report['guests'].append({**guest, 'records': [r['id'] for r in linked], 'template': template})
-            if not linked and not template:
+            lease_key = (key, guest['id'], guest.get('name'), guest.get('type'))
+            lease = lease_claims.get(lease_key)
+            result = {**guest, 'records': [r['id'] for r in linked], 'template': template}
+            if lease:
+                result['lease'] = lease
+            report['guests'].append(result)
+            if not linked and not template and not lease and lease_key in lease_unverified:
+                issue('lease-ownership-unverified', key, 'The allocator was unavailable to verify this guest.',
+                      guest_id=guest['id'])
+            elif not linked and not template and not lease:
                 issue('unregistered-guest', key, 'Observed guest has no registered deployment.', guest_id=guest['id'], name=guest.get('name', guest['id']))
         reports.append(report)
         for (parent, gid), linked in claims.items():

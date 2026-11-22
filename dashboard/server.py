@@ -5,7 +5,7 @@ from model import inventory,address_audit_summary
 from reconciliation import reconcile as reconcile_inventory
 from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
-from lease_review import page as lease_review_page
+from lease_review import LeaseInventory, page as lease_review_page
 from access import credential, scoped_records
 from guac import launch
 from machine_runtime import InventorySubscriptions,guest_endpoints
@@ -13,16 +13,20 @@ BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();
 def reconcile():
     global STATE,VERSION
     cfg=json.loads((PRIVATE/'reader.json').read_text())
+    leases=LeaseInventory(PRIVATE/'lease-review.json')
     records=None
     while True:
         WAKE.clear()
         try:
-            if records is None or CATALOG_REFRESH.is_set():
+            refresh=records is None or CATALOG_REFRESH.is_set()
+            if refresh:
                 CATALOG_REFRESH.clear()
                 records=scoped_records(request(cfg,'GET','/v1/services')['services'])
                 LIVE.configure(records)
                 RUNTIME.configure(guest_endpoints(LIVE.endpoints(),json.loads((PRIVATE/'guest-endpoints.json').read_text()) if (PRIVATE/'guest-endpoints.json').exists() else None))
-            states=RUNTIME.snapshot();accuracy=reconcile_inventory(records,states)
+            states=RUNTIME.snapshot()
+            claims,unverified=leases.reconcile(states,force=refresh)
+            accuracy=reconcile_inventory(records,states,lease_claims=claims,lease_unverified=unverified)
             accuracy['pending']=any(key not in states for key in LIVE.endpoints())
             value=inventory(RUNTIME.apply(records),LIVE.readings())
             value['inventory_accuracy']=accuracy;value['address_audit']=address_audit_summary(records);value['fetched_at']=time.time();value['error']=None

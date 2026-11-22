@@ -1,10 +1,28 @@
 import sqlite3
 import unittest
 
-from review import lease_page
+from review import lease_inventory, lease_page
 
 
 class LeaseReviewTest(unittest.TestCase):
+    def test_inventory_projects_only_active_dynamic_intent(self):
+        class Scope:
+            node = 'provider'
+            guest_id = '102'
+
+            def name(self, lease):
+                return 'lease-' + lease
+
+        with sqlite3.connect(':memory:') as db:
+            db.row_factory = sqlite3.Row
+            db.execute('CREATE TABLE lease(id, phase, slot_id)')
+            db.executemany('INSERT INTO lease VALUES (?, ?, ?)', [
+                ('first', 'cloning', 'dynamic'), ('second', 'released', 'dynamic'),
+                ('third', 'ready', 'fixed')])
+            self.assertEqual(lease_inventory(db, {'dynamic': Scope()}), {'guests': [
+                {'node': 'provider', 'id': '102', 'name': 'lease-first', 'type': 'qemu', 'lease': 'first'},
+            ]})
+
     def test_current_lease_older_than_first_history_page(self):
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)

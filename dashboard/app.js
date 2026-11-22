@@ -149,7 +149,7 @@ let reconcileRequested=0;
 const findingGroups=[
  ['guest-mismatch','Confirmed guest mismatches'],
  ['record-review','Records to review'],
- ['coverage','Collectors we could not verify']
+ ['coverage','Checks we could not verify']
 ];
 function findingItem(f){
  return el('li','',f.target+(f.guest_id?' / '+f.guest_id:'')+' — '+f.message+(f.name?' ('+f.name+')':''));
@@ -210,7 +210,15 @@ function showAccuracy(a){
   section.append(el('h3','',h.machine_id+' · '+state+(verified?' · '+age(h.checked):'')));
   if(verified){
    const list=el('ul');
-   for(const g of h.guests)list.append(el('li','',g.id+' · '+(g.name||g.id)+' · '+g.state+(g.template?' · template':'')+' · '+(g.records.join(', ')||'No service binding')));
+   for(const g of h.guests){
+    const row=el('li','',g.id+' · '+(g.name||g.id)+' · '+g.state+(g.template?' · template':''));
+    if(g.lease){
+     const link=el('a','','Managed lease');link.href='#leases';
+     row.append(document.createTextNode(' · '),link);
+    }
+    if(g.records.length||!g.lease)row.append(document.createTextNode(' · '+(g.records.join(', ')||'No service binding')));
+    list.append(row);
+   }
    section.append(list);
   }
   hosts.append(section);

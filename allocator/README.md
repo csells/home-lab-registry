@@ -340,6 +340,16 @@ and the latest checkpoint's verification and retention dates. Requests are
 paged and made when the operator opens, refreshes or expands the history.
 The review credential cannot issue leases, retrieve artifacts or change holds.
 
+Set the dashboard's optional `inventory_machines` in `lease-review.json` to a
+map from enrolled Proxmox node names to their registry machine IDs. The existing
+review credential can read `GET /v1/lease-review?scope=inventory`, which projects
+only the active dynamic clone identities. The dashboard matches each tuple
+against a fresh authenticated host observation and displays a link to leases.
+It requests the projection on guest identity or power-state changes and manual
+reconciliation. Unchanged heartbeats use the cached comparison. If the
+projection is unavailable, the dashboard surfaces the ownership check as
+unverified. The read-only join has no authority over placement or cleanup.
+
 ### Capability admission and reviewer holds
 
 A task can call `capabilities` with its ordinary credential to inspect the
