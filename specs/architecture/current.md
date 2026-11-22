@@ -189,6 +189,22 @@ scheduled agent inference. Warnings and incomplete verification remain visible w
 The [registry/dashboard architecture](registry-dashboard.md) documents the HTTPS
 API, SQLite state, collectors, authentication, update cadence and source modules.
 
+## Allocator staging
+
+The Linux pilot runs in a disposable staging environment. A SQLite operation
+ledger governs one pre-provisioned Proxmox slot. The controller fences mutations
+with guest generation and a separate ledger witness. Task credentials grant
+access to the owned guest. Capacity requests return a reason when they cannot
+be admitted. The staged dashboard shows leases alongside the registry's existing
+views.
+
+The export worker validates and reads back task workspace checkpoints in a
+dedicated encrypted Drive repository before releasing the slot. The controller
+and worker enforce separate lease and checkpoint retention. The staged expiry
+credential is time-limited and scoped to that checkpoint repository. Broader
+placement, Apple adapters and production job-launcher integration remain in
+[the allocator plan](../plans/0001-renewable-test-environments.md).
+
 ## Configuration backup and recovery
 
 One central Backrest controller orchestrates configuration exports using registry

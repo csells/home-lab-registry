@@ -1,8 +1,8 @@
 # Renewable test environments as a home-lab service
 
-Status: proposed. The first implementation target is one bounded Linux pool.
-Created 2026-10-19; expanded 2026-11-20 with heterogeneous placement, Apple workers
-and the usage audit. No allocator or provider migration is claimed deployed.
+Status: a single-slot Linux allocator is running in staging. The stable home lab
+uses the registry and streamed inventory. See the [allocator review branch](https://github.com/csells/home-lab-registry/tree/review/linux-lease-pilot/allocator)
+for the implementation, limits and operational setup.
 
 Context: [vision](../vision/home-lab.md), [current architecture](../architecture/current.md).
 
@@ -87,7 +87,7 @@ Names below describe semantics; they are not existing routes or commands.
 | Operation | Behavior |
 | --- | --- |
 | Discover | Return qualified capabilities, constraints, templates, capacity freshness and API schema |
-| Acquire | Accept task, requirements, initial duration and idempotency key; return admitted/queued operation with reason |
+| Acquire | Accept task, requirements, initial duration and idempotency key; return an admitted operation or reject with a reason |
 | Inspect | Return readiness, actual allocation, deadline, export freshness, constraints and pending operations |
 | Renew | Extend owned work without routine human approval; preserve the environment and return the new deadline |
 | Resize | Plan and perform an authorized capacity change or matching replacement; report interruption requirements |
@@ -110,7 +110,7 @@ runner or orchestration integration so an independent build or paused conversati
 does not require inference to stay alive. Delegation is task-scoped and bounded by
 its declared work/review policy; a VM heartbeat alone cannot renew forever.
 
-Normal lifecycle: requested -> queued -> provisioning -> ready -> releasing ->
+Normal lifecycle: requested -> provisioning -> ready -> releasing ->
 released. Renewal keeps a ready environment ready. A missed deadline enters grace
 and ownership reconciliation, not immediate deletion. Then retain or suspend safely,
 or reclaim according to the admission-time policy. Suspension is capability-specific;
@@ -119,7 +119,7 @@ do not assume all GPU jobs can be snapshotted or interrupted without loss.
 Renewal during grace cancels eligible pending reclamation atomically. Once a
 destructive operation is dispatched, renewal cannot pretend that destruction was
 cancelled: finish reconciliation and offer a replacement. Active work is not
-preempted merely to satisfy another request; queue or negotiate alternatives.
+preempted to satisfy another request. Reject when capacity is exhausted and give the reason.
 
 Expiry policy must expose grace, notification, maximum abandoned-data retention,
 and what happens if export fails. Freeze/quarantine uncertain allocations, retain
@@ -213,8 +213,8 @@ retains the rollout work; this plan does not assume that candidate is stable.
 
 The bounded Linux lifecycle is the first delivery, not the whole project charter.
 Follow it with one Apple recipe through the same task/operation/lease contract.
-Two tasks contending for the Mac must receive owned execution and an actionable
-queue without disturbing an unrelated VM. Review holds survive nominal expiry;
+Two tasks contending for the Mac must receive owned execution and an immediate
+capacity rejection without disturbing an unrelated VM. Review holds survive nominal expiry;
 controller restarts preserve ownership and pending operations.
 
 A fresh clone must complete a real Apple build and actual GUI interaction without
@@ -248,7 +248,7 @@ and authorized cutover plan. Windows/GPU/device adapters remain explicit later w
   plus a real restart/integration run. Controller restore reconciles stale state.
 - [ ] **Agent and dashboard integration.** A fresh agent completes a user-level task
   without manual provisioning instructions; reconnects after interruption; sees
-  queue reasons, renewal and evidence freshness. Human UI shows ownership and
+  rejection reasons, renewal and evidence freshness. Human UI shows ownership and
   review retention, works on mobile and rejects unauthorized access. No recurring
   inference is used to keep leases alive.
 - [ ] **Review and promotion.** Present functioning staging, real lifecycle evidence,
@@ -272,7 +272,7 @@ that policy, never retroactively to existing workloads.
 
 ## Success measures
 
-Measure intervention-free task completion, queue/acquisition latency, renewable
+Measure intervention-free task completion, admission and acquisition latency, renewable
 environment reuse, export lag and data-loss window, reconstruction time, orphan
 disk/resource count and controller overhead. Require zero protected-service
 mutations, zero cross-owner cleanup and zero unreserved static LAN assignments in
@@ -289,7 +289,7 @@ durable operation journal separate from guest storage, and publish registry
 records after each verified transition. The central encrypted backup system is
 the existing destination to qualify for checkpoint export and restore.
 
-Start with explicit release and an overdue state that queues owner review.
+Start with explicit release and an overdue state that flags owner review.
 Enable automatic reclamation only after the retention, export-failure and
 delegation policy has been selected and verified. No policy decision is
 required to prototype acquire, renew, explicit release and interrupted

@@ -26,7 +26,7 @@ Agent orchestration runs on suitably provisioned persistent infrastructure. Agen
 
 Select compatible x86 workers for Windows/Linux guests and Apple hardware for macOS VMs or Xcode/iOS Simulator. Discover each machine's permitted roles and installed capabilities from its registry record. Place general persistent services on suitable Proxmox guests while preserving settings and data. Read current placement, migration constraints and dependencies from each registry record; the target architecture is not evidence that migration has occurred. Android needs a verified hardware-accelerated worker; treat nested virtualization as unproven until exercised. A simulator does not replace physical-device testing.
 
-Provide disposable application test environments cloned from maintained templates, with resource limits, ownership, expiry, and external artifact storage. Reserve resources and separate permissions for persistent household/production services. Queue work when capacity is exhausted; do not oversubscribe worker memory.
+Provide disposable application test environments cloned from maintained templates, with resource limits, ownership, expiry, and external artifact storage. Reserve resources and separate permissions for persistent household/production services. Reject requests immediately when no eligible capacity is available and give the reason. The requester can adjust requirements or retry later.
 
 For existing host maintenance or environment requests, read [operations](references/operations.md). Distinguish implemented capabilities from the proposed provisioner: a hypervisor API alone is not a scheduler or lease manager.
 
