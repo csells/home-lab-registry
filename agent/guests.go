@@ -53,6 +53,7 @@ type GuestConfig struct {
 	ServerName          string `json:"server_name,omitempty"`
 	Binary              string `json:"binary,omitempty"`
 	TartHome            string `json:"tart_home,omitempty"`
+	TartWatchEvents     bool   `json:"tart_watch_events,omitempty"`
 	IntervalSeconds     int    `json:"interval_seconds,omitempty"`
 	TaskEventsDirectory string `json:"task_events_directory,omitempty"`
 }
@@ -125,6 +126,9 @@ func parseTart(raw []byte) ([]Guest, error) {
 type guestCollector func(context.Context) GuestReport
 
 func newGuestCollector(cfg GuestConfig) (guestCollector, error) {
+	if cfg.TartWatchEvents && cfg.Source != "tart" {
+		return nil, errors.New("Tart events require the Tart provider")
+	}
 	if cfg.TaskEventsDirectory != "" {
 		if cfg.Source != "proxmox" {
 			return nil, errors.New("guest task events require the Proxmox provider")

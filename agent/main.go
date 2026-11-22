@@ -329,9 +329,11 @@ func main() {
 		var wake <-chan struct{}
 		if directory := cfg.Guests.TaskEventsDirectory; directory != "" {
 			wake, err = guestTaskEvents(ctx, directory)
-			if err != nil {
-				log.Printf("guest task event source unavailable: %v", err)
-			}
+		} else if cfg.Guests.TartWatchEvents {
+			wake, err = tartGuestEvents(ctx, cfg.Guests.TartHome)
+		}
+		if err != nil {
+			log.Printf("guest event source unavailable: %v", err)
 		}
 		go runGuestsWithEvents(ctx, guests, cfg.Guests.interval(), collector, wake)
 	}

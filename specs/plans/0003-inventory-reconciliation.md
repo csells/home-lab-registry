@@ -189,5 +189,17 @@ unsupported event sources. The dashboard does not poll the fleet.
 
 A temporary local collector on the actual Proxmox host observed a disposable
 guest's start and removal before its five-minute fallback sample. The candidate
-did not replace the installed collector. Tart still uses its existing local
-sampling path.
+did not replace the installed collector.
+
+## Native Tart wake events
+
+Set `guests.tart_watch_events: true` on a macOS collector running as the
+Tart owner. It watches the local inventory and VM directories. Tart creates
+its control socket when starting a VM. When Tart's configuration lock
+identifies a running process, the collector also watches that process exit.
+Both signals refresh the cached inventory through `tart list`. The local
+sample preserves freshness when a path or process watch is unavailable.
+
+A separate local collector on the actual Mac streamed clone creation, start,
+stop, and deletion using Tart 2.39.0. All four updates arrived before its
+five-minute fallback sample. No installed collector was replaced.
