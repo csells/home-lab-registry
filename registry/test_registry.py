@@ -19,21 +19,6 @@ class RegistryTest(unittest.TestCase):
             return response.status, json.load(response)
     def record(self):
         return dict(name='Voice', host='desktop-node', owner='example-owner', capabilities=['tts','stt'], endpoints={'api':'https://example.test'}, lifecycle='active', runbook='https://example.test/runbook', notes='test', dependencies=[])
-    def test_health_updates_invalidate_catalog_after_commit(self):
-        self.call('PUT', '/v1/services/voice', self.record(), revision=0)
-        catalog = self.server.catalog
-        previous = catalog.change_version
-        observation = {'status': 'unhealthy', 'evidence': 'Timeout', 'ttl_seconds': 60}
-        self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation, revision=0)[0], 409)
-        self.assertEqual(catalog.change_version, previous)
-        with catalog.changes:
-            task = threading.Thread(target=catalog.observe, args=('voice', observation, 1))
-            task.start()
-            self.assertTrue(catalog.changes.wait_for(lambda: catalog.change_version > previous, timeout=2))
-        task.join()
-        self.assertEqual(catalog.get('voice')['health']['status'], 'unhealthy')
-        self.assertEqual(catalog.change_version, previous + 1)
-
     def test_access_validation_and_conflicts(self):
         self.assertEqual(self.call('GET','/v1/services',token='wrong')[0],401)
         self.assertEqual(self.call('PUT','/v1/services/voice',self.record(),token='test-reader',revision=0)[0],403)
@@ -79,7 +64,7 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(self.call('POST', route, body, token=token)[0], 409)
         self.assertNotIn('runtime_observation', self.call('GET', '/v1/services/voice')[1])
 
-    def test_change_stream_tracks_only_committed_metadata(self):
+    def test_change_stream_tracks_committed_metadata_and_health(self):
         path = '/v1/catalog/changes'
         epoch = self.server.catalog.change_epoch
         self.assertEqual(self.call('GET', path, token='invalid')[0], 401)
@@ -97,15 +82,18 @@ class RegistryTest(unittest.TestCase):
         with open_feed(f'{epoch}:1') as stream:
             self.assertEqual(json.loads(stream.readline()), {'heartbeat': True})
             observation = {'status': 'healthy', 'evidence': 'test'}
-            self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation)[0], 200)
+            self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation, revision=0)[0], 409)
+            self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation, revision=1)[0], 200)
+            self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 2})
+            self.assertEqual(self.call('GET', '/v1/services/voice')[1]['health']['status'], 'healthy')
             self.assertEqual(self.call('PUT', '/v1/services/voice', self.record(), revision=0)[0], 409)
         doc = self.record()
         doc['lifecycle'] = 'retired'
         self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=1)[0], 200)
         self.assertEqual(self.call('GET', '/v1/services')[1]['services'], [])
-        for cursor in (f'{epoch}:1', f'{"0" * 32}:2'):
+        for cursor in (f'{epoch}:2', f'{"0" * 32}:3'):
             with open_feed(cursor) as stream:
-                self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 2})
+                self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 3})
         with self.assertRaises(urllib.error.HTTPError) as error:
             open_feed('invalid')
         self.assertEqual(error.exception.code, 400)
