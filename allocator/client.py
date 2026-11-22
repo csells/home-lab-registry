@@ -189,6 +189,7 @@ def main():
     parser.add_argument('--token-file', type=Path)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('capabilities')
+    sub.add_parser('contract', help='Read the versioned task API and its core request schemas')
     sub.add_parser('leases', help='List recent leases owned by this task, with active leases first')
     resume = sub.add_parser('resume')
     resume.add_argument('predecessor')
@@ -280,8 +281,8 @@ def main():
                 raise ValueError('Provide the replacement SSH private key.')
             print(json.dumps(resume_workspace(endpoint, args)))
             return 0
-        if args.command == 'capabilities':
-            print(json.dumps(request(endpoint, args.ca, args.token_file, '/v1/capabilities', None)))
+        if args.command in ('capabilities', 'contract'):
+            print(json.dumps(request(endpoint, args.ca, args.token_file, '/v1/' + args.command, None)))
             return 0
         if args.command == 'leases':
             print(json.dumps(request(endpoint, args.ca, args.token_file, '/v1/leases', None)))

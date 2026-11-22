@@ -20,7 +20,8 @@ from pathlib import Path
 
 
 from checkpoints import object_name, Checkpoints, Rejected, recoverable, restore_held
-from capabilities import PLATFORM, RECIPE, match, requirements, validate_bindings
+from capabilities import (MAX_EXTENSION_SECONDS, MAX_REQUEST_TEXT, PLATFORM, RECIPE, TASK_API_VERSION,
+                          match, requirements, task_contract, validate_bindings)
 from credentials import TaskCredentials
 from ledger import Ledger
 from pve_dynamic import DynamicScope
@@ -614,7 +615,8 @@ class Pilot:
                           'admission': 'reserved' if slot_id in reserved else 'assess_at_acquire',
                           'capabilities': {**slot.platform, 'gpu': 'none', **observation['slot_resources'],
                                            'dependencies': dependencies}})
-        response = {'recipe': RECIPE, 'recipes': sorted({s.recipe for s in self.slots.values()}),
+        response = {'api_version': TASK_API_VERSION, 'recipe': RECIPE,
+                    'recipes': sorted({s.recipe for s in self.slots.values()}),
                     'observed_at': time.time(), 'slots': slots}
         # Keep the existing one-slot response available to older agent clients.
         if len(slots) == 1:
@@ -895,7 +897,7 @@ class Pilot:
 
     def acquire(self, data, owner):
         task, key, seconds = data.get('task'), data.get('request_key'), data.get('seconds')
-        if not all(isinstance(s, str) and 0 < len(s) <= 128 for s in (task, key)):
+        if not all(isinstance(s, str) and 0 < len(s) <= MAX_REQUEST_TEXT for s in (task, key)):
             raise Rejected('invalid_request', 'Provide a task and a request_key of 1–128 characters.', 400)
         self.check_duration(seconds)
         reclaim = data.get('reclaim_on_expiry', True)
@@ -960,7 +962,7 @@ class Pilot:
 
     @staticmethod
     def check_duration(seconds):
-        if type(seconds) is not int or not 0 < seconds <= 86400 * 365:
+        if type(seconds) is not int or not 0 < seconds <= MAX_EXTENSION_SECONDS:
             raise Rejected('invalid_duration', 'Provide a duration between one second and one year.', 400)
 
     def renew(self, lease, data, owner):
@@ -1605,6 +1607,9 @@ def main():
                 self.respond({'code': 'unauthorized'}, 401)
                 return
             try:
+                if parts == ['v1', 'contract'] and self.command == 'GET':
+                    self.respond(task_contract())
+                    return
                 if parts == ['v1','capabilities'] and self.command == 'GET':
                     self.respond(controller.capabilities())
                     return

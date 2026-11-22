@@ -124,6 +124,12 @@ and `client.py --session SESSION leases` to find suitable recipes and its own
 recent environments. The same input works for acquisition, renewal and
 checkpoint recovery.
 
+Use `client.py --session SESSION contract` or the authenticated
+`GET /v1/contract` to discover the core routes and versioned JSON schemas for
+acquisition, renewal and release. Capability discovery reports the same API
+version and the currently qualified recipes. Requests still need to fit the
+live capacity and task's authorization.
+
 
 ## Checkpoint-gated reclamation
 
