@@ -407,3 +407,18 @@ challenge and verifies any snapshot already written before creating another.
 At retention expiry the worker also reconciles attempts without a receipt by
 their exact challenge and archive path. Command failures report the stage, exit
 status and a recognized diagnostic without publishing raw stderr.
+
+### Multi-host placement preflight
+
+`placement.py INPUT` matches a Linux recipe against fresh, trusted observations
+from eligible workers. Each observation supplies a registry machine ID, timestamp,
+qualified recipe resources, measured memory and disk headroom, and the configured
+post-start minimums. It prefers the smallest available worker that fits and reports
+why each other worker was rejected. A completely rejected request exits immediately
+with status 2.
+
+The operator qualification feeds it directly from live, pinned Proxmox observations
+and uses the selected worker for a disposable clone. This command does not create a
+lease or reserve capacity. The mutation path must re-read capacity and acquire its
+own fenced, durable reservation before startup. The existing fixed-slot API
+retains its ownership model.

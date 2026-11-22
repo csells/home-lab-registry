@@ -614,3 +614,19 @@ the controller preserved it. The worker retried into an isolated staging inbox,
 acknowledged one delivery, and did not submit a duplicate on its next run.
 Normal capture subsequently verified the checkpoint and released the slot.
 Production owner routing and production launcher integration remain open.
+
+### Staging milestone: provider placement and Apple recipe
+
+The placement preflight matched an ordinary Debian request against fresh
+capacity on two independent Proxmox hosts. It rejected oversized requests
+and expired observations immediately. The selected host passed a disposable
+clone, actual task SSH, generation-bound registration and exact teardown. The
+fixture exercised operator provisioning. Shared multi-host reservations and
+mutation through the allocator are still open.
+
+The existing Apple recipe compiled and ran a native Swift program in a fresh
+Tart clone while the existing review VM remained running. The iPhone
+simulator booted, built and ran the test app. Captures verified two rendered
+states selected by separate launch arguments. The clone and its registry
+record were cleaned up. Direct pointer input and an allocator-managed Apple
+lease have separate acceptance requirements.
