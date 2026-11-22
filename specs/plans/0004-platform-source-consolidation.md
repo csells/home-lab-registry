@@ -69,14 +69,21 @@ The backup collector, scoped source resolution and portable archive validation
 were merged in [PR #1](https://github.com/csells/home-lab-registry/pull/1).
 The new collector is running and the dedicated staging resources were retired.
 The fleet qualification verified encrypted round trips for 17 remote collection
-paths. Private SSH profiles preserve required tunnels and host-key aliases.
+paths. A fresh comparison matched all five installed modules to the reviewed
+source. Private SSH profiles preserve required tunnels and host-key aliases.
 The deployment record owns current source identities, coverage and recovery
 evidence. Disabled historical plans retain their archives.
 
 Remaining source work covers the reusable Apple worker and image/setup tooling,
 device tooling with verified ownership, and any exporters outside the reviewed
 collector delivery. The staged Tart allocator has lifecycle evidence for one
-recipe. Qualify its source and installation inputs for a reproducible rollout.
+recipe. Its reusable worker is combined with the registry review candidate.
+Its read-only enrollment preflight verified the pinned template, role separation
+and idle slot on the host without starting a VM. Qualify a clean installation
+using operator-supplied signing and image inputs. The staging source includes
+the reusable simulator input and Metal smoke workloads. Preserve private
+device settings, the signing identity and production helper authorization in
+operator deployment records.
 Check the actual source revision, license and deployment parity before importing
 each component. The private operations plan tracks
 individual application and hardware recovery limits.

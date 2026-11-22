@@ -70,7 +70,15 @@ def retire(client, record_id, spec):
     if deployment_identity(current['spec']) != expected:
         raise ValueError('The record belongs to another deployment generation')
     if current['spec']['lifecycle'] != 'retired':
-        run_client(client, 'retire', record_id, '--revision', str(current['revision']))
+        try:
+            run_client(client, 'retire', record_id, '--revision', str(current['revision']))
+        except (RuntimeError, subprocess.TimeoutExpired) as error:
+            # A write can commit before the caller loses its reply. Verify the
+            # requested generation before treating this as a successful retire.
+            current = run_client(client, 'get', record_id)
+            if current['spec']['lifecycle'] != 'retired' or deployment_identity(current['spec']) != expected:
+                raise error
+            return current
     current = run_client(client, 'get', record_id)
     if deployment_identity(current['spec']) != expected or current['spec']['lifecycle'] != 'retired':
         raise ValueError('Registry retirement was not verified')

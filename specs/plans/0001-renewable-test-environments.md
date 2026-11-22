@@ -309,8 +309,8 @@ for a future repeatable latency benchmark.
    client interruption drill after terminating and restarting a coding-agent
    runtime. Recover an actual failed workload, its evidence and its unfinished
    work. Measure export lag, the acknowledged recovery point and remaining data
-   loss. Restore a controller journal and reconcile an in-flight operation
-   against the provider before allowing reuse.
+   loss. Extend the verified same-controller restore to a fenced replacement
+   controller on a different VM.
 3. **Qualify one managed CUDA recipe.** Discover a suitable registered worker,
    verify available GPU capacity and run a real CUDA workload through the same
    lease API. Verify immediate rejection of a competing request, durable
@@ -346,12 +346,22 @@ promotion remains on hold.
   archive and restored the unchanged file in a matching clone in 35 seconds.
   Both leases released, and the isolated drill restored the normal grace
   policy. A full restart of a coding-agent runtime remains a separate check.
+- A separate Linux workload acquired through curl and recovered through the
+  standalone Python client. After requester termination, a matching clone
+  restored the failing test, its log and uncommitted data byte for byte in
+  42.17 seconds. The restored test reproduced the failure and both guests
+  were reclaimed. This qualifies the HTTP interface and recovery across
+  clients. Independent coding-agent runtime acceptance remains open.
 - Staging renewed a 45-minute lease to 45 days through the live API, then
   exercised six additional renewals with a controlled clock. The export worker
   verified failure notification, retry and recovery across restart. The scoped
   expiry test removed an eligible stored checkpoint and confirmed recovery
   access ended. Production owner routing and standing credential setup remain
   open.
+- Staging paused the controller during a real Proxmox clone. The recovered
+  encrypted Drive journal matched its independent witness and SHA-256. The
+  controller resumed the same lease to readiness and reclaimed the exact guest
+  after verified export. The drill used the original controller identity.
 - The actual Proxmox template and datastore passed a fresh DHCP and storage
   check. New code can pin recipe versions and estimate maintenance impact without
   provider writes. Independent image provenance and qualification of a new
@@ -391,8 +401,9 @@ promotion remains on hold.
   Staging recovered real Proxmox task replies, rejected stale journal and guest
   generations, and held disks on export failure. The latest backup restored
   a consistent SQLite journal and matched retained receipts. Long-duration
-  renewal has staged evidence. A full controller recovery drill through
-  active-operation reconciliation remains open.
+  renewal has staged evidence. The encrypted journal restore continued a
+  real in-flight operation on the same controller. Qualify total controller loss,
+  replacement identity fencing and recovery from older backups.
 - [ ] **Agent and dashboard integration.** A fresh agent completes a user-level task
   without manual provisioning instructions; reconnects after interruption; sees
   rejection reasons, renewal and evidence freshness. Human UI shows ownership and

@@ -551,6 +551,12 @@ The worker HTTP listener binds to loopback. Supply different control and
 capture credentials. Tasks receive neither credential and connect directly to
 the guest with their scoped SSH key.
 
+Run `python3 allocator/tart_worker.py CONFIG.json --preflight` to check the
+existing template pin, credential separation, idle slot and local headroom.
+The command does not start a worker or boot a guest. Keep worker state and the
+real configuration private. For routine simulator tests on an approved Mac,
+use Xcode Simulator directly and shut down the task's simulator when finished.
+
 In the controller's `additional_slots`, supply the local tunnel URL, the
 worker identity, guest user and exact qualified shape under a `tart`
 configuration. The worker records clone, start, stop and delete intents on

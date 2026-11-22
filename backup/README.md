@@ -63,6 +63,14 @@ the actual lab from disposable staging.
 
 ## Staging review
 
+For a controller recovery drill, restore the required Backrest bootstrap files
+from an explicit encrypted snapshot into a fresh private directory. Use the
+list in `verify_controller.py` to select the files and `restic restore --verify`
+to verify their bytes. Run `python3 backup/verify_controller.py RESTORE_ROOT`
+before starting the recovered controller. The check reports counts without
+printing restored credentials or configuration values. Keep the return of
+the Backrest service and repository access as separate runtime checks.
+
 `review/server.py --report /path/to/redacted-report.json --port 9084` serves a
 loopback-only results page and evidence JSON. Supply only redacted source labels,
 verification statements and remaining gaps. It serves exactly `/`, `/report.json`

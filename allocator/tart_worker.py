@@ -325,7 +325,7 @@ class Worker:
         self.save(lease,row)
 
 
-def serve(settings, worker):
+def roles(settings):
     def token(key):
         value=Path(settings[key]).read_text().strip()
         if not re.fullmatch(r'[A-Za-z0-9_-]{43,128}',value):
@@ -334,6 +334,11 @@ def serve(settings, worker):
     control, capture=token('control_token_file'),token('capture_token_file')
     if control==capture:
         raise ValueError('Capture and control require distinct worker roles.')
+    return control, capture
+
+
+def serve(settings, worker):
+    control, capture = roles(settings)
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -394,6 +399,17 @@ def serve(settings, worker):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('configuration',type=Path)
-    settings=json.loads(parser.parse_args().configuration.read_text())
+    parser.add_argument('--preflight', action='store_true',
+                        help='Check the existing pinned template and capacity without starting a worker')
+    args = parser.parse_args()
+    settings=json.loads(args.configuration.read_text())
     os.umask(0o077)
-    serve(settings,Worker(settings))
+    worker = Worker(settings)
+    if args.preflight:
+        roles(settings)
+        capacity = worker.capacity(allow_running=False)
+        worker.idle()
+        print(json.dumps({'template_verified': True, 'slot_idle': True,
+                          'shape': capacity['shape'], 'capacity': capacity}))
+    else:
+        serve(settings,worker)

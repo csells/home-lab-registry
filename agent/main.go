@@ -261,10 +261,20 @@ func (s *store) stream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func main() {
-	mode := flag.String("mode", "serve", "serve, stream, snapshot or guests")
+	mode := flag.String("mode", "serve", "serve, stream, snapshot, guests or hardware")
 	socket := flag.String("socket", "/run/lab-metrics/agent.sock", "local Unix socket")
 	config := flag.String("config", "/etc/lab-metrics.json", "private host configuration")
 	flag.Parse()
+	if *mode == "hardware" {
+		reading := hardwareCollector()()
+		if reading == nil {
+			log.Fatal("local hardware could not be verified")
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(reading); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if *mode != "serve" {
 		if *mode != "stream" && *mode != "snapshot" && *mode != "guests" {
 			log.Fatal("invalid mode")

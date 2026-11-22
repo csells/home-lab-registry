@@ -2,6 +2,7 @@
 """Publish an enrolled deployment observation through the registry's HTTPS API."""
 import argparse
 import json
+import os
 import re
 import ssl
 import subprocess
@@ -34,6 +35,25 @@ def observe_systemd(unit):
     if fields.get('LoadState') == 'not-found':
         return 'missing'
     if status.returncode == 0 and fields.get('LoadState') in ('loaded', 'masked'):
+        return 'present'
+    return 'unverified'
+
+
+def observe_launchd(domain, label):
+    if (not re.fullmatch(r'(?:system|gui/[1-9][0-9]{0,9}|user/[1-9][0-9]{0,9})', domain)
+            or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,179}', label)):
+        raise ValueError('Use an exact launchd domain and service label')
+    target = f'{domain}/{label}'
+    try:
+        status = subprocess.run(['/bin/launchctl', 'print', target],
+                                capture_output=True, text=True, timeout=8,
+                                env={**os.environ, 'LC_ALL': 'C'})
+    except (OSError, subprocess.TimeoutExpired):
+        return 'unverified'
+    if status.returncode == 113 and 'Could not find service' in status.stderr:
+        return 'missing'
+    first_line = status.stdout.partition('\n')[0]
+    if status.returncode == 0 and first_line == target + ' = {':
         return 'present'
     return 'unverified'
 
@@ -74,11 +94,17 @@ def main():
     parser.add_argument('config', type=Path)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--systemd', action='store_true')
+    source.add_argument('--launchd', action='store_true')
     source.add_argument('--state', choices=('present', 'missing', 'unverified'))
     args = parser.parse_args()
     try:
         config = json.loads(args.config.read_text())
-        state = observe_systemd(config['unit']) if args.systemd else args.state
+        if args.systemd:
+            state = observe_systemd(config['unit'])
+        elif args.launchd:
+            state = observe_launchd(config['domain'], config['label'])
+        else:
+            state = args.state
         print(json.dumps(publish(config, state)))
     except urllib.error.HTTPError as error:
         with error:
