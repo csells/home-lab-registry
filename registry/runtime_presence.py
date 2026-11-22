@@ -1,4 +1,5 @@
 """Bind authenticated deployment observations to an exact catalog target."""
+import hashlib
 import hmac
 import re
 
@@ -28,15 +29,17 @@ def authenticate(publishers, record, authorization):
     return publisher['binding']
 
 
-def enrollment(entries, reader, writer):
+def enrollment(entries, reader, writer, machine_enrollments):
     if not isinstance(entries, dict):
         raise ValueError('Expected runtime publisher enrollments by record ID')
     tokens = {reader, writer}
+    machine_token_hashes = {entry.get('token_sha256') for entry in machine_enrollments.values()}
     for name, entry in entries.items():
         if (not re.fullmatch(r'[a-z][a-z0-9-]{0,63}', name) or not isinstance(entry, dict)
                 or set(entry) != {'token', 'binding'} or not identity(entry['binding'])
                 or not isinstance(entry['token'], str) or not TOKEN.fullmatch(entry['token'])
-                or entry['token'] in tokens):
+                or entry['token'] in tokens
+                or hashlib.sha256(entry['token'].encode()).hexdigest() in machine_token_hashes):
             raise ValueError('Each runtime publisher needs an exact binding and unique token')
         tokens.add(entry['token'])
     return entries

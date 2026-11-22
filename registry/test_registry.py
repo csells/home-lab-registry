@@ -56,8 +56,11 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(self.call('POST', route, body, token=token)[1], value)
         self.assertEqual(self.call('GET', '/v1/services/voice')[1]['runtime_observation'], value)
-        doc['resources']['runtime_binding'] = {**binding, 'instance': 'host:replacement.service'}
+        doc['name'] = 'Updated service'
         self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=1)[0], 200)
+        self.assertEqual(self.call('GET', '/v1/services/voice')[1]['runtime_observation'], value)
+        doc['resources']['runtime_binding'] = {**binding, 'instance': 'host:replacement.service'}
+        self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=2)[0], 200)
         self.assertEqual(self.call('POST', route, body, token=token)[0], 409)
         self.assertNotIn('runtime_observation', self.call('GET', '/v1/services/voice')[1])
 

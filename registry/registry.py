@@ -150,14 +150,18 @@ class Catalog:
         validate(doc); now=time.time()
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
-            r=db.execute('SELECT revision FROM services WHERE id=?',(id,)).fetchone()
+            r=db.execute('SELECT revision,document FROM services WHERE id=?',(id,)).fetchone()
             current=r[0] if r else 0
             if revision!=current: raise Problem(409,'Revision conflict; fetch latest record before updating')
             value=json.dumps(doc,sort_keys=True)
             db.execute('INSERT OR REPLACE INTO services VALUES(?,?,?,?)',(id,current+1,value,now))
             db.execute('INSERT INTO history(id,revision,document,actor,updated) VALUES(?,?,?,?,?)',(id,current+1,value,'writer',now))
             db.execute('DELETE FROM health WHERE id=?',(id,))
-            db.execute('DELETE FROM runtime_observation WHERE id=?',(id,))
+            previous = json.loads(r['document']) if r else {}
+            if (doc['lifecycle'] != previous.get('lifecycle')
+                    or doc.get('resources', {}).get('runtime_binding')
+                       != previous.get('resources', {}).get('runtime_binding')):
+                db.execute('DELETE FROM runtime_observation WHERE id=?',(id,))
         self.notify_change()
         return self.get(id)
 
@@ -347,7 +351,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
     s=make_server((c.get('bind','0.0.0.0'),c.get('port',8443)),c['database'],c['reader_token'],c['writer_token'])
     s.enrollments=c.get('machine_enrollments',{})
-    s.runtime_publishers = runtime_presence.enrollment(c.get('runtime_publishers', {}), s.reader, s.writer)
+    s.runtime_publishers = runtime_presence.enrollment(c.get('runtime_publishers', {}), s.reader, s.writer, s.enrollments)
     if s.enrollments:s.catalog.presence_verifier=presence.verifier(c['presence_tls'])
     s.catalog.probe_credentials=c.get('probe_credentials',{})
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.minimum_version=ssl.TLSVersion.TLSv1_2
