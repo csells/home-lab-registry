@@ -263,6 +263,24 @@ independent OS accounts for the deployed roles when their repository
 credentials differ.
 
 
+### Export-failure notifications
+
+Configure a separate `reclamation.alert_token_file` on the controller and give
+only that credential to a scheduled `alerts.py CONFIG` worker. The worker
+can read and acknowledge alerts. It has no lease, export or storage authority.
+A failed final export and its alert are recorded together in the lease ledger.
+Repeated failures of the same export attempt create one notification.
+
+The worker configuration contains `endpoint`, `ca_file`, `alert_token_file`,
+`lock_file` and an operator-configured `delivery_command` argument array.
+The command reads one JSON object on standard input with the alert ID, owner,
+lease ID, failure time and event kind. It routes the event to the configured
+owner. Use the alert ID as the delivery idempotency key and return success only
+after accepting the alert durably. A failed command or interrupted acknowledgment
+leaves the same event pending for retry. The delivery command receives no raw
+export diagnostics. The allocator retains its normal failure and disk-hold
+behavior while delivery is unavailable.
+
 ### Task credential issuance
 
 Configure `task_issuer_tokens` with one secret file per trusted job launcher.

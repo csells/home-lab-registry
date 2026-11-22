@@ -348,6 +348,10 @@ class Pilot:
             self.db.execute("""INSERT OR IGNORE INTO restore_hold
                 SELECT id, json_extract(resume_point,'$.lease'), json_extract(resume_point,'$.checkpoint_id')
                 FROM lease WHERE phase!='released' AND resume_point IS NOT NULL AND restore_completed_at IS NULL""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS export_alert (
+                id TEXT PRIMARY KEY, challenge TEXT NOT NULL UNIQUE,
+                lease_id TEXT NOT NULL, owner TEXT NOT NULL,
+                failed_at REAL NOT NULL, delivered_at REAL)""")
             self.db.execute("""CREATE TABLE IF NOT EXISTS unacknowledged_expiry (
                 challenge TEXT PRIMARY KEY, claim TEXT NOT NULL, purged_at REAL)""")
         ticket_columns = {row['name'] for row in self.db.execute('PRAGMA table_info(recovery_ticket)')}
@@ -367,6 +371,7 @@ class Pilot:
         self.host_key = public_key(config['guest_host_key'])
         policy = config.get('reclamation', {})
         self.reclaim_enabled = bool(policy.get('verifier_token_file'))
+        self.alerts_enabled = bool(policy.get('alert_token_file'))
         self.retention_enabled = policy.get('purge_expired_checkpoints') is True
         if self.retention_enabled and not self.reclaim_enabled:
             raise ValueError('Checkpoint expiry requires a verifier')
@@ -803,6 +808,10 @@ class Pilot:
             with self.db:
                 self.db.execute("""UPDATE lease SET export_failed_at=coalesce(export_failed_at, ?),
                     export_error=? WHERE id=?""", (time.time(), reason.strip(), lease))
+                if self.alerts_enabled:
+                    self.db.execute("""INSERT OR IGNORE INTO export_alert
+                        SELECT ?, export_challenge, id, owner, export_failed_at, NULL
+                        FROM lease WHERE id=?""", (uuid.uuid4().hex, lease))
             print(f'Final export failed for lease {lease}; disk preserved', flush=True)
             return self.public(self.get(lease))
         snapshot, digest, path = data.get('snapshot'), data.get('sha256'), data.get('path')
@@ -820,6 +829,24 @@ class Pilot:
             self.db.execute('UPDATE lease SET checkpoint=?, export_failed_at=NULL, export_error=NULL WHERE id=?',
                             (json.dumps(receipt), lease))
         return self.public(self.get(lease))
+
+    def next_export_alert(self):
+        row = self.db.execute("""SELECT id, lease_id, owner, failed_at
+                                FROM export_alert WHERE delivered_at IS NULL
+                                ORDER BY failed_at, id LIMIT 1""").fetchone()
+        return {'alert': dict(row) if row else None}
+
+    def acknowledge_export_alert(self, data):
+        alert_id = data.get('alert_id')
+        if not isinstance(alert_id, str) or not re.fullmatch(r'[a-f0-9]{32}', alert_id):
+            raise Rejected('invalid_alert', 'Provide a valid alert ID.', 400)
+        with self.db:
+            result = self.db.execute("""UPDATE export_alert
+                      SET delivered_at=coalesce(delivered_at, ?) WHERE id=?""",
+                                     (time.time(), alert_id))
+            if result.rowcount != 1:
+                raise Rejected('unknown_alert', 'No matching export alert.', 404)
+        return {'delivered': True}
 
     def grant_upload(self, lease, data, owner):
         row = self.owned(lease, owner)
@@ -1091,8 +1118,12 @@ def main():
     reviewer = Path(review_ref).read_text().strip() if review_ref else None
     if reviewer is not None and not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', reviewer):
         raise ValueError('Configure a dedicated read-only lease review credential')
+    alert_ref = config.get('reclamation', {}).get('alert_token_file')
+    alert_token = Path(alert_ref).read_text().strip() if alert_ref else None
+    if alert_token is not None and (not verifier or not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', alert_token)):
+        raise ValueError('Export alerts require a dedicated token and a configured export verifier')
     all_tokens = [*task_tokens.values(), *reservation_tokens.values(), *issuer_tokens.values()]
-    all_tokens.extend(token for token in (recovery_token, verifier, reviewer) if token)
+    all_tokens.extend(token for token in (recovery_token, verifier, reviewer, alert_token) if token)
     if (any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', owner) for owner in (*reservation_tokens, *issuer_tokens))
             or any(not re.fullmatch(r'[a-zA-Z0-9_-]{32,128}', value)
                    for value in (*reservation_tokens.values(), *issuer_tokens.values()))
@@ -1169,6 +1200,9 @@ def main():
             delegated_route = len(parts) == 3 and parts[:2] == ['v1', 'delegated-renewal']
             export_route = len(parts) in (2, 3) and parts[:2] == ['v1', 'final-export']
             expiry_route = parts == ['v1', 'checkpoint-expiry']
+            alert_route = parts == ['v1', 'export-alerts']
+            is_alert_worker = alert_token is not None and hmac.compare_digest(
+                supplied, ('Bearer ' + alert_token).encode('ascii'))
             recovery_route = len(parts) == 2 and parts[0] == 'v1' and parts[1] in (
                 'redeem-checkpoint', 'redeem-upload', 'complete-upload')
             is_recovery_worker = recovery_token is not None and hmac.compare_digest(
@@ -1182,6 +1216,7 @@ def main():
             authorized = (issuer is not None if issue_route
                           else reservation_owner is not None if reservation_route
                           else is_recovery_worker if recovery_route
+                          else is_alert_worker if alert_route
                           else is_verifier if export_route or expiry_route else owner is not None)
             if not authorized and not (delegated_route and self.command == 'POST'):
                 self.respond({'code': 'unauthorized'}, 401)
@@ -1195,6 +1230,9 @@ def main():
                     return
                 if reservation_route and self.command == 'GET' and len(parts) == 2:
                     self.respond({'reservations': controller.reservations.list(reservation_owner)})
+                    return
+                if alert_route and self.command == 'GET':
+                    self.respond(controller.next_export_alert())
                     return
                 if export_route and self.command == 'GET':
                     if len(parts) == 2:
@@ -1214,6 +1252,9 @@ def main():
                         raise Rejected('invalid_body', 'Provide a JSON object.', 400)
                     if export_route and len(parts) == 3:
                         self.respond(controller.export_result(parts[2], data))
+                        return
+                    if alert_route:
+                        self.respond(controller.acknowledge_export_alert(data))
                         return
                     if issue_route:
                         self.respond(controller.task_credentials.issue(issuer, data))

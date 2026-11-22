@@ -599,3 +599,18 @@ removed exactly the unacknowledged snapshot from the dedicated repository.
 The independently verified final checkpoint remained available. The dashboard
 also excluded a verified final export from its downloadable count during a
 disk hold.
+
+
+### Staging milestone: export-failure notifications
+
+A failure recorded by the regular export worker held the leased disk and
+persisted an alert in the same ledger transaction. A separate scheduled worker
+could read and acknowledge alerts. The normal task and export-verifier
+credentials could not read the alert queue. The alert worker could not
+inspect capacity or claim an export.
+
+A deliberately unavailable staging receiver left the alert pending. Restarting
+the controller preserved it. The worker retried into an isolated staging inbox,
+acknowledged one delivery, and did not submit a duplicate on its next run.
+Normal capture subsequently verified the checkpoint and released the slot.
+Production owner routing and production launcher integration remain open.
