@@ -1,8 +1,11 @@
 import io
 import unittest
+from threading import Event
+from urllib.error import HTTPError
+from unittest.mock import patch
 from email.message import Message
 
-from catalog_updates import consume
+from catalog_updates import consume, subscribe_catalog
 
 
 class Stream(io.BytesIO):
@@ -30,6 +33,21 @@ class CatalogUpdatesTests(unittest.TestCase):
         with self.assertRaises(ConnectionError):
             consume(Stream(b'{"version":1}\n{"version":1}\n'), seen.append)
         self.assertEqual(seen, [(None, 1)])
+
+    def test_rejected_feed_reports_unverified_and_recovers(self):
+        stop = Event()
+        states = []
+        expired = HTTPError('https://registry.invalid', 401, 'Unauthorized', {}, io.BytesIO())
+        valid = Stream(b'{"version":1}\n')
+        def status(value):
+            states.append(value)
+            if value:
+                stop.set()
+        with patch('catalog_updates.ssl.create_default_context'), patch('catalog_updates.build_opener') as build:
+            build.return_value.open.side_effect = (expired, valid)
+            subscribe_catalog({'url':'https://registry.invalid','ca_file':'ca','reader_token':'reader'},
+                              lambda: None, status, stop)
+        self.assertEqual(states[:2], [False, True])
 
     def test_truncated_frame_or_wrong_version_is_rejected(self):
         for data in (b'{"version": 1}', b'{"version": true}\n',

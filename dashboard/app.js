@@ -121,7 +121,11 @@ function render(){
  $('lease-panel').hidden = !leases;
  $('discrepancies-panel').hidden = !discrepancies;
  $('updated').hidden = leases;
- $('updated').textContent=data.fetched_at?'Updated '+new Date(data.fetched_at*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'Connecting to the lab…';
+ const checked=data.catalog?.snapshot_at||data.catalog?.checked||data.fetched_at;
+ const clock=checked?new Date(checked*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'';
+ const source=data.catalog?.snapshot_at?'Preview catalog copied ':'Catalog last read ';
+ const label=clock?source+clock:'Connecting to the lab…';
+ $('updated').textContent=data.catalog&&data.catalog.feed!=='connected'?'Catalog feed unavailable · '+label:label;
  if (leases) {
    if (enteringLeases) {
      refreshVisible();
@@ -142,13 +146,25 @@ function render(){
  const q=$('search').value.toLowerCase(),host=$('host').value,rows=items.filter(r=>(filter==='all'||health(r)===filter)&&(!host||r.host===host)&&[r.name,r.host,r.id,...r.capabilities].join(' ').toLowerCase().includes(q));const rank={unhealthy:0,stale:1,unknown:2,healthy:3,running:3,stopped:4};rows.sort((a,b)=>rank[health(a)]-rank[health(b)]||a.name.localeCompare(b.name));$('summary').textContent=rows.length+' of '+items.length+' '+(map?'resources':view);
  const cards=$('cards');cards.className=map?'':machine?'machines':'services';cards.setAttribute('aria-label',map?'Resources':machine?'Machines':isBackup?'Backups':'Services');const root=document.createDocumentFragment();if(!map)for(const r of rows)root.append(machine?machineCard(r):serviceCard(r));if(!rows.length)root.append(el('p','empty-results','No '+(map?'resources':view)+' match these filters.'));cards.replaceChildren(root);if(map&&rows.length)disposeGraph=ResourceGraph.mount(cards,items.map(r=>({...r,name:r.display_name||r.name,kind:r.kind==='machine'?r.machine_type:'service',status:health(r)})),{matching:new Set(rows.map(r=>r.id))});queueMicrotask(refreshVisible);
 }
-async function refresh(){if(busy||document.hidden)return;busy=true;$('refresh').disabled=true;try{const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});if(!response.ok)throw Error('failed');data=await response.json();$('leases-tab').hidden=!data.lease_review_enabled;if(data.lease_review_enabled)refreshLeaseIssues();if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}if(data.server_time)offset=data.server_time-Date.now()/1000;$('error').hidden=!data.error;$('error').textContent=data.error||'';showDiscrepancies();if(!copying&&!$('cards').contains(document.activeElement))render();}catch{$('error').hidden=false;$('error').textContent='Unable to refresh. Displayed readings may be stale.';}finally{busy=false;$('refresh').disabled=false}}
+async function refresh(){if(busy||document.hidden)return;busy=true;$('refresh').disabled=true;try{const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});if(!response.ok)throw Error('failed');data=await response.json();$('leases-tab').hidden=!data.lease_review_enabled;if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}if(data.server_time)offset=data.server_time-Date.now()/1000;$('error').hidden=!data.error;$('error').textContent=data.error||'';showDiscrepancies();if(!copying&&!$('cards').contains(document.activeElement))render();}catch{$('error').hidden=false;$('error').textContent='Unable to refresh. Displayed readings may be stale.';}finally{busy=false;$('refresh').disabled=false}}
+async function refreshCatalog(){
+ const button=$('refresh');
+ button.disabled=true;
+ try{
+  const r=await fetch('api/refresh',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'refresh-catalog'},body:'{}',signal:AbortSignal.timeout(8000)});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  await refresh();
+ }catch(e){
+  $('error').hidden=false;
+  $('error').textContent='Catalog refresh failed: '+e.message;
+ }finally{button.disabled=false;}
+}
 for (const name of views) $(name+'-tab').onclick = () => switchView(name);
 addEventListener('popstate', () => {
   const name = location.hash.slice(1) || 'machines';
   if (views.includes(name)) switchView(name,true);
 });
-$('search').oninput=render;$('host').onchange=render;$('refresh').onclick=()=>view==='leases'?LeaseHistory.load():refresh();document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';
+$('search').oninput=render;$('host').onchange=render;$('refresh').onclick=()=>view==='leases'?LeaseHistory.load():refreshCatalog();document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';
 
 let reconcileRequested=0;
 const findingGroups=[
@@ -231,34 +247,39 @@ function addressFindings(a) {
  return findings;
 }
 
-let leaseIssues=[],leaseRefresh;
-function refreshLeaseIssues(){
- leaseRefresh??=LeaseHistory.currentIssues().then(issues=>{
-  leaseIssues=issues;
-  showDiscrepancies();
- }).finally(()=>{leaseRefresh=null});
- return leaseRefresh;
+function leaseFindings(report){
+ if(!report)return [];
+ if(report.status!=='verified')return [{category:'coverage',target:'Leases',message:
+  report.status==='checking'?'Checking current leases.':'Could not check current leases.'}];
+ LeaseHistory.showCounts(report);
+ const messages={'export-failed':'Workspace export failed. See Leases for details.','overdue':'The lease is overdue.'};
+ return report.issues.map(issue=>({category:'lease',target:issue.task,message:messages[issue.code]}));
 }
 
 function showDiscrepancies(){
  const a=data.inventory_accuracy;
- const visibleFindings=[...healthFindings(),...leaseIssues];
+ const visibleFindings=[...healthFindings(),...leaseFindings(data.lease_issues)];
  if(data.fetched_at)visibleFindings.push(...addressFindings(data.address_audit));
  if(data.error&&data.fetched_at)visibleFindings.push({category:'coverage',target:'Registry',message:data.error});
+ if(data.catalog&&data.catalog.feed!=='connected'){
+  visibleFindings.push({category:'coverage',target:'Registry catalog',message:'Live catalog updates unavailable. Cached records were last read '+(data.catalog.checked?age(data.catalog.checked).toLowerCase():'at startup')+'.'});
+ }
  const count=$('discrepancy-count');
  const summary=$('accuracy-summary');
  const scope=$('accuracy-scope');
  const findings=$('accuracy-findings');
  const detailPanel=$('accuracy-details');
- const stale=Boolean(!a||data.error||now()-a.checked>90||
-  a.hosts.some(h=>h.status==='verified'&&h.expires<=now()));
+ const catalogUnverified=data.catalog&&(data.catalog.feed!=='connected'&&
+  (!data.catalog.checked||now()-data.catalog.checked>90));
+ const stale=Boolean(!a||data.error||now()-a.checked>90);
+ const expiredHosts=new Set((a?.hosts||[]).filter(h=>h.status==='verified'&&h.expires<=now()).map(h=>h.machine_id));
  const c=a?.coverage;
- const coverage=c?c.verified+' of '+c.expected+' configured hosts verified':'Guest inventory unavailable';
+ const coverage=c?(c.verified-expiredHosts.size)+' of '+c.expected+' configured hosts verified':'Guest inventory unavailable';
  if(a){
   const expiredDeployments=new Set((a.deployments||[]).filter(d=>d.state==='missing'&&
    (data.error||d.expires<=now())).map(d=>d.record_id));
   visibleFindings.push(...a.findings.filter(f=>
-   (!stale||f.category!=='guest-mismatch')&&
+   (f.category!=='guest-mismatch'||(!stale&&!catalogUnverified&&!expiredHosts.has(f.machine_id||f.target)))&&
    (f.code!=='deployment-missing'||!expiredDeployments.has(f.target))));
   for(const target of expiredDeployments){
    visibleFindings.push({category:'coverage',target,message:'The deployment state could not be verified.'});
@@ -299,18 +320,30 @@ function showDiscrepancies(){
   findings.replaceChildren(groups);
   findings.dataset.items=next;
  }
- if(reconcileRequested&&!stale&&!a.pending&&a.checked>=reconcileRequested){
-  reconcileRequested=0;
-  const checks=a.hosts.filter(h=>h.status==='verified').map(h=>h.checked);
-  const oldest=checks.length?' · Oldest verified report: '+age(Math.min(...checks)):'';
-  $('reconcile-status').textContent='Comparison finished · '+coverage+oldest;
-  $('reconcile').disabled=false;
- }
+ finishComparison(data);
 }
+function finishComparison(report){
+ const receipt=report.comparison;
+ if(!reconcileRequested||receipt?.id!==reconcileRequested||receipt.state==='pending')return;
+ reconcileRequested=0;
+ const accuracy=report.inventory_accuracy;
+ if(receipt.state==='failed'||!accuracy){
+  $('reconcile-status').textContent='Could not complete reconciliation. Check registry connectivity and retry.';
+ }else{
+  const checks=accuracy.hosts.filter(host=>host.status==='verified').map(host=>host.checked);
+  const oldest=checks.length?' · Oldest verified report: '+age(Math.min(...checks)):'';
+  const {verified,expected}=accuracy.coverage;
+  $('reconcile-status').textContent='Comparison finished · '+verified+' of '+expected+' configured hosts verified'+oldest;
+ }
+ $('reconcile').disabled=false;
+}
+
 $('reconcile').onclick=async()=>{
- if(!$('leases-tab').hidden)refreshLeaseIssues();
- const button=$('reconcile');button.disabled=true;reconcileRequested=now();$('reconcile-status').textContent='Checking registered deployments against current host inventories…';
+ const button=$('reconcile');button.disabled=true;$('reconcile-status').textContent='Checking registered deployments against current host inventories…';
  try{const r=await fetch('api/reconcile',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'reconcile'},body:'{}',signal:AbortSignal.timeout(12000)});if(!r.ok)throw Error('HTTP '+r.status);
+  reconcileRequested=(await r.json()).id;
+  if(!reconcileRequested)throw Error('Server returned no comparison ID');
+  finishComparison(data);
   const deadline=Date.now()+90000;
   while(reconcileRequested && Date.now()<deadline){
    await new Promise(resolve=>setTimeout(resolve,4000));
@@ -319,11 +352,10 @@ $('reconcile').onclick=async()=>{
    const result=await fetch('api/reconciliation',{cache:'no-store',signal:AbortSignal.timeout(8000)});
    if(!result.ok)throw Error('HTTP '+result.status+' reading comparison');
    const report=await result.json();
-   if(report.error)throw Error(report.error);
-   if(reconcileRequested && report.inventory_accuracy){
+   if(report.comparison?.id===reconcileRequested&&report.comparison.state==='complete'){
     data.inventory_accuracy=report.inventory_accuracy;
     showDiscrepancies();
-   }
+   }else finishComparison(report);
   }
   if(reconcileRequested)throw Error('Timed out waiting for a completed reconciliation');
  }catch(e){$('reconcile-status').textContent='Could not complete reconciliation: '+e.message;reconcileRequested=0}finally{button.disabled=false}
@@ -333,6 +365,7 @@ var inventoryStream, inventoryRetry, inventoryRetryDelay;
 function connectInventory(){
  clearTimeout(inventoryRetry);
  if(inventoryStream)inventoryStream.close();
+ if(document.hidden)return;
  inventoryStream=new EventSource('api/inventory/stream');
  inventoryStream.addEventListener('inventory',event=>{
   try{data=JSON.parse(event.data);inventoryRetryDelay=1000;if(data.server_time)offset=data.server_time-Date.now()/1000;
@@ -352,6 +385,7 @@ function connectInventory(){
  };
 }
 addEventListener('pagehide',()=>{clearTimeout(inventoryRetry);inventoryStream?.close()});
+document.addEventListener('visibilitychange',connectInventory);
 addEventListener('online',()=>{if(inventoryStream?.readyState!==EventSource.OPEN)connectInventory()});
 addEventListener('pageshow',event=>{if(event.persisted){connectInventory();refreshVisible()}});
 refresh();

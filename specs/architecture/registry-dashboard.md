@@ -119,14 +119,20 @@ reports and explicit host/guest bindings, including the legacy structured IDs.
 It reports guest mismatches, records for review and incomplete coverage separately.
 An unverified collector produces a coverage warning. Missing-guest findings
 require a fresh complete report. **Reconcile now** reloads catalog metadata and
-reconnects to the current collector reports. Results flow through browser SSE.
+reconnects to each collector's current report. The accepted comparison ID ties the
+browser result to that request on both the stream and the status endpoint.
 The Discrepancies tab combines deployment discrepancies, current machine, service
 and backup failures, published IP reservation audit violations, and current
-lease problems. The badge counts these findings across the lab independently of
-the other views' filters. Warnings and expired or inconclusive checks have
-separate counts. Registry health observations invalidate the cached dashboard
-inventory through the existing catalog change stream. Lease problems come from
-the authenticated current-lease view on dashboard refresh and manual comparison.
+lease problems. Warnings and expired or inconclusive checks have separate counts.
+Catalog and collector freshness are independent. The dashboard labels disconnected
+catalog feeds and any isolated preview catalog snapshot. In the registry change
+stream, health-only events name affected records for a bounded health read.
+Endpoint and deployment changes update the full catalog. Lease ownership is
+rechecked on a guest change, a manual comparison or recovery from a failed join.
+While a dashboard is viewed, one shared read of the allocator's issue summary
+runs per dashboard instance at most once every twenty seconds during ordinary
+viewing, and also when the next known lease becomes overdue or on explicit refresh.
+The current summary reaches browsers through the dashboard stream.
 Machine cards show the hardware facts. Authenticated API consumers can retrieve
 the complete observed inventory.
 

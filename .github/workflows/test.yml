@@ -18,6 +18,7 @@ jobs:
       - run: node --check dashboard/app.js
       - run: node --check dashboard/resource-graph.js
       - run: node tests/test_resource_graph.cjs
+      - run: node tests/test_manual_comparison.cjs
   collector:
     runs-on: ubuntu-latest
     steps:

@@ -55,8 +55,15 @@ def eero_get(config, resource):
 
 def guest_identity(spec):
     r=spec.get('resources',{});audit=r.get('network_authority_audit',{})
+    binding = r.get('runtime_binding')
+    if isinstance(binding, dict) and binding.get('kind') == 'guest':
+        guest = binding.get('guest_id')
+        return binding.get('machine_id'), str(guest) if guest is not None else None
     gid=r.get('guest_id',r.get('vmid',audit.get('guest_id')))
     if gid is None:gid=r.get('vm_name')
+    deployment = r.get('deployment')
+    if gid is None and isinstance(deployment, dict):
+        gid = deployment.get('vmid')
     parent=r.get('parent_machine')
     if not parent and gid is not None:parent='machine-'+audit.get('host',spec.get('host',''))
     return parent,str(gid) if gid is not None else None

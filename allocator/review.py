@@ -17,9 +17,27 @@ def lease_inventory(db, scopes):
     return {'guests': guests}
 
 
+def lease_issues(db, now):
+    rows = db.execute("""SELECT task, deadline, phase, export_error, hold_mode, reviewer_hold
+                         FROM lease WHERE phase IN ('ready', 'awaiting-export') OR
+                         (phase != 'released' AND export_error IS NOT NULL) ORDER BY rowid""")
+    issues = []
+    next_deadline = None
+    for row in rows:
+        if row['export_error']:
+            issues.append({'task':row['task'],'code':'export-failed'})
+        elif row['phase'] == 'ready' and not (row['hold_mode'] or row['reviewer_hold']):
+            deadline = row['deadline']
+            if deadline <= now:
+                issues.append({'task':row['task'],'code':'overdue'})
+            elif next_deadline is None or deadline < next_deadline:
+                next_deadline = deadline
+    return {'issues':issues,'next_deadline':next_deadline}
+
+
 def lease_page(db, before, scope='all'):
     predicates = {'all': '1', 'current': "phase != 'released'", 'released': "phase = 'released'"}
-    if scope not in (*predicates, 'counts'):
+    if scope not in (*predicates, 'counts', 'issues'):
         raise Rejected('invalid_scope', 'Unknown lease scope.', 400)
     if before is not None and (not before.isascii() or not before.isdigit()
                                or len(before) > 18 or int(before) < 1):
@@ -28,9 +46,11 @@ def lease_page(db, before, scope='all'):
     current, released = db.execute("""SELECT COUNT(*) FILTER (WHERE phase != 'released'),
                                             COUNT(*) FILTER (WHERE phase = 'released') FROM lease""").fetchone()
     summary = {'counts': {'current': current, 'released': released}, 'as_of': now}
-    if scope == 'counts':
+    if scope in ('counts', 'issues'):
         if before is not None:
-            raise Rejected('invalid_cursor', 'Counts cannot be paginated.', 400)
+            raise Rejected('invalid_cursor', 'Summary cannot be paginated.', 400)
+        if scope == 'issues':
+            summary.update(lease_issues(db, now))
         return summary
     rows = db.execute(f"""SELECT rowid AS cursor, id, task, owner, phase, deadline,
                             released_at, hold_mode, hold_reason, reviewer, reviewer_hold, reviewer_reason, export_error, checkpoint

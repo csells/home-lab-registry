@@ -3,24 +3,11 @@ from datetime import datetime
 import math
 import time
 from model import entity_type
-from network_audit import guest_identity
+from network_audit import guest_identity as binding
 
 MAX_AGE = 900
 GUEST_MISMATCHES = {'missing-guest', 'unregistered-guest'}
 
-
-def binding(spec):
-    resources = spec.get('resources', {})
-    explicit = resources.get('runtime_binding', {})
-    if not isinstance(explicit, dict): explicit = {}
-    if explicit.get('kind') == 'guest':
-        return explicit.get('machine_id'), str(explicit['guest_id']) if explicit.get('guest_id') is not None else None
-    parent, guest = guest_identity(spec)
-    if guest is None:
-        deployment = resources.get('deployment', {})
-        if isinstance(deployment, dict) and deployment.get('vmid') is not None:
-            return 'machine-' + spec.get('host', ''), str(deployment['vmid'])
-    return parent, guest
 
 def fresh(sample, now):
     checked, expires = sample.get('checked'), sample.get('expires')
@@ -30,7 +17,7 @@ def fresh(sample, now):
 
 def reconcile(records, observations, now=None, *, lease_claims=None, lease_unverified=()):
     now = time.time() if now is None else now
-    active = [r for r in records if r['spec'].get('lifecycle') != 'retired' and entity_type(r) != 'archive']
+    active = [r for r in records if r['spec'].get('lifecycle', 'active') == 'active' and entity_type(r) != 'archive']
     hosts = {r['id']: r for r in active if entity_type(r) == 'machine' and not binding(r['spec'])[1]}
     claims, findings, reports, deployments = {}, [], [], []
     lease_claims = lease_claims or {}

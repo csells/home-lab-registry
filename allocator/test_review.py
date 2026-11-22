@@ -1,10 +1,29 @@
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from review import lease_inventory, lease_page
 
 
 class LeaseReviewTest(unittest.TestCase):
+    def test_issues_project_only_current_overdue_or_failed_leases(self):
+        with sqlite3.connect(':memory:') as db:
+            db.row_factory = sqlite3.Row
+            db.execute("""CREATE TABLE lease (id, task, phase, deadline, export_error, hold_mode, reviewer_hold)""")
+            db.executemany('INSERT INTO lease VALUES (?,?,?,?,?,?,?)', [
+                ('1', 'Overdue', 'ready', 90, None, None, None),
+                ('2', 'Held', 'ready', 90, None, 'running', None),
+                ('3', 'Export blocked', 'awaiting-export', 80, 'private diagnostics', None, None),
+                ('4', 'Next', 'ready', 120, None, None, None),
+                ('5', 'History', 'released', 10, 'private diagnostics', None, None),
+            ])
+            with patch('review.time.time', return_value=100):
+                result = lease_page(db, None, 'issues')
+            self.assertEqual(result['issues'], [
+                {'task':'Overdue','code':'overdue'}, {'task':'Export blocked','code':'export-failed'}])
+            self.assertEqual(result['next_deadline'], 120)
+            self.assertEqual(result['counts'], {'current':4, 'released':1})
+
     def test_inventory_projects_only_active_dynamic_intent(self):
         class Scope:
             node = 'provider'

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Private service catalog. TLS and read/write bearer credentials are required in production."""
+from collections import deque
 from contextlib import contextmanager
 import presence
 import runtime_presence
@@ -87,6 +88,7 @@ class Catalog:
         self.change_subscribers = threading.BoundedSemaphore(16)
         self.change_epoch = uuid.uuid4().hex
         self.change_version = 0
+        self.change_log = deque(maxlen=128)
         with self.db() as db:
             db.executescript('''PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS services (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, document TEXT NOT NULL, updated REAL NOT NULL);
@@ -134,7 +136,11 @@ class Catalog:
             except Exception:raise Problem(409,'Collector identity not verified at announced address')
         now=time.time()
         with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            previous = db.execute('SELECT address,interface FROM presence WHERE id=?', (id,)).fetchone()
             db.execute('INSERT OR REPLACE INTO presence VALUES(?,?,?,?,?)',(id,body['address'],body['interface'],now,now+300))
+        if previous is None or tuple(previous) != (body['address'], body['interface']):
+            self.notify_change()
         return {'accepted':True,'expires':now+300}
     def listing(self,query):
         with self.db() as db: ids=[r[0] for r in db.execute('SELECT id FROM services ORDER BY id')]
@@ -167,10 +173,17 @@ class Catalog:
         self.notify_change()
         return self.get(id)
 
-    def notify_change(self):
+    def notify_change(self, health_id=None):
         with self.changes:
             self.change_version += 1
+            self.change_log.append((self.change_version, health_id))
             self.changes.notify_all()
+
+    def health(self, ids):
+        placeholders = ','.join('?' for _ in ids)
+        with self.db() as db:
+            rows = db.execute(f'SELECT id,status,evidence,checked,expires FROM health WHERE id IN ({placeholders})', ids)
+            return {row['id']: {key:row[key] for key in ('status','evidence','checked','expires')} for row in rows}
 
     def report_runtime(self, id, body, binding):
         try:
@@ -207,7 +220,7 @@ class Catalog:
             current=db.execute('SELECT revision FROM services WHERE id=?',(id,)).fetchone()[0]
             if revision is not None and revision!=current: raise Problem(409,'Observation revision conflict')
             db.execute('INSERT OR REPLACE INTO health VALUES(?,?,?,?,?)',(id,d['status'],d['evidence'],now,now+ttl))
-        self.notify_change()
+        self.notify_change(health_id=id)
         return self.get(id)
     def export(self):
         # One read transaction: records and histories describe the same snapshot.
@@ -230,6 +243,7 @@ def probe(catalog,record):
     if not p or p.get('vantage','registry')!='registry' or record['spec']['lifecycle']!='active': return
     try:
         # No proxies or credentials. Only explicitly registered, writer-controlled URLs.
+        from urllib.error import HTTPError
         from urllib.request import ProxyHandler
         if 'tcp_host' in p:
             from tcp_probe import check
@@ -240,8 +254,14 @@ def probe(catalog,record):
                 credential=catalog.probe_credentials[p['bearer_ref']]
                 if credential['url']!=p['url']: raise ValueError('Credential target mismatch')
                 headers['Authorization']='Bearer '+credential['token']
-            with build_opener(ProxyHandler({}),NoRedirect()).open(Request(p['url'],headers=headers,method='GET'),timeout=3) as response:
-                code=response.status
+            opener = build_opener(ProxyHandler({}), NoRedirect())
+            try:
+                response = opener.open(Request(p['url'], headers=headers, method='GET'), timeout=3)
+            except HTTPError as error:
+                # Non-2xx statuses still carry an HTTP response under the probe contract.
+                response = error
+            with response:
+                code = response.code
                 body=json.loads(response.read(1048576)) if 'json_not_in' in p else None
             ok=code==p.get('expected_status',200)
             evidence='HTTP '+str(code)
@@ -277,7 +297,7 @@ class Handler(BaseHTTPRequestHandler):
         if not 0<length<=65536: raise Problem(413,'Body must be 1..65536 bytes')
         try: return json.loads(self.rfile.read(length))
         except (ValueError,UnicodeError): raise Problem(400,'Invalid JSON')
-    def catalog_changes(self, catalog):
+    def catalog_changes(self, catalog, report_health=False):
         cursor = self.headers.get('Last-Event-ID')
         match = CHANGE_CURSOR.fullmatch(cursor) if cursor is not None else None
         if cursor is not None and match is None:
@@ -298,9 +318,16 @@ class Handler(BaseHTTPRequestHandler):
                 with catalog.changes:
                     if not first:
                         catalog.changes.wait_for(lambda: catalog.change_version != last, timeout=15)
-                    changed = catalog.change_version != last
-                    last = catalog.change_version
-                event = {'epoch': catalog.change_epoch, 'version': last} if changed else {'heartbeat': True}
+                    version = catalog.change_version
+                    event = {'heartbeat': True}
+                    if version != last:
+                        event = {'epoch': catalog.change_epoch, 'version': version}
+                        journal = catalog.change_log
+                        if report_health and last is not None and journal and journal[0][0] <= last + 1:
+                            affected = [key for seq, key in journal if seq > last]
+                            if affected and all(affected):
+                                event['health'] = sorted(set(affected))
+                    last = version
                 self.wfile.write((json.dumps(event) + '\n').encode())
                 self.wfile.flush()
                 first = False
@@ -329,7 +356,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.command!='GET' and not writer: raise Problem(403,'Write credential required')
             if self.command=='GET' and u.path=='/v1/export': return self.send(200,cat.export())
             if self.command=='GET' and u.path=='/v1/services': return self.send(200,{'services':cat.listing(parse_qs(u.query))})
-            if self.command=='GET' and u.path=='/v1/catalog/changes': return self.catalog_changes(cat)
+            if self.command=='GET' and u.path=='/v1/catalog/changes':
+                return self.catalog_changes(cat, parse_qs(u.query).get('health')==['1'])
+            if self.command=='GET' and u.path=='/v1/health':
+                ids = parse_qs(u.query).get('id', [])
+                if not 0 < len(ids) <= 128 or not all(ID.fullmatch(key) for key in ids):
+                    raise Problem(400, 'Supply 1 to 128 registry record IDs')
+                return self.send(200, {'health':cat.health(ids)})
             if len(parts)<3 or parts[:2]!=['v1','services'] or not ID.fullmatch(parts[2]): raise Problem(404,'Unknown route')
             id=parts[2]
             if self.command=='GET' and len(parts)==3: return self.send(200,cat.get(id))

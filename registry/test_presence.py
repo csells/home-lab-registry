@@ -38,6 +38,16 @@ class PresenceTest(unittest.TestCase):
         self.assertEqual(self.server.catalog.get('machine-test')['spec']['resources']['agent_presence']['status'],'stale')
         exported=self.server.catalog.export()['services'][0]['spec']
         self.assertNotIn('agent_presence',exported['resources'])
+    def test_only_endpoint_changes_invalidate_the_catalog_feed(self):
+        catalog = self.server.catalog
+        start = catalog.change_version
+        self.assertEqual(self.announce()[0], 200)
+        self.assertEqual(catalog.change_version, start + 1)
+        self.assertEqual(self.announce()[0], 200)
+        self.assertEqual(catalog.change_version, start + 1)
+        self.assertEqual(self.announce('192.0.2.11')[0], 200)
+        self.assertEqual(catalog.change_version, start + 2)
+
     def test_new_address_requires_verified_collector_identity(self):
         def reject(*args):raise ValueError('certificate mismatch')
         self.server.catalog.presence_verifier=reject

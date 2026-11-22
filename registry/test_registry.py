@@ -1,5 +1,5 @@
 import json, tempfile, threading, unittest, urllib.request, urllib.error
-from registry import make_server
+from registry import make_server, probe
 
 class RegistryTest(unittest.TestCase):
     def setUp(self):
@@ -19,6 +19,15 @@ class RegistryTest(unittest.TestCase):
             return response.status, json.load(response)
     def record(self):
         return dict(name='Voice', host='desktop-node', owner='example-owner', capabilities=['tts','stt'], endpoints={'api':'https://example.test'}, lifecycle='active', runbook='https://example.test/runbook', notes='test', dependencies=[])
+    def test_probe_accepts_expected_error_status_and_reports_the_code(self):
+        doc = self.record()
+        doc['probe'] = {'url': self.base + '/v1/services', 'expected_status': 401}
+        code, record = self.call('PUT', '/v1/services/voice', doc, revision=0)
+        self.assertEqual(code, 201)
+        probe(self.server.catalog, record)
+        health = self.call('GET', '/v1/services/voice')[1]['health']
+        self.assertEqual((health['status'], health['evidence']), ('healthy', 'HTTP 401'))
+
     def test_access_validation_and_conflicts(self):
         self.assertEqual(self.call('GET','/v1/services',token='wrong')[0],401)
         self.assertEqual(self.call('PUT','/v1/services/voice',self.record(),token='test-reader',revision=0)[0],403)
@@ -65,7 +74,7 @@ class RegistryTest(unittest.TestCase):
         self.assertNotIn('runtime_observation', self.call('GET', '/v1/services/voice')[1])
 
     def test_change_stream_tracks_committed_metadata_and_health(self):
-        path = '/v1/catalog/changes'
+        path = '/v1/catalog/changes?health=1'
         epoch = self.server.catalog.change_epoch
         self.assertEqual(self.call('GET', path, token='invalid')[0], 401)
         def open_feed(cursor=None):
@@ -84,7 +93,10 @@ class RegistryTest(unittest.TestCase):
             observation = {'status': 'healthy', 'evidence': 'test'}
             self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation, revision=0)[0], 409)
             self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation, revision=1)[0], 200)
-            self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 2})
+            self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 2, 'health': ['voice']})
+            code, projected = self.call('GET', '/v1/health?id=voice', token='test-reader')
+            self.assertEqual(code, 200)
+            self.assertEqual(projected['health']['voice']['status'], 'healthy')
             self.assertEqual(self.call('GET', '/v1/services/voice')[1]['health']['status'], 'healthy')
             self.assertEqual(self.call('PUT', '/v1/services/voice', self.record(), revision=0)[0], 409)
         doc = self.record()

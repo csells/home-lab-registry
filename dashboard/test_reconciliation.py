@@ -1,5 +1,6 @@
 import unittest
 from reconciliation import reconcile
+from machine_runtime import overlay
 
 class ReconciliationTests(unittest.TestCase):
  def test_unknown_collector_does_not_claim_guest_deleted(self):
@@ -35,6 +36,22 @@ class RetirementTests(unittest.TestCase):
   retired={'id':'old','spec':{'host':'h','owner':'team','lifecycle':'retired','resources':{'guest_id':7}}}
   result=reconcile([h,retired],{'machine-h':{'checked':100,'expires':300,'entries':[{'id':'7','name':'reused','state':'running','type':'qemu'}]}},now=110)
   self.assertEqual([f['code'] for f in result['findings']],['unregistered-guest'])
+ def test_only_active_guest_claims_affect_live_comparison(self):
+  host={'id':'machine-h','spec':{'host':'h','owner':'team','capabilities':['machine'],'resources':{'metrics_stream':{'enabled':True}}}}
+  guest={'id':'guest','spec':{'host':'h','owner':'team','lifecycle':'planned','resources':{
+    'kind':'virtual-machine','runtime_binding':{'kind':'guest','machine_id':'machine-h','guest_id':'7'}}}}
+  report={'checked':100,'expires':300,'entries':[]}
+  self.assertEqual(reconcile([host,guest],{'machine-h':report},now=110)['findings'],[])
+  report['entries']=[{'id':'7','state':'stopped','type':'qemu'}]
+  self.assertEqual([f['code'] for f in reconcile([host,guest],{'machine-h':report},now=110)['findings']],['unregistered-guest'])
+
+ def test_documented_guest_binding_also_drives_power_state(self):
+  record={'id':'guest','spec':{'host':'h','lifecycle':'active','resources':{
+    'kind':'virtual-machine','guest_id':'wrong','runtime_binding':{'kind':'guest','machine_id':'machine-h','guest_id':'7'}}}}
+  report={'checked':100,'expires':300,'guests':{'7':'stopped'}}
+  state=overlay([record],{'machine-h':report},now=110)[0]['spec']['resources'].get('runtime',{})
+  self.assertEqual(state.get('state'),'stopped')
+
  def test_registered_template_does_not_need_a_service(self):
   h={'id':'machine-h','spec':{'host':'h','owner':'team','capabilities':['machine'],'resources':{'kind':'machine','metrics_stream':{'enabled':True},'templates':[{'name':'base'}]}}}
   result=reconcile([h],{'machine-h':{'checked':100,'expires':300,'entries':[{'id':'base','state':'stopped','type':'tart'}]}},now=110)

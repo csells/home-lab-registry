@@ -11,10 +11,11 @@ The collector's existing local hypervisor sampling remains at its configured int
 An idle subscriber triggers no additional hypervisor reads. OS-native lifecycle event
 collection is not implemented. **Reconcile now** reloads registry metadata and reconnects
 to the collectors' current caches; it does not force a hypervisor rescan or launch an agent.
-Registry metadata is loaded at startup and on this explicit action, not automatically
-pushed by the current registry API. A registry metadata change feed remains follow-up
-work; do not confuse live guest events with live edits to service records.
-`GET /api/reconciliation` exposes the same report under dashboard authentication.
+The dashboard subscribes to authenticated registry catalog changes. The dashboard
+reports catalog feed loss independently from collector coverage and resumes after
+the connection recovers. **Refresh** requests an authoritative catalog read.
+**Reconcile now** returns a comparison ID. `GET /api/reconciliation` exposes the
+current comparison ID, state and report under dashboard authentication.
 
 ## Register deployments
 

@@ -5,30 +5,57 @@ from client import request
 from model import inventory,address_audit_summary
 from reconciliation import reconcile as reconcile_inventory
 from metrics import LiveMetrics
-from urllib.parse import urlsplit,parse_qs
-from lease_review import LeaseInventory, page as lease_review_page
+from urllib.parse import urlsplit,parse_qs,urlencode
+from uuid import uuid4
+from lease_review import LeaseInventory, LeaseIssueFeed, page as lease_review_page
 from access import credential, scoped_records
 from guac import launch
-from machine_runtime import InventorySubscriptions,guest_endpoints
-BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;WAKE=threading.Event();RUNTIME=InventorySubscriptions(PRIVATE,WAKE);LAST_REQUEST=0;CATALOG_REFRESH=threading.Event();UPDATES=threading.Condition();VERSION=0
+from machine_runtime import InventorySubscriptions,guest_endpoints,overlay
+BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;WAKE=threading.Event();RUNTIME=InventorySubscriptions(PRIVATE,WAKE);LAST_REQUEST=0;CATALOG_REFRESH=threading.Event();UPDATES=threading.Condition();VERSION=0;MANUAL=None;CATALOG_FEED='waiting'
+LEASE_ISSUES = LeaseIssueFeed(PRIVATE / 'lease-review.json', WAKE)
+
 def reconcile():
-    global STATE,VERSION
+    global STATE,VERSION,MANUAL,CATALOG_FEED
     cfg=json.loads((PRIVATE/'reader.json').read_text())
     leases=LeaseInventory(PRIVATE/'lease-review.json')
     records=None
     retry_at = 0
     retry_delay = 1
-    if cfg.get('catalog_change_stream') is True:
+    running_comparison = None
+    catalog_checked = None
+    source_snapshot = cfg.get('catalog_snapshot_at')
+    affected_health = set()
+    if cfg.get('catalog_change_stream', True):
         def invalidate():
             CATALOG_REFRESH.set()
             WAKE.set()
-        threading.Thread(target=subscribe_catalog, args=(cfg, invalidate), daemon=True).start()
+        def catalog_connection(connected):
+            global CATALOG_FEED
+            with LOCK:
+                CATALOG_FEED = 'connected' if connected else 'disconnected'
+            if connected:
+                CATALOG_REFRESH.set()
+            WAKE.set()
+        def update_health(ids):
+            with LOCK:
+                affected_health.update(ids)
+            WAKE.set()
+        threading.Thread(target=subscribe_catalog, args=(cfg, invalidate, catalog_connection),
+                         kwargs={'update_health':update_health}, daemon=True).start()
+    else:
+        CATALOG_FEED = 'disabled'
     while True:
         WAKE.clear()
-        refresh = records is None or CATALOG_REFRESH.is_set()
+        with LOCK:
+            queued = MANUAL if MANUAL and MANUAL['state'] == 'pending' else None
+        comparison_start = queued and queued['id'] != running_comparison
+        refresh = records is None or CATALOG_REFRESH.is_set() or comparison_start
         if refresh and retry_at > time.monotonic():
             WAKE.wait(max(0, retry_at - time.monotonic()))
             continue
+        with LOCK:
+            health_ids = sorted(affected_health)
+            affected_health.clear()
         try:
             if refresh:
                 CATALOG_REFRESH.clear()
@@ -42,38 +69,88 @@ def reconcile():
                     retry_delay = min(retry_delay * 2, 30)
                     raise
                 records = current
+                catalog_checked = time.time()
                 retry_at = 0
                 retry_delay = 1
+            elif health_ids:
+                try:
+                    observations = {}
+                    for start in range(0,len(health_ids),128):
+                        query = urlencode([('id',key) for key in health_ids[start:start+128]])
+                        observations.update(request(cfg,'GET','/v1/health?'+query)['health'])
+                    requested = set(health_ids)
+                    records = [{**row,'health':observations.get(row['id'],{'status':'unknown'})}
+                               if row['id'] in requested else row for row in records]
+                except Exception:
+                    CATALOG_REFRESH.set()
+                    WAKE.set()
+                    raise
+            if comparison_start:
+                RUNTIME.reconnect()
+                running_comparison = queued['id']
             states=RUNTIME.snapshot()
-            claims,unverified=leases.reconcile(states,force=refresh)
+            claims,unverified=leases.reconcile(states,force=bool(comparison_start))
             accuracy=reconcile_inventory(records,states,lease_claims=claims,lease_unverified=unverified)
             accuracy['pending']=any(key not in states for key in LIVE.endpoints())
-            value=inventory(RUNTIME.apply(records),LIVE.readings())
+            # Cards and comparison use exactly the same collector snapshot.
+            value=inventory(overlay(records,states),LIVE.readings())
             value['inventory_accuracy']=accuracy;value['address_audit']=address_audit_summary(records);value['fetched_at']=time.time();value['error']=None
-            with LOCK:STATE=value
+            with LOCK:
+                if queued and (not accuracy['pending'] or time.monotonic()>=queued['deadline']):
+                    MANUAL={**queued,'state':'complete'}
+                value['comparison']=public_comparison(MANUAL)
+                value['catalog']={'checked':catalog_checked,'feed':CATALOG_FEED,'snapshot_at':source_snapshot}
+                value['lease_issues']=LEASE_ISSUES.snapshot()
+                STATE=value
         except Exception:
             logging.exception('Reconciliation failed')
-            with LOCK:STATE={**STATE,'error':'Registry refresh failed; displayed readings may be stale.'}
+            with LOCK:
+                if queued and time.monotonic()>=queued['deadline']:
+                    MANUAL={**queued,'state':'failed'}
+                STATE={**STATE,'error':'Registry refresh failed; displayed readings may be stale.',
+                       'comparison':public_comparison(MANUAL),
+                       'catalog':{'checked':catalog_checked,'feed':CATALOG_FEED,'snapshot_at':source_snapshot}}
         with UPDATES:VERSION+=1;UPDATES.notify_all()
-        # Timeout only expires cached observations. It performs no network discovery.
-        WAKE.wait(max(0, retry_at - time.monotonic()) if retry_at else 90)
+        # Ordinary idle wakes age cached observations. Explicit failures have their own retries.
+        wait = max(0, retry_at - time.monotonic()) if retry_at else 90
+        if leases.retry_at is not None:
+            wait=min(wait,max(0,leases.retry_at-time.time()))
+        with LOCK:
+            if MANUAL and MANUAL['state']=='pending':
+                wait=min(wait,max(0,MANUAL['deadline']-time.monotonic()))
+        WAKE.wait(wait)
+
+def public_comparison(comparison):
+    return {key:comparison[key] for key in ('id','state')} if comparison else None
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def do_POST(self):
-        global LAST_REQUEST
+        global LAST_REQUEST,MANUAL
         if not hmac.compare_digest(self.headers.get('Authorization',''),self.server.auth):
             self.send_error(401);return
         # Reject cross-origin requests and form submissions before reading any secret.
         allowed=json.loads((PRIVATE/'origins.json').read_text())
-        action={'/api/copy-password':'copy-password','/api/reconcile':'reconcile'}.get(self.path)
+        action={'/api/copy-password':'copy-password','/api/reconcile':'reconcile','/api/refresh':'refresh-catalog'}.get(self.path)
         if not action or self.headers.get('Origin') not in allowed or self.headers.get('X-Lab-Action')!=action or self.headers.get('Content-Type')!='application/json':
             self.send_error(403);return
+        if self.path=='/api/refresh':
+            LEASE_ISSUES.refresh()
+            CATALOG_REFRESH.set()
+            WAKE.set()
+            self.send_response(202);self.send_header('Content-Length','0');self.send_header('Cache-Control','no-store');self.end_headers()
+            return
         if self.path=='/api/reconcile':
             with LOCK:
-                if time.time()-LAST_REQUEST<10:self.send_error(429,'Reconciliation already requested');return
-                LAST_REQUEST=time.time()
-            CATALOG_REFRESH.set();RUNTIME.reconnect();WAKE.set()
-            self.send_response(202);self.send_header('Content-Length','0');self.send_header('Cache-Control','no-store');self.end_headers();return
+                now=time.monotonic()
+                if (MANUAL and MANUAL['state']=='pending') or (LAST_REQUEST and now-LAST_REQUEST<10):
+                    self.send_error(429,'Reconciliation already requested');return
+                LAST_REQUEST=now
+                MANUAL={'id':uuid4().hex,'state':'pending','deadline':now+45}
+                raw=json.dumps(public_comparison(MANUAL)).encode()
+            LEASE_ISSUES.refresh()
+            WAKE.set()
+            self.send_response(202);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
         if self.path!='/api/copy-password':self.send_error(404);return
         try:
             length=int(self.headers.get('Content-Length','0'))
@@ -95,18 +172,19 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get('Sec-Fetch-Site')=='cross-site' or (self.headers.get('Origin') and self.headers['Origin'] not in allowed):self.send_error(403);return
             self.send_response(200);self.send_header('Content-Type','text/event-stream');self.send_header('Cache-Control','no-store');self.send_header('X-Accel-Buffering','no');self.end_headers()
             self.connection.settimeout(10);self.close_connection=True;version=-1
-            try:
-                while True:
-                    with UPDATES:
-                        if version==VERSION:UPDATES.wait(15)
-                        changed=version!=VERSION
-                        version=VERSION
-                    if not changed:
-                        self.wfile.write(b': keepalive\n\n');self.wfile.flush()
-                        continue
-                    with LOCK:payload={**STATE,'server_time':time.time()}
-                    self.wfile.write(('event: inventory\ndata: '+json.dumps(payload)+'\n\n').encode());self.wfile.flush()
-            except (OSError,TimeoutError):pass
+            with LEASE_ISSUES.watch():
+                try:
+                    while True:
+                        with UPDATES:
+                            if version==VERSION:UPDATES.wait(15)
+                            changed=version!=VERSION
+                            version=VERSION
+                        if not changed:
+                            self.wfile.write(b': keepalive\n\n');self.wfile.flush()
+                            continue
+                        with LOCK:payload={**STATE,'server_time':time.time()}
+                        self.wfile.write(('event: inventory\ndata: '+json.dumps(payload)+'\n\n').encode());self.wfile.flush()
+                except (OSError,TimeoutError):pass
             return
         if path.startswith('/terminal/'):
             if self.headers.get('Sec-Fetch-Site')=='cross-site':self.send_error(403);return
@@ -151,7 +229,8 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:data=dict(STATE)
             data['server_time']=time.time()
             data['lease_review_enabled']=(PRIVATE/'lease-review.json').is_file()
-            if path=='/api/reconciliation':data={'inventory_accuracy':data.get('inventory_accuracy'),'error':data['error'],'fetched_at':data['fetched_at']}
+            if path=='/api/reconciliation':
+                data={key:data.get(key) for key in ('inventory_accuracy','error','fetched_at','comparison')}
             elif path!='/api/inventory':key=path.rsplit('/',1)[1];data={key:data[key],'error':data['error'],'fetched_at':data['fetched_at']}
             raw=json.dumps(data).encode();kind='application/json'
         elif path in ['/','/leases','/leases.js','/leases.css','/app.js','/app.css','/resource-graph.js','/resource-graph.css','/vendor/elk-api.js','/vendor/elk-worker.min.js']:
@@ -160,4 +239,5 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200);self.send_header('Content-Type',kind+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");self.end_headers();self.wfile.write(raw)
 if __name__=='__main__':
     LIVE=LiveMetrics(PRIVATE)
+    threading.Thread(target=LEASE_ISSUES.run,daemon=True).start()
     logging.basicConfig(level=logging.INFO);credentials=json.loads((PRIVATE/'login.json').read_text());s=ThreadingHTTPServer(('127.0.0.1',8089),Handler);s.auth='Basic '+base64.b64encode((credentials['username']+':'+credentials['password']).encode()).decode();threading.Thread(target=reconcile,daemon=True).start();s.serve_forever()
