@@ -625,8 +625,9 @@ fixture exercised operator provisioning. Shared multi-host reservations and
 mutation through the allocator are still open.
 
 The existing Apple recipe compiled and ran a native Swift program in a fresh
-Tart clone while the existing review VM remained running. The iPhone
-simulator booted, built and ran the test app. Captures verified two rendered
-states selected by separate launch arguments. The clone and its registry
-record were cleaned up. Direct pointer input and an allocator-managed Apple
-lease have separate acceptance requirements.
+Tart clone alongside an existing review VM. XCUITest built and launched an
+iPhone simulator app, tapped a button, and asserted its changed accessibility
+label. Both disposable clones and their registry records were cleaned up after
+the separate initial and maintained-harness runs. Admission for these checks
+used measured host headroom. A host-side GUI session, external device access,
+and an allocator-managed Apple lease remain separate acceptance requirements.
