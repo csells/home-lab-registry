@@ -14,6 +14,8 @@ def reconcile():
     global STATE,VERSION
     cfg=json.loads((PRIVATE/'reader.json').read_text())
     records=None
+    retry_at = 0
+    retry_delay = 1
     if cfg.get('catalog_change_stream') is True:
         def invalidate():
             CATALOG_REFRESH.set()
@@ -21,12 +23,25 @@ def reconcile():
         threading.Thread(target=subscribe_catalog, args=(cfg, invalidate), daemon=True).start()
     while True:
         WAKE.clear()
+        refresh = records is None or CATALOG_REFRESH.is_set()
+        if refresh and retry_at > time.monotonic():
+            WAKE.wait(max(0, retry_at - time.monotonic()))
+            continue
         try:
-            if records is None or CATALOG_REFRESH.is_set():
+            if refresh:
                 CATALOG_REFRESH.clear()
-                records=request(cfg,'GET','/v1/services')['services']
-                LIVE.configure(records)
-                RUNTIME.configure(guest_endpoints(LIVE.endpoints(),json.loads((PRIVATE/'guest-endpoints.json').read_text()) if (PRIVATE/'guest-endpoints.json').exists() else None))
+                try:
+                    current = request(cfg,'GET','/v1/services')['services']
+                    LIVE.configure(current)
+                    RUNTIME.configure(guest_endpoints(LIVE.endpoints(),json.loads((PRIVATE/'guest-endpoints.json').read_text()) if (PRIVATE/'guest-endpoints.json').exists() else None))
+                except Exception:
+                    CATALOG_REFRESH.set()
+                    retry_at = time.monotonic() + retry_delay
+                    retry_delay = min(retry_delay * 2, 30)
+                    raise
+                records = current
+                retry_at = 0
+                retry_delay = 1
             states=RUNTIME.snapshot();accuracy=reconcile_inventory(records,states)
             accuracy['pending']=any(key not in states for key in LIVE.endpoints())
             value=inventory(RUNTIME.apply(records),LIVE.readings())
@@ -37,7 +52,7 @@ def reconcile():
             with LOCK:STATE={**STATE,'error':'Registry refresh failed; displayed readings may be stale.'}
         with UPDATES:VERSION+=1;UPDATES.notify_all()
         # Timeout only expires cached observations. It performs no network discovery.
-        WAKE.wait(90)
+        WAKE.wait(max(0, retry_at - time.monotonic()) if retry_at else 90)
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def do_POST(self):

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import ssl
 import time
 from http.client import HTTPException
@@ -16,22 +17,24 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def consume(stream, invalidate):
+def consume(stream, received_change, last=None):
     if stream.headers.get_content_type() != 'application/x-ndjson':
         raise ValueError('Invalid catalog stream content type')
-    last = None
     for line in iter(lambda: stream.readline(256), b''):
         if not line.endswith(b'\n'):
             raise ValueError('Invalid catalog stream frame size')
         event = json.loads(line)
         if event == {'heartbeat': True}:
             continue
-        if not isinstance(event, dict) or type(event.get('version')) is not int:
+        if not isinstance(event, dict) or type(event.get('version')) is not int or event['version'] < 0:
             raise ValueError('Invalid catalog stream version')
-        version = event['version']
-        if version != last:
-            invalidate()
-            last = version
+        epoch = event.get('epoch')
+        if epoch is not None and (not isinstance(epoch, str) or not re.fullmatch(r'[0-9a-f]{32}', epoch)):
+            raise ValueError('Invalid catalog stream epoch')
+        cursor = (epoch, event['version'])
+        if cursor != last:
+            received_change(cursor)
+            last = cursor
     raise ConnectionError('Catalog metadata stream ended')
 
 
@@ -43,21 +46,28 @@ def subscribe_catalog(config, invalidate):
         return
     context = ssl.create_default_context(cafile=os.path.expanduser(config['ca_file']))
     opener = build_opener(HTTPSHandler(context=context), NoRedirect())
-    request = Request(config['url'].rstrip('/') + '/v1/catalog/changes', headers={
+    url = config['url'].rstrip('/') + '/v1/catalog/changes'
+    headers = {
         'Authorization': 'Bearer ' + config['reader_token'],
         'Accept': 'application/x-ndjson',
-    })
+    }
     delay = 2
+    last = None
 
-    def received_change():
-        nonlocal delay
+    def received_change(cursor):
+        nonlocal delay, last
         delay = 2
         invalidate()
+        last = cursor
 
     while True:
+        request = Request(url, headers=headers)
+        resume = last if last is not None and last[0] is not None else None
+        if resume is not None:
+            request.add_header('Last-Event-ID', f'{resume[0]}:{resume[1]}')
         try:
             with opener.open(request, timeout=30) as response:
-                consume(response, received_change)
+                consume(response, received_change, resume)
         except HTTPError as error:
             with error:
                 if error.code in (401, 403, 404):

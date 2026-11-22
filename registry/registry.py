@@ -3,13 +3,14 @@
 from contextlib import contextmanager
 import presence
 import runtime_presence
-import argparse, concurrent.futures, hmac, json, logging, re, sqlite3, ssl, threading, time
+import argparse, concurrent.futures, hmac, json, logging, re, sqlite3, ssl, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 LOG = logging.getLogger('registry')
 ID = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
+CHANGE_CURSOR = re.compile(r'([0-9a-f]{32}):(0|[1-9][0-9]{0,18})')
 FIELDS = {'name','host','owner','capabilities','endpoints','lifecycle','runbook','notes','dependencies','credential_ref','deployment','resources','backup','config_backup','probe'}
 class Problem(Exception):
     def __init__(self, status, message): self.status, self.message = status, message
@@ -84,6 +85,7 @@ class Catalog:
         self.path=path;self.presence_verifier=None
         self.changes = threading.Condition()
         self.change_subscribers = threading.BoundedSemaphore(16)
+        self.change_epoch = uuid.uuid4().hex
         self.change_version = 0
         with self.db() as db:
             db.executescript('''PRAGMA journal_mode=WAL;
@@ -275,6 +277,11 @@ class Handler(BaseHTTPRequestHandler):
         try: return json.loads(self.rfile.read(length))
         except (ValueError,UnicodeError): raise Problem(400,'Invalid JSON')
     def catalog_changes(self, catalog):
+        cursor = self.headers.get('Last-Event-ID')
+        match = CHANGE_CURSOR.fullmatch(cursor) if cursor is not None else None
+        if cursor is not None and match is None:
+            raise Problem(400, 'Invalid catalog change cursor')
+        last = int(match[2]) if match and match[1] == catalog.change_epoch else None
         if not catalog.change_subscribers.acquire(blocking=False):
             raise Problem(503, 'Catalog change subscription limit reached')
         try:
@@ -285,15 +292,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Connection', 'close')
             self.end_headers()
             self.close_connection = True
-            last = None
+            first = True
             while True:
                 with catalog.changes:
-                    changed = catalog.changes.wait_for(
-                        lambda: catalog.change_version != last, timeout=15)
+                    if not first:
+                        catalog.changes.wait_for(lambda: catalog.change_version != last, timeout=15)
+                    changed = catalog.change_version != last
                     last = catalog.change_version
-                event = {'version': last} if changed else {'heartbeat': True}
+                event = {'epoch': catalog.change_epoch, 'version': last} if changed else {'heartbeat': True}
                 self.wfile.write((json.dumps(event) + '\n').encode())
                 self.wfile.flush()
+                first = False
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             return
         finally:

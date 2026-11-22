@@ -66,23 +66,35 @@ class RegistryTest(unittest.TestCase):
 
     def test_change_stream_tracks_only_committed_metadata(self):
         path = '/v1/catalog/changes'
+        epoch = self.server.catalog.change_epoch
         self.assertEqual(self.call('GET', path, token='invalid')[0], 401)
-        req = urllib.request.Request(self.base + path,
-                                     headers={'Authorization': 'Bearer test-reader'})
-        with urllib.request.urlopen(req, timeout=3) as stream:
+        def open_feed(cursor=None):
+            headers = {'Authorization': 'Bearer test-reader'}
+            if cursor is not None:
+                headers['Last-Event-ID'] = cursor
+            return urllib.request.urlopen(urllib.request.Request(self.base + path, headers=headers), timeout=3)
+
+        with open_feed() as stream:
             self.assertEqual(stream.headers.get_content_type(), 'application/x-ndjson')
-            self.assertEqual(json.loads(stream.readline()), {'version': 0})
+            self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 0})
             self.assertEqual(self.call('PUT', '/v1/services/voice', self.record(), revision=0)[0], 201)
-            self.assertEqual(json.loads(stream.readline()), {'version': 1})
+            self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 1})
+        with open_feed(f'{epoch}:1') as stream:
+            self.assertEqual(json.loads(stream.readline()), {'heartbeat': True})
             observation = {'status': 'healthy', 'evidence': 'test'}
             self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation)[0], 200)
             self.assertEqual(self.call('PUT', '/v1/services/voice', self.record(), revision=0)[0], 409)
-            doc = self.record()
-            doc['lifecycle'] = 'retired'
-            self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=1)[0], 200)
-            self.assertEqual(json.loads(stream.readline()), {'version': 2})
-        with urllib.request.urlopen(req, timeout=3) as stream:
-            self.assertEqual(json.loads(stream.readline()), {'version': 2})
+        doc = self.record()
+        doc['lifecycle'] = 'retired'
+        self.assertEqual(self.call('PUT', '/v1/services/voice', doc, revision=1)[0], 200)
+        self.assertEqual(self.call('GET', '/v1/services')[1]['services'], [])
+        for cursor in (f'{epoch}:1', f'{"0" * 32}:2'):
+            with open_feed(cursor) as stream:
+                self.assertEqual(json.loads(stream.readline()), {'epoch': epoch, 'version': 2})
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            open_feed('invalid')
+        self.assertEqual(error.exception.code, 400)
+        error.exception.close()
 
     def test_health_is_separate_and_expires(self):
         self.call('PUT','/v1/services/voice',self.record(),revision=0)
