@@ -195,7 +195,7 @@ def main():
     acquire.add_argument('--seconds', type=int, required=True)
     acquire.add_argument('--ssh-public-key', type=Path, required=True)
     acquire.add_argument('--recipe', default='debian13-amd64')
-    acquire.add_argument('--requirements', type=json.loads, help='Required OS, architecture, GPU, vCPUs, memory_mib or disk_mib as JSON')
+    acquire.add_argument('--requirements', type=json.loads, help='Required OS, architecture, GPU, vCPUs, memory_mib, disk_mib or dependencies as JSON')
     acquire.add_argument('--reclaim-on-expiry', action='store_true', help=argparse.SUPPRESS)
     for operation in ('inspect', 'renew', 'release', 'hold', 'assign-reviewer', 'remove-reviewer', 'reviewer-hold', 'override-reviewer', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export', 'checkpoint'):
         command = sub.add_parser(operation)

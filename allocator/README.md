@@ -422,3 +422,29 @@ and uses the selected worker for a disposable clone. This command does not creat
 lease or reserve capacity. The mutation path must re-read capacity and acquire its
 own fenced, durable reservation before startup. The existing fixed-slot API
 retains its ownership model.
+
+### Shared dependency bindings
+
+A staging operator can configure a `dependency_bindings` map in the private
+controller configuration. Each name binds an approved dependency to its
+registry service ID and HTTPS endpoint. For example:
+
+```json
+{
+  "dependency_bindings": {
+    "voice": {
+      "service_id": "voice-service",
+      "endpoint": "https://voice.example.invalid"
+    }
+  }
+}
+```
+
+`capabilities` advertises the dependency names. Request only the dependencies
+the task needs, for example `--requirements '{"dependencies":["voice"]}'`.
+An unavailable name fails admission before the controller starts the guest.
+The owner can read the binding while the lease is active. If an operator
+withdraws a configured binding, inspection reports it as unavailable and
+matching replacements require a newly qualified binding. The endpoint is
+a reference to the existing service. The service retains its normal access
+controls and issues its own credentials as needed.

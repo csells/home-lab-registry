@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 from checkpoints import object_name, Checkpoints, Rejected, recoverable, restore_held
-from capabilities import PLATFORM, RECIPE, match, requirements
+from capabilities import PLATFORM, RECIPE, match, requirements, validate_bindings
 from credentials import TaskCredentials
 from ledger import Ledger
 from reservations import Reservations
@@ -366,6 +366,7 @@ class Pilot:
         self.upload_endpoint = self.recovery_endpoint if recovery.get('accept_uploads') is True else None
         if bool(self.recovery_endpoint) != bool(recovery.get('worker_token_file')):
             raise ValueError('Recovery needs an HTTPS endpoint and a dedicated worker credential')
+        self.dependency_bindings = validate_bindings(config.get('dependency_bindings', {}))
         self.reservations = Reservations(self.db, self.check_reservation_capacity)
         self.user = config['guest_user']
         self.host_key = public_key(config['guest_host_key'])
@@ -500,8 +501,16 @@ class Pilot:
     def public(self, row, status=None):
         result = {key: value for key, value in row.items() if key not in ('prior_tasks', 'ssh_key', 'request_key', 'export_challenge', 'storage_challenge', 'export_start_tasks', 'checkpoint')}
         result['requirements'] = json.loads(row['requirements'])
-        result['resume_point'] = json.loads(row['resume_point']) if row['resume_point'] else None
         result['status'] = status or row['phase']
+        requested_bindings = result['requirements'].get('dependencies', [])
+        if requested_bindings and result['status'] != 'released':
+            result['dependencies'] = {
+                name: self.dependency_bindings[name] for name in requested_bindings
+                if name in self.dependency_bindings
+            }
+            if unavailable := sorted(set(requested_bindings) - result['dependencies'].keys()):
+                result['dependencies_unavailable'] = unavailable
+        result['resume_point'] = json.loads(row['resume_point']) if row['resume_point'] else None
         if incremental := self.checkpoints.list(row['id']):
             result['incremental_checkpoints'] = incremental
         if row['checkpoint']:
@@ -578,7 +587,7 @@ class Pilot:
             raise Rejected('reclamation_required', 'Every new lease uses checkpoint-gated reclamation.', 422)
         if resume_from is not None:
             point = self.matching_point(resume_from, owner, requested_checkpoint, ssh_key)
-            if 'requirements' in data and requested != point['requirements']:
+            if 'requirements' in data and encoded != requirements(point['requirements']):
                 raise Rejected('not_matching', 'A matching replacement uses the predecessor requirements.', 422)
             requested = point['requirements']
             encoded = requirements(requested)
@@ -591,7 +600,7 @@ class Pilot:
         generation = self.provider.generation()
         prior = json.dumps(sorted(self.provider.recent_tasks('starting')))
         observed = self.capacity.check(self.reservations.totals())
-        match(requested, observed['slot_resources'])
+        match(requested, observed['slot_resources'], self.dependency_bindings)
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
@@ -1226,7 +1235,8 @@ def main():
                     controller.provider.verified_config()
                     observation = controller.capacity.read_observation(allow_running_slot=True)
                     self.respond({'recipe': RECIPE, 'observed_at': time.time(),
-                                  'capabilities': {**PLATFORM, 'gpu': 'none', **observation['slot_resources']}})
+                                  'capabilities': {**PLATFORM, 'gpu': 'none', **observation['slot_resources'],
+                                                   'dependencies': sorted(controller.dependency_bindings)}})
                     return
                 if reservation_route and self.command == 'GET' and len(parts) == 2:
                     self.respond({'reservations': controller.reservations.list(reservation_owner)})

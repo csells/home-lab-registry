@@ -627,7 +627,18 @@ mutation through the allocator are still open.
 The existing Apple recipe compiled and ran a native Swift program in a fresh
 Tart clone alongside an existing review VM. XCUITest built and launched an
 iPhone simulator app, tapped a button, and asserted its changed accessibility
-label. Both disposable clones and their registry records were cleaned up after
-the separate initial and maintained-harness runs. Admission for these checks
+label. The native Metal test compiled a compute kernel, ran it on the Apple
+paravirtual device, and compared the output buffer with expected values.
+The test clones and their registry records were cleaned up after each run. Admission for these checks
 used measured host headroom. A host-side GUI session, external device access,
 and an allocator-managed Apple lease remain separate acceptance requirements.
+
+### Staging milestone: shared dependency bindings
+
+The Linux pilot advertises the names of operator-qualified shared
+dependencies. A task may require them when acquiring a lease. An unknown
+name is rejected before provider start, retry preserves the allocation,
+and lease inspection returns only the requested references. A real guest
+reached the bound voice service's HTTPS health check. Its protected
+catalog still required its own authentication. Model and build service
+bindings and task-level application credentials remain open.
