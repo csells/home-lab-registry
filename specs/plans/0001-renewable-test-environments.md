@@ -621,8 +621,8 @@ The placement preflight matched an ordinary Debian request against fresh
 capacity on two independent Proxmox hosts. It rejected oversized requests
 and expired observations immediately. The selected host passed a disposable
 clone, actual task SSH, generation-bound registration and exact teardown. The
-fixture exercised operator provisioning. Shared multi-host reservations and
-mutation through the allocator are still open.
+fixture exercised operator provisioning. The shared controller now admits
+prequalified slots on independent Proxmox nodes. Dynamic cloning remains open.
 
 The existing Apple recipe compiled and ran a native Swift program in a fresh
 Tart clone alongside an existing review VM. XCUITest built and launched an
@@ -642,3 +642,27 @@ and lease inspection returns only the requested references. A real guest
 reached the bound voice service's HTTPS health check. Its protected
 catalog still required its own authentication. Model and build service
 bindings and task-level application credentials remain open.
+
+### Staging milestone: one authority across two Proxmox hosts
+
+A disposable controller migrated its existing ledger and receipts and
+enrolled a second prequalified Proxmox slot. The two slots use independent
+capacity observations, exact provider identities, and separate scoped
+capture paths. Each lease records its slot before provider start. The
+controller refuses excess demand with the reason and does not queue it.
+
+Simultaneous requests with separate task credentials occupied both slots.
+The read-only lease review counted both, SSH used separate pinned task
+keys, and cross-owner inspection failed. After a real controller restart,
+repeating the original request keys returned the existing slot, lease and
+generation. Both host-specific reservation paths and oversize rejection
+were exercised through the normal API.
+
+After release, both original workspace files were downloaded and compared
+with the task inputs. With the predecessor’s slot occupied, the usual resume
+command restored the same acknowledged checkpoint on the other host. A retry
+returned the original replacement and kept the acknowledged recovery point.
+
+The shared controller uses pre-provisioned Linux slots. Arbitrary guest
+shapes and provider-managed cloning, Apple leases, other hardware adapters
+and the wider production rollout remain open.
