@@ -13,14 +13,29 @@ const LeaseHistory = (() => {
     document.getElementById('released-lease-count').textContent = page.counts.released;
     countsAsOf = page.as_of;
   }
-  async function refreshCounts() {
-    const started = countsAsOf;
+  async function currentIssues() {
+    const findings = [];
+    let before = null;
     try {
-      const response = await fetch('/api/leases?scope=counts', {cache:'no-store', signal:AbortSignal.timeout(12000)});
-      if (!response.ok) throw new Error();
-      showCounts(await response.json());
+      do {
+        const query = new URLSearchParams({scope:'current'});
+        if (before) query.set('before', before);
+        const response = await fetch('/api/leases?' + query, {cache:'no-store', signal:AbortSignal.timeout(12000)});
+        if (!response.ok) throw new Error();
+        const page = await response.json();
+        showCounts(page);
+        for (const lease of page.leases) {
+          if (lease.export_error) {
+            findings.push({category:'lease',target:lease.task,message:'Workspace export failed. See Leases for details.'});
+          } else if (lease.phase === 'overdue' && !lease.hold_mode && !lease.reviewer_hold) {
+            findings.push({category:'lease',target:lease.task,message:'The lease is overdue.'});
+          }
+        }
+        before = page.next_before;
+      } while (before);
+      return findings;
     } catch {
-      if (countsAsOf === started) document.getElementById('lease-count').textContent = '—';
+      return [{category:'coverage',target:'Leases',message:'Could not check current leases.'}];
     }
   }
   let scope = 'current';
@@ -99,5 +114,5 @@ const LeaseHistory = (() => {
     return load();
   }
   for (const button of scopes) button.onclick = () => select(button.dataset.scope);
-  return {load, refreshCounts, open: () => select('current')};
+  return {load, currentIssues, open: () => select('current')};
 })();

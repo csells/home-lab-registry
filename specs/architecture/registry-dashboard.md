@@ -120,10 +120,15 @@ It reports guest mismatches, records for review and incomplete coverage separate
 An unverified collector produces a coverage warning. Missing-guest findings
 require a fresh complete report. **Reconcile now** reloads catalog metadata and
 reconnects to the current collector reports. Results flow through browser SSE.
-The Discrepancies tab shows the comparison summary, discrepancies and
-unverified checks. Its badge counts discrepancies across the lab independently
-of the Machines and Services filters. Machine cards show the hardware facts.
-Authenticated API consumers can retrieve the complete observed inventory.
+The Discrepancies tab combines deployment discrepancies, current machine, service
+and backup failures, published IP reservation audit violations, and current
+lease problems. The badge counts these findings across the lab independently of
+the other views' filters. Warnings and expired or inconclusive checks have
+separate counts. Registry health observations invalidate the cached dashboard
+inventory through the existing catalog change stream. Lease problems come from
+the authenticated current-lease view on dashboard refresh and manual comparison.
+Machine cards show the hardware facts. Authenticated API consumers can retrieve
+the complete observed inventory.
 
 [`TestGuestStreamInitialChangeAndQuiet`](../../agent/guest_stream_test.go),
 [`InventoryStreamTests`](../../dashboard/test_inventory_stream.py) and
@@ -136,7 +141,7 @@ remain in [plan 0005](../plans/0005-inventory-coverage-and-change-delivery.md).
 
 The IP audit is an on-demand, read-only operation run from an operator machine,
 implemented in [`network_audit.py`](../../dashboard/network_audit.py) and its
-collectors. The dashboard displays only the latest result published to the registry. It compares
+collectors. The Discrepancies tab uses the latest result published to the registry. The audit compares
 router authority with host/guest/appliance configuration and distinguishes violations
 from incomplete verification. It detects problems; it is not an admission controller.
 

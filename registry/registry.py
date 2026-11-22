@@ -207,6 +207,7 @@ class Catalog:
             current=db.execute('SELECT revision FROM services WHERE id=?',(id,)).fetchone()[0]
             if revision is not None and revision!=current: raise Problem(409,'Observation revision conflict')
             db.execute('INSERT OR REPLACE INTO health VALUES(?,?,?,?,?)',(id,d['status'],d['evidence'],now,now+ttl))
+        self.notify_change()
         return self.get(id)
     def export(self):
         # One read transaction: records and histories describe the same snapshot.

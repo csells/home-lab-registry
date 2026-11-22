@@ -19,6 +19,21 @@ class RegistryTest(unittest.TestCase):
             return response.status, json.load(response)
     def record(self):
         return dict(name='Voice', host='desktop-node', owner='example-owner', capabilities=['tts','stt'], endpoints={'api':'https://example.test'}, lifecycle='active', runbook='https://example.test/runbook', notes='test', dependencies=[])
+    def test_health_updates_invalidate_catalog_after_commit(self):
+        self.call('PUT', '/v1/services/voice', self.record(), revision=0)
+        catalog = self.server.catalog
+        previous = catalog.change_version
+        observation = {'status': 'unhealthy', 'evidence': 'Timeout', 'ttl_seconds': 60}
+        self.assertEqual(self.call('POST', '/v1/services/voice/observe', observation, revision=0)[0], 409)
+        self.assertEqual(catalog.change_version, previous)
+        with catalog.changes:
+            task = threading.Thread(target=catalog.observe, args=('voice', observation, 1))
+            task.start()
+            self.assertTrue(catalog.changes.wait_for(lambda: catalog.change_version > previous, timeout=2))
+        task.join()
+        self.assertEqual(catalog.get('voice')['health']['status'], 'unhealthy')
+        self.assertEqual(catalog.change_version, previous + 1)
+
     def test_access_validation_and_conflicts(self):
         self.assertEqual(self.call('GET','/v1/services',token='wrong')[0],401)
         self.assertEqual(self.call('PUT','/v1/services/voice',self.record(),token='test-reader',revision=0)[0],403)
