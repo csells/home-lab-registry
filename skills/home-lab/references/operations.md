@@ -22,6 +22,16 @@ Verify virtualization, CPU/RAM, disk health and capacity, networking, hostname/t
 
 Reuse existing shared production services for test dependencies under the [standing testing authorization](../SKILL.md#use-shared-production-services-for-testing). Discover their supported interfaces and reservations before sizing or cloning a guest; do not duplicate model, voice or agent runtimes merely to satisfy candidate isolation. Keep candidate code and state isolated as required, and leave shared dependencies running during cleanup.
 
+Find services with `registry.py list --capability CAPABILITY` and read the selected record. Use its supported endpoint, credential reference and runbook from any authorized agent runtime. For the lease pilot, find an active record with `lease-pilot` and use its `lease_api`, registered client and trust material within the recorded qualification scope.
+
+Use the task's private session with `python3 CLIENT --session SESSION capabilities`. With individual credential files, use `--record RECORD --registry-client REGISTRY_CLIENT --ca CA --token-file TASK_TOKEN`. Follow the service record's authentication procedure to obtain or refresh the scoped task grant. A registry reader credential only permits discovery. If the grant is missing, report which service and credential scope you need. Use the same task owner after interruption.
+
+Derive requirements from the work and query `leases` if the deployment supports it. Reuse an eligible owned lease, or acquire one with an idempotency key and wait for verified access. Renew while needed. Checkpoint the declared workspace and record the acknowledged recovery point. Release through the allocator and verify its disposition. After interruption or reclamation, recover the saved checkpoint or use `resume` with a fresh SSH key to restore into a matching environment. Report the recovery point and any missing state. If capacity is exhausted, report the allocator's reason immediately.
+
+### Manual provisioning
+
+Use this path only for an authorized operation when a suitable allocator is unavailable.
+
 Query machine records for validated templates and compatible hardware. Use a minimal maintained Linux cloud image for ordinary application tests; match the production OS when relevant. Size CPU, RAM and disk for the actual workload. Do not assume a small smoke-test template includes browsers, Docker, development tools or coding agents.
 
 Before cloning, check live guest allocations, available memory, storage consumption and registered reservations. Honor recorded host headroom and persistent-service constraints. If no allocator exists, serialize provisioning and explicitly track ownership and expiry; a lease written in a description is not automatic cleanup.

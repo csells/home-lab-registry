@@ -6,13 +6,15 @@ from model import inventory,address_audit_summary
 from reconciliation import reconcile as reconcile_inventory
 from metrics import LiveMetrics
 from urllib.parse import urlsplit,parse_qs
-from access import credential
+from lease_review import LeaseInventory, page as lease_review_page
+from access import credential, scoped_records
 from guac import launch
 from machine_runtime import InventorySubscriptions,guest_endpoints
 BASE=pathlib.Path(__file__).parent;PRIVATE=BASE/'private';LOCK=threading.Lock();STATE={'machines':[],'services':[],'backups':[],'error':'Loading registry','fetched_at':None};LIVE=None;WAKE=threading.Event();RUNTIME=InventorySubscriptions(PRIVATE,WAKE);LAST_REQUEST=0;CATALOG_REFRESH=threading.Event();UPDATES=threading.Condition();VERSION=0
 def reconcile():
     global STATE,VERSION
     cfg=json.loads((PRIVATE/'reader.json').read_text())
+    leases=LeaseInventory(PRIVATE/'lease-review.json')
     records=None
     retry_at = 0
     retry_delay = 1
@@ -31,7 +33,7 @@ def reconcile():
             if refresh:
                 CATALOG_REFRESH.clear()
                 try:
-                    current = request(cfg,'GET','/v1/services')['services']
+                    current = scoped_records(request(cfg,'GET','/v1/services')['services'])
                     LIVE.configure(current)
                     RUNTIME.configure(guest_endpoints(LIVE.endpoints(),json.loads((PRIVATE/'guest-endpoints.json').read_text()) if (PRIVATE/'guest-endpoints.json').exists() else None))
                 except Exception:
@@ -42,7 +44,9 @@ def reconcile():
                 records = current
                 retry_at = 0
                 retry_delay = 1
-            states=RUNTIME.snapshot();accuracy=reconcile_inventory(records,states)
+            states=RUNTIME.snapshot()
+            claims,unverified=leases.reconcile(states,force=refresh)
+            accuracy=reconcile_inventory(records,states,lease_claims=claims,lease_unverified=unverified)
             accuracy['pending']=any(key not in states for key in LIVE.endpoints())
             value=inventory(RUNTIME.apply(records),LIVE.readings())
             value['inventory_accuracy']=accuracy;value['address_audit']=address_audit_summary(records);value['fetched_at']=time.time();value['error']=None
@@ -76,7 +80,8 @@ class Handler(BaseHTTPRequestHandler):
             if not 0<length<=1024:raise ValueError()
             body=json.loads(self.rfile.read(length))
             if not isinstance(body.get('machine'),str) or not isinstance(body.get('login'),str):raise ValueError()
-            value=credential(PRIVATE,body['machine'],body['login'])
+            with LOCK: machines=STATE['machines']
+            value=credential(PRIVATE,body['machine'],body['login'],machines)
         except (ValueError,TypeError,KeyError):self.send_error(400);return
         if value is None:self.send_error(404);return
         raw=value.encode()
@@ -93,8 +98,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 while True:
                     with UPDATES:
-                        if version==VERSION:UPDATES.wait(60)
+                        if version==VERSION:UPDATES.wait(15)
+                        changed=version!=VERSION
                         version=VERSION
+                    if not changed:
+                        self.wfile.write(b': keepalive\n\n');self.wfile.flush()
+                        continue
                     with LOCK:payload={**STATE,'server_time':time.time()}
                     self.wfile.write(('event: inventory\ndata: '+json.dumps(payload)+'\n\n').encode());self.wfile.flush()
             except (OSError,TimeoutError):pass
@@ -124,14 +133,29 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:self.send_error(404)
             except (BrokenPipeError,ConnectionResetError,TimeoutError):pass
             return
+        elif path=='/api/leases':
+            config=PRIVATE/'lease-review.json'
+            if not config.exists():self.send_error(404);return
+            try:
+                query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
+                cursor,=query.pop('before',[None])
+                scope,=query.pop('scope',['all'])
+                if scope not in ('all','current','released','counts'):raise ValueError()
+                if scope=='counts' and cursor is not None:raise ValueError()
+                if query or (cursor is not None and (not cursor.isascii() or not cursor.isdigit() or len(cursor)>18 or cursor.startswith('0'))):raise ValueError()
+            except ValueError:self.send_error(400,'Invalid lease query');return
+            try:raw=json.dumps(lease_review_page(config,cursor,scope)).encode()
+            except (OSError,ValueError,KeyError):self.send_error(503,'Lease history unavailable');return
+            kind='application/json'
         elif path in ['/api/inventory','/api/machines','/api/services','/api/backups','/api/reconciliation']:
             with LOCK:data=dict(STATE)
             data['server_time']=time.time()
+            data['lease_review_enabled']=(PRIVATE/'lease-review.json').is_file()
             if path=='/api/reconciliation':data={'inventory_accuracy':data.get('inventory_accuracy'),'error':data['error'],'fetched_at':data['fetched_at']}
             elif path!='/api/inventory':key=path.rsplit('/',1)[1];data={key:data[key],'error':data['error'],'fetched_at':data['fetched_at']}
             raw=json.dumps(data).encode();kind='application/json'
-        elif path in ['/','/app.js','/app.css','/resource-graph.js','/resource-graph.css','/vendor/elk-api.js','/vendor/elk-worker.min.js']:
-            file='index.html' if path=='/' else path.lstrip('/');raw=(BASE/file).read_bytes();kind='text/html' if path=='/' else 'text/css' if path.endswith('.css') else 'text/javascript'
+        elif path in ['/','/leases','/leases.js','/leases.css','/app.js','/app.css','/resource-graph.js','/resource-graph.css','/vendor/elk-api.js','/vendor/elk-worker.min.js']:
+            file='index.html' if path in ('/','/leases') else path.lstrip('/');raw=(BASE/file).read_bytes();kind='text/html' if path in ('/','/leases') else 'text/css' if path.endswith('.css') else 'text/javascript'
         else:self.send_error(404);return
         self.send_response(200);self.send_header('Content-Type',kind+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");self.end_headers();self.wfile.write(raw)
 if __name__=='__main__':

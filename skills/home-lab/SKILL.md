@@ -22,7 +22,7 @@ Apply the global disposable-VM development rule to service development/source ch
 
 ## Operating model
 
-Agent orchestration runs on suitably provisioned persistent infrastructure. Agents request disposable test environments on workers selected by architecture, hardware access, capacity and reservations; the test guests need not host coding agents. Discover existing orchestration and provisioning capabilities through the registry before implementing another.
+Agents in any runtime start with the registry. Use the registered API or client with task-scoped credentials to reach existing services and request test environments. The test guest can run independently of the coding agent. For discovery, admission, renewal and resume, read [disposable test environments](references/operations.md#disposable-test-environments).
 
 Select compatible x86 workers for Windows/Linux guests and Apple hardware for macOS VMs or Xcode/iOS Simulator. Discover each machine's permitted roles and installed capabilities from its registry record. Place general persistent services on suitable Proxmox guests while preserving settings and data. Read current placement, migration constraints and dependencies from each registry record; the target architecture is not evidence that migration has occurred. Android needs a verified hardware-accelerated worker; treat nested virtualization as unproven until exercised. A simulator does not replace physical-device testing.
 

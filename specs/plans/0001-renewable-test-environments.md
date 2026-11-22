@@ -1,8 +1,10 @@
 # Renewable test environments as a home-lab service
 
-Status: a single-slot Linux allocator is running in staging. The stable home lab
-uses the registry and streamed inventory. See the [allocator review branch](https://github.com/csells/home-lab-registry/tree/review/linux-lease-pilot/allocator)
-for the implementation, limits and operational setup.
+Status: active, updated 2026-11-22. Two-host Linux leasing, on-demand clones
+and dashboard integration passed staging at `e86592f`. Subsequent staging
+verified one unattended Tart Xcode recipe, portable task access and replacement
+after a Linux lease expired. Cross-runtime acceptance, a full controller restore
+and managed CUDA remain open. Production remains on hold.
 
 Context: [vision](../vision/home-lab.md), [current architecture](../architecture/current.md).
 
@@ -13,6 +15,13 @@ through one discoverable service endpoint. The user need not specify OS, RAM, GP
 or duration. The service handles safe allocation, access, registration, renewal,
 recovery and cleanup. Environments support interactive work and independent jobs;
 they do not require the coding agent itself to run inside them.
+
+Any authorized agent should be able to start from the home-lab skill, discover
+an available service in the registry and use its documented interface. The
+allocator's HTTPS API, standalone client and task credential contract apply
+across runtimes. Set up lab access once through the documented credential
+path, then give each authorized agent the same skill and scoped credentials.
+Shared services retain their own documented authentication and grants.
 
 An environment belongs to an ongoing task and is reused across tests. The agent
 chooses an initial lease and can renew it autonomously: 45 minutes can become 45
@@ -191,6 +200,12 @@ Use an authenticated host-side executor for authoritative inventory and qualifie
 
 Offer Apple build/test guests, GUI-test guests, and explicitly exclusive native/device sessions. A macOS VM does not imply real audio, camera, USB or physical-device support. Keep Linux builds and ordinary test infrastructure on qualified Linux workers and bind authorized shared voice/model services.
 
+Use the Mac's existing Xcode Simulator for ordinary iPhone and iPad testing
+when the host and workload are authorized. Boot a dedicated simulator on demand
+and shut it down after the task. Use a macOS guest when the task requires a clean
+OS or toolchain, an isolated automation identity or a guest lifecycle test.
+Qualify native admission and concurrency before offering it through the allocator.
+
 Maintain versioned Xcode/simulator/Metal recipes and stable signed automation identities. Where an existing stable signing identity and scoped service helper are installed,
 verify and reuse that boundary; new deployments must establish their own identities. Validate actual console capture/input and the requested app test on fresh clones; permission flags alone do not prove operation. Prefer a qualified virtual-console path where appropriate to avoid per-agent screen-capture permissions on the physical host.
 
@@ -204,10 +219,11 @@ Report unregistered/missing guests, stale collectors, expired leases, missing bi
 
 Use cached initial reports, change events and freshness heartbeats through the existing stream/SSE work. Avoid recurring central fleet polling or inference-based housekeeping. Local sampling versus OS-native event sources and registry metadata-change feeds must be described honestly. Manual reconciliation refreshes intent/observations without silently retiring workloads.
 
-The existing streamed-inventory candidate has validation history but its fleet rollout
-and promotion must be checked live. Preserve its task ownership. Its separate
-[reconciliation plan](https://github.com/csells/home-lab-registry/blob/277fbda89da4dcd1002d37665e3477ae93ad937e/specs/plans/0003-inventory-reconciliation.md)
-retains the rollout work; this plan does not assume that candidate is stable.
+Production guest streaming and reconciliation shipped under
+[plan 0003](archive/0003-inventory-reconciliation.md). General inventory coverage
+and registry change delivery continue in [plan 0005](0005-inventory-coverage-and-change-delivery.md).
+The lease review build joins dynamic clones to the controller projection under
+this plan, while the controller remains the authority for lease mutations.
 
 ## Apple and cross-provider acceptance
 
@@ -227,48 +243,194 @@ Exercise uncommitted-work recovery and evidence retrieval after guest deletion.
 Native clustering or hypervisor replacement needs a separate guest-data preservation
 and authorized cutover plan. Windows/GPU/device adapters remain explicit later work.
 
+### Staged milestone: one unattended Apple lease
+
+Keep the qualified Proxmox path available and use the same allocator API and
+durable ledger for one prepared Tart macOS/Xcode recipe in disposable staging.
+The allocator owns admission, renewal, holds, checkpoint receipts and release.
+The registry publishes capabilities and observations. The Tart adapter owns
+guest operations, verifies exact provider identity and reports uncertain outcomes
+without making the capacity available. Use one Apple slot initially and return an
+immediate, actionable rejection if a second request cannot fit.
+
+Use the previously qualified Tart image and give each lease its own task access
+and workspace. Reuse the existing verification and encrypted storage path for
+checkpoint readback, retention and exact release. Place a provider-specific
+operation behind the adapter as the second backend needs it. Preserve the Linux
+workflow and its safety checks through the change.
+
+The agent starts with the home-lab skill and its private task credential. It
+discovers the allocator through the registry, derives capabilities from the
+work, and acquires and renews the environment itself. The operator supplies no
+host name, VM ID, guest credential or cleanup instruction.
+
+- [x] A fresh agent handles an ordinary request to run the iOS simulator tests
+  for a change. It discovers and acquires the recipe, accesses the guest,
+  runs a real test and verifies a checkpoint.
+- [x] Interrupt the task or restart the controller. Verify reconnect or matching
+  replacement from the last acknowledged checkpoint and check that a replay
+  keeps the original operation identity.
+- [x] Verify immediate contention rejection, exact release of the owned clone
+  and workspace, and independent evidence retrieval after release.
+- [x] Record every manual setup, access, recovery and cleanup intervention.
+  The normal path requires zero operator interventions and preserves existing
+  household workloads. Compare the result and elapsed time with the runbook.
+
+Staging has exercised the same allocator API on Linux and one Tart Xcode
+recipe. The Apple lease renewed during cloning, refused a competing request,
+and retained its identity after a controller restart. The project ran a real
+iPhone Simulator UI test. Verified export preceded exact clone and workspace
+deletion. The ordinary task client then restored the acknowledged workspace
+into a fresh Tart clone, verified its unfinished work, replayed the replacement
+request, and recovered the workspace again after deleting that clone.
+
+Separate control and capture credentials refused cross-role access. The
+launcher supplied a scoped access manifest. A fresh BB task chose the Apple
+recipe, passed one real iPhone Simulator UI test and recovered 14 working
+files after release. Independent verification checked the input evidence,
+workspace content and exact cleanup. The task recorded zero operator
+interventions.
+
+In one run, timestamps showed about 172 seconds from accepted lease to the
+test screenshot and 291 seconds to verified release. The prior direct
+Tart harness took about 191 seconds from its pre-clone marker to its screenshot
+record. These runs used different timing boundaries and provide a reference
+for a future repeatable latency benchmark.
+
+### Next delivery sequence
+
+1. **Shared access from the home-lab skill.** Verify that fresh authorized
+   agents in different runtimes can start with the same installed skill and
+   private credentials, discover a service, and use its registered interface.
+   For the allocator, verify scoped access, owner continuity across restarts
+   and credential refresh, no allocation before a request, and immediate
+   rejection when capacity is exhausted.
+2. **Recover an interrupted agent and failed workload.** Repeat the verified
+   client interruption drill after terminating and restarting a coding-agent
+   runtime. Recover an actual failed workload, its evidence and its unfinished
+   work. Measure export lag, the acknowledged recovery point and remaining data
+   loss. Restore a controller journal and reconcile an in-flight operation
+   against the provider before allowing reuse.
+3. **Qualify one managed CUDA recipe.** Discover a suitable registered worker,
+   verify available GPU capacity and run a real CUDA workload through the same
+   lease API. Verify immediate rejection of a competing request, durable
+   checkpoint recovery and return of the GPU after release. Exercise a second
+   lease to prove the resource is available again. Record the GPU access mode
+   and driver/image requirements separately from the generic Linux recipe.
+
+Use the [Mayfly review](../research/2026-11-21-mayfly-allocator-review.md) to
+improve worker maintenance alongside these milestones. Version each recipe by
+its image identity and bootstrap revision. Check storage compatibility and
+network configuration before cloning, then verify the real task access path
+before declaring readiness. Add a read-only maintenance plan that shows whether
+a worker change requires a reboot or replacement, affected owners and required
+overlap capacity. Refuse a replacement when its generations cannot safely
+overlap and name the missing capacity. Keep leases and reclamation under the
+same allocator authority. Evaluate ephemerd separately if a GitHub Actions
+workload needs a bounded lab pool.
+
+Windows and wider Apple recipe enrollment follow these milestones. Production
+promotion remains on hold.
+
+### Current qualification evidence
+
+- A standalone runner discovered the real allocator from the registry,
+  refreshed a scoped task credential, preserved its SSH identity and queried
+  only its own leases. Revocation rejected its former credential. A distinct
+  task credential could neither inspect nor release an occupied Apple lease
+  and received an immediate capacity rejection. The earlier simulator run
+  through the shared client remains the verified Apple result.
+- The independent Proxmox drill checkpointed a Debian workspace, interrupted its
+  test client and let the original lease expire. The controller exported and
+  removed the guest and its disks. The same task recovered the acknowledged
+  archive and restored the unchanged file in a matching clone in 35 seconds.
+  Both leases released, and the isolated drill restored the normal grace
+  policy. A full restart of a coding-agent runtime remains a separate check.
+- Staging renewed a 45-minute lease to 45 days through the live API, then
+  exercised six additional renewals with a controlled clock. The export worker
+  verified failure notification, retry and recovery across restart. The scoped
+  expiry test removed an eligible stored checkpoint and confirmed recovery
+  access ended. Production owner routing and standing credential setup remain
+  open.
+- The actual Proxmox template and datastore passed a fresh DHCP and storage
+  check. New code can pin recipe versions and estimate maintenance impact without
+  provider writes. Independent image provenance and qualification of a new
+  enrolled version remain open.
+- The real CUDA LXC probe passed and its disposable container and disk were
+  removed. The allocator has no enrolled CUDA provider yet.
+
 ## Implementation sequence and acceptance
 
 - [ ] **Contract and recovery policy.** Select maintained components/adapters;
   define typed schemas, authentication, durable state ownership, expiry/retention
-  defaults, capture scope, quotas and API compatibility. Resolve policy choices
-  below before enabling automatic deletion.
-- [ ] **One isolated lifecycle.** In a disposable development VM, implement acquire,
+  defaults, capture scope, quotas and API compatibility. Proxmox, scoped TLS
+  credentials, a SQLite ledger and the Linux expiry and capture policy below
+  have staging evidence. Cross-provider schemas, quotas and compatibility
+  qualification remain open.
+- [x] **One isolated lifecycle.** In a disposable development VM, implement acquire,
   inspect, renew and release against a bounded Linux test pool. Reuse one environment
   for multiple tests. Prove idempotency, protected capacity, scoped access, router
   compliance and automatic cleanup. Development execution stays off stable.
+  [Controller and safety tests](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/test_lease_safety.py) and the
+  enrolled staging controller record cover two independent hosts, DHCP,
+  idempotent acquisition and scoped reclamation.
 - [ ] **Durable evidence and resume.** Exercise periodic export, uncommitted-work
   checkpointing and retrieval after guest deletion. Recreate a matching replacement
   from a real failed task and independently verify its saved result/work.
+  The staged [checkpoint and recovery implementation](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/README.md#matching-replacement-and-workspace-restore)
+  verified multiple acknowledged versions, encrypted Drive readback after
+  actual guest deletion, and matching replacement with byte-equal workspace
+  recovery. Keep the full failed-workload acceptance and the measured
+  export/recovery window open.
 - [ ] **Failure qualification.** Concurrent requests exceed capacity without
   oversubscription; controller/requester crashes, lost success responses, export
   failure and delayed cleanup cannot duplicate or destroy another allocation.
   Interrupt an actual asynchronous reset and prove reuse waits for completion.
   Use a controlled clock to exercise weeks of renewal without weeks of waiting,
   plus a real restart/integration run. Controller restore reconciles stale state.
+  Staging recovered real Proxmox task replies, rejected stale journal and guest
+  generations, and held disks on export failure. The latest backup restored
+  a consistent SQLite journal and matched retained receipts. Long-duration
+  renewal has staged evidence. A full controller recovery drill through
+  active-operation reconciliation remains open.
 - [ ] **Agent and dashboard integration.** A fresh agent completes a user-level task
   without manual provisioning instructions; reconnects after interruption; sees
   rejection reasons, renewal and evidence freshness. Human UI shows ownership and
   review retention, works on mobile and rejects unauthorized access. No recurring
   inference is used to keep leases alive.
+  A fresh BB task discovered the pilot, ran on Debian, and retrieved its workspace
+  after release. The staged browser verified active managed clones and their
+  removal across all six configured collectors. Production credential onboarding,
+  owner alert routing and end-to-end recovery after an actual agent-runtime
+  restart remain open. The shared workflow uses the skill, the registry and the
+  standalone client. The later runtime-specific BB integration was retired.
 - [ ] **Review and promotion.** Present functioning staging, real lifecycle evidence,
   overhead measurements and rollback/recovery artifacts. Obtain explicit approval
   for this candidate before promotion. Verify stable behavior, preserve source and
   recovery artifacts, then remove dedicated staging resources and retire records.
+  [Review CI](https://github.com/csells/home-lab-registry/actions/runs/45037022105) identifies the tested source,
+  and the staging record holds browser, lifecycle and restored journal evidence.
+  Comparative overhead and production verification remain open.
 - [ ] **Documentation completion.** Update current architecture with implemented
   boundaries and validation, update the home-lab skill to use the service, and
   archive this plan only when required work is complete. Track later platform
   adapters separately rather than implying they were qualified by the Linux slice.
+  The [architecture](../architecture/current.md#allocator-staging) now records
+  this staging boundary, and the home-lab skill documents scoped discovery,
+  renewal and recovery. The plan remains active through the open requirements.
 
-## Policy choices to settle during design
+## Agreed Linux operating policy
 
-These do not block writing this plan. They do block an implementation from silently
-inventing destructive behavior: grace and abandoned-data retention defaults;
-review-hold ownership; capture exclusions and artifact quotas; disposition when
-exports remain impossible; and restart-safe job delegation. Offer reasonable
-defaults together for review, preserving autonomous renewal and no fixed active
-lifetime cap. Automatic reclamation applies only to environments admitted under
-that policy, never retroactively to existing workloads.
+- Reject immediately with a specific reason when no eligible capacity is available.
+- Allow a two-hour grace period after missed renewal. Reclaim enrolled resources
+  only after verified export, unless an authorized hold applies.
+- Keep verified checkpoints for 30 days after reclamation. Owners can pin work
+  longer and see the retained-through date.
+- Stop safely on export failure where possible, retain the disk, alert the owner
+  and retry. After 24 hours of continued failure, require a recorded repair,
+  retain or discard decision.
+- Let the task owner or designated reviewer record a hold and reason. A running
+  hold explicitly reserves live capacity. Legacy guests require separate enrollment.
 
 ## Success measures
 
@@ -289,8 +451,28 @@ durable operation journal separate from guest storage, and publish registry
 records after each verified transition. The central encrypted backup system is
 the existing destination to qualify for checkpoint export and restore.
 
-Start with explicit release and an overdue state that flags owner review.
-Enable automatic reclamation only after the retention, export-failure and
-delegation policy has been selected and verified. No policy decision is
-required to prototype acquire, renew, explicit release and interrupted
-operation recovery in the dedicated test pool.
+The pilot started with explicit release and overdue owner review. The agreed
+Linux policy now governs staged automatic reclamation. Staging verified
+reclamation after expiry and verified export, plus a disk hold on export failure.
+Wider delegation, operator routing and production deployment remain open.
+
+## Staging evidence and provider work
+
+At `e86592f`, one ledger governed a fixed slot and an on-demand pool on
+independent Proxmox hosts. A fresh dynamically sized Debian clone grew its
+root filesystem, survived controller restart and acquisition replay, and
+exported its workspace before verified deletion of the exact guest and disks.
+The same pool restored a matching replacement. The dashboard recognized
+the live clone as a managed lease and cleared its row on release. The
+registry's staging deployment record holds the qualification receipts.
+[Provider source](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/pve_dynamic.py) · [Passing CI](https://github.com/csells/home-lab-registry/actions/runs/45037022105)
+
+Independent Tart checks exercised a fresh Swift build, iPhone simulator input,
+Metal and encrypted workspace retrieval after clone deletion. The allocator
+subsequently qualified one prepared Tart Xcode recipe as recorded above;
+the independent Metal probe does not qualify a managed Metal recipe. A
+disposable Linux CUDA container exercised actual GPU memory; managed CUDA
+still needs authenticated provider operations and recovery. Windows
+and physical-device adapters, wider pool enrollment, in-place resize of active
+leases, and task grants for model and Bazel services remain open. The current
+voice binding returned the service endpoint and relies on its own authorization.
