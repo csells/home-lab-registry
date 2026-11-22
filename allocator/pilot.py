@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -254,7 +255,7 @@ class Capacity:
         reserved = sum(self.positive(row['maxmem']) for row in guests.values()
                        if row['status'] == 'running' or str(row['vmid']) in self.protected_ids)
         total, available = self.positive(memory['total']), self.positive(memory['available'])
-        if available > total or not storage['active'] or not storage['enabled']:
+        if available > total or not storage['active'] or not storage['enabled'] or storage.get('shared', 1):
             raise ValueError('Invalid node memory or inactive slot storage')
         available_storage = self.positive(storage['avail'])
         pending_slot_memory = self.positive(slot['maxmem']) if require_slot and slot['status'] == 'stopped' else 0
@@ -275,11 +276,43 @@ class Capacity:
         return value
 
 
+SLOT_ID = re.compile(r'[a-z][a-z0-9-]{0,31}')
+
+
+@dataclass
+class Slot:
+    provider: Proxmox
+    capacity: Capacity
+    user: str
+    host_key: str
+
+    @classmethod
+    def configure(cls, config):
+        provider = Proxmox(config['proxmox'])
+        capacity = Capacity(provider, config['capacity'])
+        provider.audit_token = capacity.token
+        return cls(provider, capacity, config['guest_user'], public_key(config['guest_host_key']))
+
+    def identity(self):
+        return json.dumps([self.provider.base, self.provider.node, self.provider.guest_id,
+                           self.provider.uuid, self.provider.volume, self.provider.name,
+                           self.provider.snapshot, self.provider.identity, self.capacity.storage, self.user, self.host_key])
+
+
 class Pilot:
     def __init__(self, config, *, enroll=False):
-        self.provider = Proxmox(config['proxmox'])
-        self.capacity = Capacity(self.provider, config['capacity'])
-        self.provider.audit_token = self.capacity.token
+        primary = Slot.configure(config)
+        self.provider, self.capacity = primary.provider, primary.capacity
+        additional = config.get('additional_slots', {})
+        if (not isinstance(additional, dict) or len(additional) > 7
+                or 'primary' in additional or not all(SLOT_ID.fullmatch(key) for key in additional)):
+            raise ValueError('Configure up to seven additional named slots.')
+        self.slots = {'primary': primary, **{key: Slot.configure(value) for key, value in additional.items()}}
+        nodes = {slot.provider.node for slot in self.slots.values()}
+        if len(nodes) != len(self.slots):
+            raise ValueError('Configure one slot per independent Proxmox node.')
+        if additional and not config.get('reclamation', {}).get('verifier_token_file'):
+            raise ValueError('Every slot needs a final export verifier.')
         self.db = sqlite3.connect(config['database'], factory=Ledger)
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
@@ -292,23 +325,24 @@ class Pilot:
                                         token=self.capacity.token)
                 return str(uuid.UUID(vm['vmgenid']))
             if enroll:
-                if self.provider.status() != 'stopped':
-                    raise ValueError('Enrollment requires an idle verified slot.')
+                if any(slot.provider.status() != 'stopped' for slot in self.slots.values()):
+                    raise ValueError('Enrollment requires idle verified slots.')
                 existing = self.db.execute("SELECT 1 FROM sqlite_master WHERE name='lease'").fetchone()
                 if existing and self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone():
                     raise ValueError('Reconcile active lease ownership before enrollment.')
-                self.provider.verify_clean(self.provider.initial_rollback)
+                for slot in self.slots.values():
+                    slot.provider.verify_clean(slot.provider.initial_rollback)
             self.db.attach(config['ledger_witness'], controller_generation, enroll=enroll)
         self.db.execute('''CREATE TABLE IF NOT EXISTS lease (
             id TEXT PRIMARY KEY, request_key TEXT UNIQUE NOT NULL,
             task TEXT NOT NULL, initial_seconds INTEGER NOT NULL,
             phase TEXT NOT NULL, deadline REAL NOT NULL, upstream TEXT, address TEXT
         )''')
-        self.db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_reserved_slot
-            ON lease ((1)) WHERE phase != 'released'""")
         columns = {row['name'] for row in self.db.execute('PRAGMA table_info(lease)')}
         with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
             for column, definition in (
+                ('slot_id', "TEXT NOT NULL DEFAULT 'primary'"),
                 ('generation', 'TEXT'), ('clean_rollback', 'TEXT'), ('restore_completed_at', 'REAL'),
                 ('resume_point', 'TEXT'),
                 ('requirements', "TEXT NOT NULL DEFAULT '{}'"),
@@ -324,7 +358,7 @@ class Pilot:
                 ('hold_reason', 'TEXT'),
                 ('export_challenge', 'TEXT'), ('storage_challenge', 'TEXT'),
                 ('export_start_tasks', 'TEXT'),
-                ('export_requested_at', 'REAL'),
+                ('export_requested_at', 'REAL'), ('export_last_attempt_at', 'REAL'),
                 ('export_failed_at', 'REAL'),
                 ('export_error', 'TEXT'),
                 ('export_disposition', 'TEXT'),
@@ -333,6 +367,9 @@ class Pilot:
             ):
                 if column not in columns:
                     self.db.execute(f'ALTER TABLE lease ADD COLUMN {column} {definition}')
+            self.db.execute("DROP INDEX IF EXISTS one_reserved_slot")
+            self.db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_lease_per_slot
+                ON lease (slot_id) WHERE phase != 'released'""")
         with self.db:
             self.db.execute('''CREATE TABLE IF NOT EXISTS recovery_ticket (
                 token_hash TEXT PRIMARY KEY, lease_id TEXT NOT NULL,
@@ -368,8 +405,7 @@ class Pilot:
             raise ValueError('Recovery needs an HTTPS endpoint and a dedicated worker credential')
         self.dependency_bindings = validate_bindings(config.get('dependency_bindings', {}))
         self.reservations = Reservations(self.db, self.check_reservation_capacity)
-        self.user = config['guest_user']
-        self.host_key = public_key(config['guest_host_key'])
+        self.bind_slots()
         policy = config.get('reclamation', {})
         self.reclaim_enabled = bool(policy.get('verifier_token_file'))
         self.alerts_enabled = bool(policy.get('alert_token_file'))
@@ -380,9 +416,101 @@ class Pilot:
         if type(self.grace_seconds) is not int or self.grace_seconds < 1:
             raise ValueError('Grace must be a positive duration')
 
-    def check_reservation_capacity(self, reservations):
-        active = self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone()
-        self.capacity.check(reservations, require_slot=bool(active), allow_running_slot=bool(active))
+    def bind_slots(self):
+        if self.db.witness is None:
+            return
+        with self.db:
+            self.db.execute("""CREATE TABLE IF NOT EXISTS slot_binding (
+                id TEXT PRIMARY KEY, identity TEXT NOT NULL
+            )""")
+            active = {row[0] for row in self.db.execute(
+                "SELECT slot_id FROM lease WHERE phase!='released' UNION "
+                "SELECT slot_id FROM capacity_reservation WHERE released_at IS NULL")}
+            if active - self.slots.keys():
+                raise ValueError('Keep the bindings for all active leases and reservations configured.')
+            for slot_id, slot in self.slots.items():
+                stored = self.db.execute('SELECT identity FROM slot_binding WHERE id=?', (slot_id,)).fetchone()
+                identity = slot.identity()
+                if stored and stored[0] != identity:
+                    raise ValueError(f'Slot {slot_id} differs from its enrolled identity.')
+                if stored is None:
+                    if slot_id != 'primary':
+                        if slot.provider.status() != 'stopped':
+                            raise ValueError(f'Slot {slot_id} must be stopped at enrollment.')
+                        slot.provider.verify_clean(slot.provider.initial_rollback)
+                    self.db.execute('INSERT INTO slot_binding VALUES (?,?)', (slot_id, identity))
+
+    def slot(self, row):
+        try:
+            return self.slots[row['slot_id']]
+        except KeyError:
+            raise Rejected('slot_unavailable', 'This lease has no configured slot binding.') from None
+
+    def check_reservation_capacity(self, reservations, slot_id):
+        if slot_id not in self.slots:
+            raise Rejected('slot_unavailable', 'This host has no configured slot.', 422)
+        active = self.db.execute(
+            "SELECT 1 FROM lease WHERE slot_id=? AND phase!='released'", (slot_id,)).fetchone()
+        self.slots[slot_id].capacity.check(reservations, require_slot=bool(active), allow_running_slot=bool(active))
+
+    def select_slot(self, requested):
+        available, refused = [], {}
+        busy = {row[0] for row in self.db.execute("SELECT slot_id FROM lease WHERE phase!='released'")}
+        for slot_id, slot in self.slots.items():
+            if slot_id in busy:
+                refused[slot_id] = Rejected('capacity_exhausted', 'The slot already has an active lease.')
+                continue
+            provider = slot.provider
+            try:
+                memory, storage = self.reservations.totals(slot_id)
+                observed = slot.capacity.check((memory, storage))
+                match(requested, observed['slot_resources'], self.dependency_bindings)
+                if provider.status() != 'stopped':
+                    raise Rejected('slot_unavailable', 'The slot is running outside the controller.')
+                last = self.db.execute("""SELECT clean_rollback FROM lease
+                    WHERE slot_id=? AND clean_rollback IS NOT NULL ORDER BY rowid DESC LIMIT 1""",
+                    (slot_id,)).fetchone()
+                provider.verify_clean(last[0] if last else provider.initial_rollback)
+                generation = provider.generation()
+                prior = json.dumps(sorted(provider.recent_tasks('starting')))
+            except Rejected as error:
+                refused[slot_id] = error
+            except (OSError, KeyError, ValueError, TypeError) as error:
+                print(f'Slot {slot_id} could not be verified: {type(error).__name__}', flush=True)
+                refused[slot_id] = Rejected('capacity_unverified', 'The provider could not be verified.', 503)
+            else:
+                available.append((observed['memory_after_start'] - memory * MIB,
+                                  observed['storage_after_writes'] - storage * MIB,
+                                  slot_id, generation, prior))
+        if available:
+            return min(available)[2:]
+        if len(self.slots) == 1:
+            raise next(iter(refused.values()))
+        details = ', '.join(f'{key}: {error.code}' for key, error in sorted(refused.items()))
+        raise Rejected('capacity_exhausted', f'No eligible slot ({details}).')
+
+    def capabilities(self):
+        slots = []
+        reserved = {row[0] for row in self.db.execute("SELECT slot_id FROM lease WHERE phase!='released'")}
+        dependencies = sorted(self.dependency_bindings)
+        for slot_id, slot in self.slots.items():
+            try:
+                slot.provider.verified_config()
+                observation = slot.capacity.read_observation(allow_running_slot=True)
+            except (Rejected, OSError, KeyError, ValueError, TypeError) as error:
+                print(f'Slot {slot_id} capabilities unverified: {getattr(error, "code", type(error).__name__)}', flush=True)
+                slots.append({'id': slot_id, 'admission': 'unverified'})
+                continue
+            slots.append({'id': slot_id, 'admission': 'reserved' if slot_id in reserved else 'assess_at_acquire',
+                          'capabilities': {**PLATFORM, 'gpu': 'none', **observation['slot_resources'],
+                                           'dependencies': dependencies}})
+        response = {'recipe': RECIPE, 'observed_at': time.time(), 'slots': slots}
+        # Keep the existing one-slot response available to older agent clients.
+        if len(slots) == 1:
+            if 'capabilities' not in slots[0]:
+                raise Rejected('capacity_unverified', 'The slot could not be verified.', 503)
+            response['capabilities'] = slots[0]['capabilities']
+        return response
 
     def update(self, lease, phase, upstream=None, address=None, prior_tasks=None):
         with self.db:
@@ -404,27 +532,32 @@ class Pilot:
 
     def verify_generation(self, row):
         self.db.verify()
-        if not row['generation'] or self.provider.generation() != row['generation']:
+        if not row['generation'] or self.slot(row).provider.generation() != row['generation']:
             raise Rejected('slot_reconciliation_required', 'Provider generation differs from the recorded lease. Hold for operator reconciliation.')
 
-    def dispatch(self, lease, phase, operation, *, recorded=False):
-        self.verify_generation(self.get(lease))
+    def dispatch(self, lease, phase, *, recorded=False):
+        row = self.get(lease)
+        provider = self.slot(row).provider
+        self.verify_generation(row)
         if not recorded:
-            prior = json.dumps(sorted(self.provider.recent_tasks(phase)))
+            prior = json.dumps(sorted(provider.recent_tasks(phase)))
             self.update(lease, phase, prior_tasks=prior)
         # Dispatch once. Recovery can only attach a newly observed, matching
         # provider task to this intent. With zero or multiple matches, hold.
         self.verify_generation(self.get(lease))
+        operation = {'starting': provider.start, 'stopping': provider.shutdown,
+                     'export-stopping': provider.shutdown, 'resetting': provider.reset}[phase]
         task = operation()
-        if not self.provider.matches_task(task, phase):
+        if not provider.matches_task(task, phase):
             raise Rejected('operation_outcome_unknown', 'Proxmox returned no matching task identifier. The slot remains held.')
         return self.update(lease, phase, upstream=task)
 
     def recover_task(self, row):
         if row['prior_tasks'] is None:
             return row
+        provider = self.slot(row).provider
         prior = set(json.loads(row['prior_tasks']))
-        new = self.provider.recent_tasks(row['phase']) - prior
+        new = provider.recent_tasks(row['phase']) - prior
         if len(new) != 1:
             return row
         return self.update(row['id'], row['phase'], upstream=new.pop())
@@ -432,20 +565,23 @@ class Pilot:
     def inspect(self, lease, owner):
         row = self.owned(lease, owner)
         phase = row['phase']
+        if phase == 'released':
+            return self.public(row)
+        provider = self.slot(row).provider
         if phase in ('starting', 'stopping', 'export-stopping', 'resetting'):
             if not row['upstream']:
                 row = self.recover_task(row)
                 if not row['upstream']:
                     return self.public(row, 'outcome-unknown')
-            if not self.provider.task(row['upstream']):
+            if not provider.task(row['upstream']):
                 return self.public(row, phase)
         if phase != 'released' and phase != 'resetting':
             self.verify_generation(row)
         if phase == 'starting':
-            if self.provider.status() != 'running':
+            if provider.status() != 'running':
                 raise Rejected('unexpected_guest_state', 'The provider completed start but the guest is not running.')
             try:
-                address = self.provider.ip()
+                address = provider.ip()
             except urllib.error.HTTPError as error:
                 if error.code != 500:
                     raise
@@ -456,21 +592,21 @@ class Pilot:
                 raise Rejected('missing_lease_key', 'The lease has no task SSH key. The slot remains held.')
             # Replaying this fixed-path write installs the same key for the
             # same lease. The guest is not handed out until it succeeds.
-            self.provider.install_guest_key(row['ssh_key'], lease)
+            provider.install_guest_key(row['ssh_key'], lease)
             row = self.update(lease, 'ready', address=address)
         elif phase == 'stopping':
-            if self.provider.status() != 'stopped':
+            if provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The guest did not stop. The slot remains held.')
-            row = self.dispatch(lease, 'resetting', self.provider.reset)
+            row = self.dispatch(lease, 'resetting')
         elif phase == 'export-stopping':
-            if self.provider.status() != 'stopped':
+            if provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The guest did not stop. Preserve its disk.')
             row = self.request_export(lease)
         elif phase == 'resetting':
-            if self.provider.status() != 'stopped':
+            if provider.status() != 'stopped':
                 raise Rejected('unexpected_guest_state', 'The reset slot did not return to the stopped state.')
-            self.provider.verify_clean(row['upstream'])
-            if self.provider.generation() == row['generation']:
+            provider.verify_clean(row['upstream'])
+            if provider.generation() == row['generation']:
                 raise Rejected('slot_reconciliation_required', 'Rollback has not advanced the slot generation.')
             released_at = time.time()
             retention = released_at + CHECKPOINT_RETENTION_SECONDS
@@ -487,8 +623,8 @@ class Pilot:
                 self.db.execute('DELETE FROM restore_hold WHERE replacement=?', (lease,))
             row = self.get(lease)
         elif phase == 'ready':
-            power = self.provider.status()
-            address = self.provider.ip() if power == 'running' else None
+            power = provider.status()
+            address = provider.ip() if power == 'running' else None
             if address != row['address']:
                 row = self.update(lease, 'ready', address=address)
             if not address:
@@ -522,9 +658,10 @@ class Pilot:
         if row['export_failed_at']:
             result['export_needs_decision'] = (not row['export_disposition']
                 and time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS)
-        if row['address']:
-            result['ssh'] = {'host': row['address'], 'user': self.user,
-                             'host_key_alias': self.provider.name, 'host_key': self.host_key}
+        if row['address'] and row['phase'] != 'released':
+            slot = self.slot(row)
+            result['ssh'] = {'host': row['address'], 'user': slot.user,
+                             'host_key_alias': slot.provider.name, 'host_key': slot.host_key}
         return result
 
     def matching_point(self, source, owner, requested_id, replacement_key):
@@ -591,25 +728,17 @@ class Pilot:
                 raise Rejected('not_matching', 'A matching replacement uses the predecessor requirements.', 422)
             requested = point['requirements']
             encoded = requirements(requested)
-        if self.db.execute("SELECT 1 FROM lease WHERE phase!='released'").fetchone():
-            raise Rejected('capacity_exhausted', 'The single pilot slot is already reserved.')
-        if self.provider.status() != 'stopped':
-            raise Rejected('slot_unavailable', 'The pilot guest is already running outside the controller.')
-        last = self.db.execute("SELECT clean_rollback FROM lease WHERE clean_rollback IS NOT NULL ORDER BY rowid DESC LIMIT 1").fetchone()
-        self.provider.verify_clean(last[0] if last else self.provider.initial_rollback)
-        generation = self.provider.generation()
-        prior = json.dumps(sorted(self.provider.recent_tasks('starting')))
-        observed = self.capacity.check(self.reservations.totals())
-        match(requested, observed['slot_resources'], self.dependency_bindings)
+        self.db.verify()
+        slot_id, generation, prior = self.select_slot(requested)
         lease = uuid.uuid4().hex
         with self.db:
             self.db.execute('''INSERT INTO lease
-                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements, resume_point, generation)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded, json.dumps(point) if point else None, generation))
+                (id, request_key, task, initial_seconds, phase, deadline, prior_tasks, owner, ssh_key, reclaim_on_expiry, requirements, resume_point, generation, slot_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                            (lease, key, task, seconds, 'starting', time.time()+seconds, prior, owner, ssh_key, int(reclaim), encoded, json.dumps(point) if point else None, generation, slot_id))
             if point:
                 self.db.execute('INSERT INTO restore_hold VALUES (?,?,?)', (lease, point['lease'], point['checkpoint_id']))
-        return self.public(self.dispatch(lease, 'starting', self.provider.start, recorded=True))
+        return self.public(self.dispatch(lease, 'starting', recorded=True))
 
     @staticmethod
     def check_duration(seconds):
@@ -723,13 +852,14 @@ class Pilot:
         return self.public(self.get(lease))
 
     def request_export(self, lease):
-        self.verify_generation(self.get(lease))
-        start_tasks = self.provider.slot_start_tasks()
+        row = self.get(lease)
+        self.verify_generation(row)
+        start_tasks = self.slot(row).provider.slot_start_tasks()
         challenge = uuid.uuid4().hex
         with self.db:
             self.db.execute("""UPDATE lease SET phase='awaiting-export', upstream=NULL,
                 prior_tasks=NULL, address=NULL, export_challenge=?, storage_challenge=?, export_requested_at=?,
-                export_start_tasks=? WHERE id=?""", (challenge, challenge, time.time(), start_tasks, lease))
+                export_start_tasks=?, export_last_attempt_at=NULL WHERE id=?""", (challenge, challenge, time.time(), start_tasks, lease))
         return self.get(lease)
 
     def retry_export(self, lease, owner):
@@ -768,18 +898,20 @@ class Pilot:
         if row['reviewer_hold']:
             raise Rejected('lease_held', 'Resolve the designated reviewer hold before discarding this disk.')
         self.check_export_source(row)
-        prior = json.dumps(sorted(self.provider.recent_tasks('resetting')))
+        provider = self.slot(row).provider
+        prior = json.dumps(sorted(provider.recent_tasks('resetting')))
         # Persist the explicit data disposition and provider intent together.
         with self.db:
             self.db.execute("""UPDATE lease SET phase='resetting', upstream=NULL, prior_tasks=?,
                 export_disposition=?, hold_mode=NULL, hold_reason=NULL WHERE id=?""",
                             (prior, decision, lease))
-        return self.public(self.dispatch(lease, 'resetting', self.provider.reset, recorded=True))
+        return self.public(self.dispatch(lease, 'resetting', recorded=True))
 
     def next_export(self):
         row = self.db.execute(
             "SELECT id FROM lease WHERE phase='awaiting-export' AND checkpoint IS NULL"
-            " AND (export_failed_at IS NULL OR export_failed_at > ?)",
+            " AND (export_failed_at IS NULL OR export_failed_at > ?)"
+            " ORDER BY export_last_attempt_at IS NOT NULL, coalesce(export_last_attempt_at,export_requested_at), id LIMIT 1",
             (time.time() - EXPORT_REVIEW_SECONDS,)).fetchone()
         return {'export': self.pending_export(row['id']) if row is not None else None}
 
@@ -790,12 +922,14 @@ class Pilot:
         if row['export_failed_at'] and time.time() >= row['export_failed_at'] + EXPORT_REVIEW_SECONDS:
             raise Rejected('export_decision_required', 'Export has failed for 24 hours. Owner disposition is required.')
         return {'lease_id': lease, 'challenge': row['export_challenge'], 'storage_challenge': row['storage_challenge'],
-                'guest_id': self.provider.guest_id, 'requested_at': row['export_requested_at']}
+                'slot_id': row['slot_id'], 'guest_id': self.slot(row).provider.guest_id,
+                'requested_at': row['export_requested_at']}
 
     def check_export_source(self, row):
         self.verify_generation(row)
-        if (self.provider.status() != 'stopped' or
-                self.provider.slot_start_tasks() != row['export_start_tasks']):
+        provider = self.slot(row).provider
+        if (provider.status() != 'stopped' or
+                provider.slot_start_tasks() != row['export_start_tasks']):
             raise Rejected('export_source_changed', 'The guest start history or power state changed. Preserve its disk for review.')
 
     def export_result(self, lease, data):
@@ -816,7 +950,7 @@ class Pilot:
                 raise Rejected('invalid_export_error', 'Provide a short failure reason.', 400)
             with self.db:
                 self.db.execute("""UPDATE lease SET export_failed_at=coalesce(export_failed_at, ?),
-                    export_error=? WHERE id=?""", (time.time(), reason.strip(), lease))
+                    export_error=?, export_last_attempt_at=? WHERE id=?""", (time.time(), reason.strip(), time.time(), lease))
                 if self.alerts_enabled:
                     self.db.execute("""INSERT OR IGNORE INTO export_alert
                         SELECT ?, export_challenge, id, owner, export_failed_at, NULL
@@ -1040,18 +1174,25 @@ class Pilot:
     def advance_reclamation(self):
         if not self.reclaim_enabled:
             return
-        active = self.db.execute("SELECT * FROM lease WHERE phase!='released' AND reclaim_on_expiry=1").fetchone()
-        if active is None:
-            return
-        row = dict(active)
+        active = self.db.execute("SELECT * FROM lease WHERE phase!='released' AND reclaim_on_expiry=1").fetchall()
+        failures = []
+        for row in active:
+            try:
+                self.advance_lease(dict(row))
+            except (Rejected, OSError, KeyError, ValueError, TypeError) as error:
+                failures.append(error)
+        if failures:
+            raise failures[0]
+
+    def advance_lease(self, row):
         key, phase = row['id'], row['phase']
         if phase == 'starting':
             self.inspect(key, row['owner'])
         elif phase == 'ready' and time.time() >= row['deadline'] + self.grace_seconds and 'running' not in (row['hold_mode'], row['reviewer_hold']):
-            if self.provider.status() == 'stopped':
+            if self.slot(row).provider.status() == 'stopped':
                 self.request_export(key)
             else:
-                self.dispatch(key, 'export-stopping', self.provider.shutdown)
+                self.dispatch(key, 'export-stopping')
         elif phase in ('export-stopping', 'resetting'):
             self.inspect(key, row['owner'])
         elif phase == 'awaiting-export' and row['checkpoint'] and not (row['hold_mode'] or row['reviewer_hold']):
@@ -1061,7 +1202,7 @@ class Pilot:
                     self.db.execute('UPDATE lease SET checkpoint=NULL WHERE id=?', (key,))
                 return
             self.check_export_source(row)
-            self.dispatch(key, 'resetting', self.provider.reset)
+            self.dispatch(key, 'resetting')
 
     def release(self, lease, data, owner):
         row = self.owned(lease, owner)
@@ -1074,14 +1215,14 @@ class Pilot:
                 raise Rejected('final_export_required', 'Enrolled leases require verified export before reset.')
             if row['hold_mode'] or row['reviewer_hold']:
                 raise Rejected('lease_held', 'Clear the review hold before releasing the guest.')
-            if self.provider.status() == 'stopped':
+            if self.slot(row).provider.status() == 'stopped':
                 return self.public(self.request_export(lease))
-            return self.public(self.dispatch(lease, 'export-stopping', self.provider.shutdown))
+            return self.public(self.dispatch(lease, 'export-stopping'))
         if data.get('discard_disposable_data') is not True:
             raise Rejected('release_requires_disposition', 'Confirm discard of the pilot workspace after saving any required data.', 400)
-        if self.provider.status() == 'stopped':
-            return self.public(self.dispatch(lease, 'resetting', self.provider.reset))
-        return self.public(self.dispatch(lease, 'stopping', self.provider.shutdown))
+        if self.slot(row).provider.status() == 'stopped':
+            return self.public(self.dispatch(lease, 'resetting'))
+        return self.public(self.dispatch(lease, 'stopping'))
 
 
 def main():
@@ -1232,11 +1373,7 @@ def main():
                 return
             try:
                 if parts == ['v1','capabilities'] and self.command == 'GET':
-                    controller.provider.verified_config()
-                    observation = controller.capacity.read_observation(allow_running_slot=True)
-                    self.respond({'recipe': RECIPE, 'observed_at': time.time(),
-                                  'capabilities': {**PLATFORM, 'gpu': 'none', **observation['slot_resources'],
-                                                   'dependencies': sorted(controller.dependency_bindings)}})
+                    self.respond(controller.capabilities())
                     return
                 if reservation_route and self.command == 'GET' and len(parts) == 2:
                     self.respond({'reservations': controller.reservations.list(reservation_owner)})

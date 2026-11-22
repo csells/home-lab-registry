@@ -6,11 +6,11 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from checkpoints import Rejected
-from exporter import ExportError, collect, store
-from pilot import Pilot
+from exporter import ExportError, collect, export, store
+from pilot import Pilot, Slot
 from review import lease_page
 
 
@@ -42,6 +42,49 @@ class SafetyTest(unittest.TestCase):
     def lease(self, key="new"):
         with patch("pilot.public_key", return_value="key"):
             return self.c.acquire({"task": "test", "request_key": key, "seconds": 60}, "owner")["id"]
+
+    def test_slot_ownership_survives_fallback_and_idempotent_retry(self):
+        second = Mock()
+        second.status.return_value = 'stopped'
+        second.generation.return_value = 'second-generation'
+        second.recent_tasks.return_value = set()
+        second.start.return_value = 'second-start'
+        second.matches_task.return_value = True
+        capacity = Mock()
+        observed = {'slot_resources': {}, 'memory_after_start': 4096, 'storage_after_writes': 8192}
+        self.c.capacity.check.return_value = observed
+        capacity.check.return_value = {**observed, 'memory_after_start': 8192}
+        self.c.slots['second'] = Slot(second, capacity, 'second-user', 'second-key')
+
+        first = self.lease('first')
+        replacement = self.lease('second')
+        self.assertEqual((self.c.get(first)['slot_id'], self.c.get(replacement)['slot_id']),
+                         ('primary', 'second'))
+        second.start.assert_called_once()
+        self.c.provider.start.assert_called_once()
+        with self.assertRaisesRegex(Rejected, 'No eligible slot'):
+            self.lease('third')
+
+        second.task.return_value = False
+        self.assertEqual(self.lease('second'), replacement)
+        second.task.assert_called_once_with('second-start')
+        self.c.provider.task.assert_not_called()
+
+        with self.c.db:
+            self.c.db.execute("UPDATE lease SET phase='ready' WHERE id=?", (replacement,))
+        second.status.return_value = 'running'
+        second.shutdown.return_value = 'second-shutdown'
+        self.c.release(replacement, {}, 'owner')
+        second.shutdown.assert_called_once()
+        self.c.provider.shutdown.assert_not_called()
+
+    def test_capture_cannot_route_an_unenrolled_slot_to_primary(self):
+        job = {'lease_id': 'a' * 32, 'challenge': 'b' * 32, 'storage_challenge': 'c' * 32,
+               'guest_id': '97', 'slot_id': 'other'}
+        with patch('exporter.collect') as capture:
+            with self.assertRaisesRegex(ExportError, 'does not match'):
+                export({'guest_id': '97', 'capture_command': ['primary-capture']}, job)
+            capture.assert_not_called()
 
     def test_stale_generation_cannot_stop_or_rekey_guest(self):
         lease = self.lease()

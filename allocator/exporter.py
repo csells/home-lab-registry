@@ -58,6 +58,7 @@ def collect(command, output, limit, timeout, source=None, *, stage='storage'):
                 reason = next((label for fragment, label in (
                     (b'expanded checkpoint exceeds', 'workspace budget exceeded'),
                     (b'unsupported file type', 'unsupported archive entry'),
+                    (b'workspace is missing', 'workspace missing or redirected'),
                     (b'outside', 'path outside workspace'),
                     (b'insufficient temporary space', 'insufficient temporary space'),
                     (b'temporary storage budget', 'temporary storage budget exceeded'),
@@ -65,7 +66,6 @@ def collect(command, output, limit, timeout, source=None, *, stage='storage'):
                     (b'connection refused', 'connection refused'), (b'timed out', 'connection timeout'),
                     (b'slot identity changed', 'slot identity changed'),
                     (b'another lease', 'lease identity mismatch'),
-                    (b'workspace is missing', 'workspace missing or redirected'),
                     (b'repository is already locked', 'repository locked'),
                 ) if fragment in diagnostics.lower()), 'unclassified command failure')
                 raise ExportError(f'{stage}: {reason} (exit {code}).')
@@ -130,8 +130,10 @@ def store(config, source, filename, challenge, timeout):
 
 def export(config, job):
     lease, challenge, guest = (job[key] for key in ('lease_id', 'challenge', 'guest_id'))
+    slot_id = job.get('slot_id', 'primary')
+    slot = config.get('slots', {'primary': config}).get(slot_id)
     if (not re.fullmatch(r'[a-f0-9]{32}', lease) or not re.fullmatch(r'[a-f0-9]{32}', challenge)
-            or guest != str(config['guest_id'])):
+            or not slot or guest != str(slot['guest_id'])):
         raise ExportError('Export job does not match the configured slot.')
     storage_challenge = job['storage_challenge']
     if not re.fullmatch(r'[a-f0-9]{32}', storage_challenge):
@@ -139,7 +141,7 @@ def export(config, job):
     limit = config.get('max_archive_bytes', 64 * 1024 ** 2)
     timeout = config.get('command_timeout', 120)
     with tempfile.TemporaryFile() as source:
-        capture = config['capture_command'] + [guest, lease]
+        capture = slot['capture_command'] + [guest, lease]
         collect(capture, source, limit, timeout, stage='stopped disk capture')
         if not source.read(1):
             raise ExportError('Capture produced no bytes.')

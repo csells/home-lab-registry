@@ -448,3 +448,32 @@ withdraws a configured binding, inspection reports it as unavailable and
 matching replacements require a newly qualified binding. The endpoint is
 a reference to the existing service. The service retains its normal access
 controls and issues its own credentials as needed.
+
+### Multiple Proxmox slots
+
+The original slot remains `primary`. To add another, give it a unique
+`additional_slots` key and its own `proxmox`, `capacity`, `guest_user` and
+`guest_host_key` configuration. Use one prequalified slot per independent
+Proxmox node and local storage pool. Give its mutation credential power and
+guest-agent access to that single guest. Use a separate audit credential for
+capacity, task history and the local storage pool.
+
+Enroll each additional slot stopped, after the configured token has rolled it
+back to its pinned clean snapshot. Configure the export worker's `slots` map
+with the same slot key, VM ID and a distinct, pinned capture command. Keep both
+bindings configured while a lease or reservation is active. A slot name stays
+bound to the enrolled hardware UUID, storage, credential principal and SSH
+identity, including across controller restarts.
+
+The same ledger owns leases and host capacity reservations for all slots.
+Agents acquire by capability. The controller checks live capacity, selects a
+matching free slot and persists its identity before starting it. Requests with
+no eligible slot receive an immediate reason. Slot selection is available as
+`slot_id` on an owned lease. `capabilities` lists each configured slot and
+its observations, including unverified or reserved states. For explicit
+operator reservations, use `reserve-capacity --slot SLOT`; requests without
+`--slot` retain their original primary-host behavior.
+
+The exporter uses the lease's recorded slot to select the capture command.
+Only a verified retained checkpoint permits reset. A blocked slot continues to
+own its lease while an independent host can admit work or finish cleanup.

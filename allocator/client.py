@@ -232,6 +232,7 @@ def main():
     reserve = sub.add_parser('reserve-capacity')
     reserve.add_argument('--request-key', required=True)
     reserve.add_argument('--purpose', required=True)
+    reserve.add_argument('--slot', default='primary', help='Slot whose host capacity is being reserved')
     reserve.add_argument('--memory-mib', type=int, default=0)
     reserve.add_argument('--storage-mib', type=int, default=0)
     sub.add_parser('list-reservations')
@@ -271,7 +272,7 @@ def main():
             route, payload = '/v1/capacity-reservations', None
             if args.command == 'reserve-capacity':
                 payload = {'request_key': args.request_key, 'purpose': args.purpose,
-                           'memory_mib': args.memory_mib, 'storage_mib': args.storage_mib}
+                           'memory_mib': args.memory_mib, 'storage_mib': args.storage_mib, 'slot_id': args.slot}
             elif args.command == 'release-reservation':
                 if not re.fullmatch('[a-f0-9]{32}', args.reservation):
                     raise ValueError('Invalid reservation ID')

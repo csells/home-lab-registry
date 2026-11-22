@@ -81,7 +81,7 @@ def capture(config, guest, lease, output):
         key = appliance.read_file(marker).split()
         if len(key) != 3 or key[0] != b'ssh-ed25519' or key[2] != ('lease-' + lease).encode():
             raise ValueError('The source disk belongs to another lease.')
-        if appliance.realpath(workspace) != workspace or not appliance.is_dir(workspace):
+        if not appliance.is_dir(workspace) or appliance.realpath(workspace) != workspace:
             raise ValueError('The declared workspace is missing or resolves outside its configured path.')
         appliance.tar_out_opts(workspace, output, compress='gzip', numericowner=True)
 
