@@ -24,6 +24,17 @@ def object_name(lease, checkpoint=None):
     return f'lease-{lease}{suffix}.tar.gz'
 
 
+def recoverable(receipt, phase, final, now, held=False):
+    return bool(receipt and receipt.get('storage_managed') and (not final or phase == 'released')
+                and not receipt.get('purge_claim') and not receipt.get('purged_at')
+                and (held or receipt.get('pin') or receipt.get('retain_through', float('inf')) > now))
+
+
+def restore_held(db, lease, checkpoint):
+    return db.execute("SELECT 1 FROM restore_hold WHERE source=? AND checkpoint_id IS ? LIMIT 1",
+                      (lease, checkpoint)).fetchone() is not None
+
+
 class Checkpoints:
     def __init__(self, db):
         self.db = db

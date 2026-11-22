@@ -32,6 +32,8 @@ Discover the authorized allocator and its supported operations through the regis
 
 For an allocator that advertises capability-based admission, use the task's scoped credential to query its supported recipe and resources. Derive CPU, RAM, disk and hardware requirements from the work. Reuse the owned lease across test runs, renew it while work or review continues, and use a new request key only for a different request. For the Linux pilot, discover an active record with capability `lease-pilot` and endpoint `lease_api`; use the registered client, trust material and scope. Staging availability alone does not authorize production workloads.
 
+For the Linux allocator, ordinary acquisition includes automatic reclamation after grace. Release the lease to checkpoint its workspace. Inspect it again when reconnecting to obtain the current SSH address. A generation mismatch requires operator reconciliation with the provider before further changes. Resume pins its selected checkpoint through restore acknowledgment or replacement release. Retry an interrupted restore with the same request key and identity.
+
 Keep work and evidence in the recipe's declared workspace. Check that the latest recovery point is acknowledged and record its time. Use independent owner and designated-reviewer holds when another task still needs the guest. Release through the allocator and verify the final disposition. Recover using the returned checkpoint identity and compare the saved work after reset. Escalate held disks or missing evidence through the recorded operator path. Never substitute a manual hypervisor reset for a failed export.
 
 ## Platform and migration validation

@@ -9,6 +9,8 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from restore_workspace import extract_workspace
 
 
 class WorkspaceRestoreTest(unittest.TestCase):
@@ -41,6 +43,18 @@ class WorkspaceRestoreTest(unittest.TestCase):
         self.assertEqual(replay.stdout.strip(), b'previously-restored')
         self.assertEqual((self.workspace/'work.txt').read_bytes(), b'later work')
         self.assertEqual(json.loads((self.workspace/'.lease-restore-receipt').read_text())['lease'], self.lease)
+
+    def test_tar_metadata_counts_toward_expanded_budget(self):
+        source = io.BytesIO()
+        with tarfile.open(fileobj=source, mode='w:gz', format=tarfile.PAX_FORMAT) as archive:
+            entry = tarfile.TarInfo('file.txt')
+            entry.pax_headers = {'comment': 'ordinary metadata' * 200}
+            archive.addfile(entry)
+        source.seek(0)
+        with patch('restore_workspace.MAX_EXPANDED', 1024):
+            with self.assertRaisesRegex(ValueError, 'workspace budget'):
+                extract_workspace(source, self.home)
+        self.assertEqual(list(self.home.iterdir()), [])
 
     def test_other_workspace_and_bad_digest_are_preserved(self):
         self.assertNotEqual(self.recover('0'*64).returncode, 0)

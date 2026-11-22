@@ -2,7 +2,7 @@
 import json
 import time
 
-from checkpoints import Rejected
+from checkpoints import Rejected, recoverable, restore_held
 
 
 def lease_page(db, before, scope='all'):
@@ -30,13 +30,13 @@ def lease_page(db, before, scope='all'):
                 'released_at', 'hold_mode', 'hold_reason', 'reviewer', 'reviewer_hold', 'reviewer_reason', 'export_error')}
         if item['phase'] == 'ready' and item['deadline'] <= now:
             item['phase'] = 'overdue'
-        saved = db.execute("""SELECT receipt FROM incremental_checkpoint
+        saved = db.execute("""SELECT id, receipt FROM incremental_checkpoint
                               WHERE lease_id=? AND receipt IS NOT NULL""", (row['id'],))
-        receipts = [json.loads(entry['receipt']) for entry in saved]
+        receipts = [(entry['id'], json.loads(entry['receipt'])) for entry in saved]
         if row['checkpoint']:
-            receipts.append(json.loads(row['checkpoint']))
-        accessible = [r for r in receipts if not r.get('purged_at') and not r.get('purge_claim')
-                      and (r.get('pin') or r.get('retain_through', now + 1) > now)]
+            receipts.append((None, json.loads(row['checkpoint'])))
+        accessible = [r for key, r in receipts if recoverable(
+            r, row['phase'], key is None, now, restore_held(db, row['id'], key))]
         last = max(accessible, key=lambda r: r['verified_at'], default={})
         item.update(checkpoint_count=len(accessible), last_verified_at=last.get('verified_at'),
                     retained_through=last.get('retain_through'), pinned=bool(last.get('pin')))

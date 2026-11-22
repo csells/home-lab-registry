@@ -1,8 +1,10 @@
 """Install a verified checkpoint in the task user's new Linux workspace."""
+import gzip
 import hashlib
 import json
 import os
 import re
+import resource
 import sys
 import tarfile
 import tempfile
@@ -11,6 +13,39 @@ from pathlib import Path
 MAX_ARCHIVE = 64 * 1024 ** 2
 MAX_EXPANDED = 512 * 1024 ** 2
 MAX_MEMBERS = 20000
+
+
+def extract_workspace(source, target):
+    """Exercise the same filesystem and tar policy before acknowledgment and on resume."""
+    marker = '.lease-restore-receipt'
+    # Charge gzip output before tarfile parses metadata, including long names and padding.
+    with gzip.GzipFile(fileobj=source) as compressed, tempfile.TemporaryFile(dir=target.parent) as tar:
+        while block := compressed.read(65536):
+            if tar.tell() + len(block) > MAX_EXPANDED:
+                raise ValueError('Expanded checkpoint exceeds the workspace budget.')
+            tar.write(block)
+        tar.seek(0)
+        extract_tar(tar, target, marker)
+
+
+def extract_tar(tar, target, marker):
+    size = count = 0
+    with tarfile.open(fileobj=tar, mode='r|') as archive:
+        for entry in archive:
+            count += 1
+            size += entry.size
+            if count > MAX_MEMBERS or size > MAX_EXPANDED:
+                raise ValueError('Expanded checkpoint exceeds the workspace budget.')
+            # The restore receipt describes this generation and is regenerated.
+            if Path(entry.name) == Path(marker):
+                continue
+            if entry.isdir() or entry.isreg() or entry.issym() or entry.islnk():
+                archive.extract(entry, target, filter='data', set_attrs=True)
+            else:
+                raise ValueError('Unsupported file type in checkpoint.')
+    # Reserve this exact path before acknowledging that receipt installation can succeed.
+    with (target / marker).open('x'):
+        pass
 
 
 def restore(digest, lease):
@@ -43,21 +78,8 @@ def restore(digest, lease):
                 if any(workspace.iterdir()):
                     raise ValueError('An existing workspace already contains data.')
             source.seek(0)
-            size = count = 0
-            with tarfile.open(fileobj=source, mode='r|gz') as archive:
-                for entry in archive:
-                    count += 1
-                    size += entry.size
-                    if count > MAX_MEMBERS or size > MAX_EXPANDED:
-                        raise ValueError('Expanded checkpoint exceeds the workspace budget.')
-                    # The restore receipt describes this generation and is regenerated.
-                    if Path(entry.name) == Path(marker):
-                        continue
-                    if entry.isdir() or entry.isreg() or entry.issym() or entry.islnk():
-                        archive.extract(entry, target, filter='data', set_attrs=True)
-                    else:
-                        raise ValueError('Unsupported file type in checkpoint.')
-        with (target / marker).open('x') as receipt:
+            extract_workspace(source, target)
+        with (target / marker).open('w') as receipt:
             json.dump(identity, receipt)
         # A nonempty destination cannot be replaced by a directory rename.
         target.rename(workspace)
@@ -66,6 +88,13 @@ def restore(digest, lease):
 
 if __name__ == '__main__':
     try:
-        print(restore(*sys.argv[1:]))
+        if sys.argv[1:] == ['--validate']:
+            if sys.platform.startswith('linux'):
+                resource.setrlimit(resource.RLIMIT_AS, (192 * 1024**2, 192 * 1024**2))
+                resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
+            with tempfile.TemporaryDirectory() as target:
+                extract_workspace(sys.stdin.buffer, Path(target))
+        else:
+            print(restore(*sys.argv[1:]))
     except (OSError, ValueError, tarfile.TarError) as error:
         sys.exit(f'Workspace restore failed: {error}')

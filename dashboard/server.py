@@ -56,7 +56,8 @@ class Handler(BaseHTTPRequestHandler):
             if not 0<length<=1024:raise ValueError()
             body=json.loads(self.rfile.read(length))
             if not isinstance(body.get('machine'),str) or not isinstance(body.get('login'),str):raise ValueError()
-            value=credential(PRIVATE,body['machine'],body['login'])
+            with LOCK: machines=STATE['machines']
+            value=credential(PRIVATE,body['machine'],body['login'],machines)
         except (ValueError,TypeError,KeyError):self.send_error(400);return
         if value is None:self.send_error(404);return
         raw=value.encode()

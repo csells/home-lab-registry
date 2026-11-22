@@ -27,10 +27,30 @@ following configuration keys:
   Keep the private key on the controller. Give the authorized task the
   independently obtained CA and its own bearer credential file.
 - `proxmox.url`, `proxmox.node`, `proxmox.guest_id`, `proxmox.guest_name`,
-  `proxmox.snapshot`, `proxmox.token_file`, and `proxmox.ca_file`
+  `proxmox.snapshot`, `proxmox.token_file`, `proxmox.ca_file`, `proxmox.guest_uuid`,
+  `proxmox.guest_volume` and `proxmox.initial_rollback`. Before first admission,
+  verify the stopped disk is the dedicated clean snapshot and record its successful
+  allocator-token rollback UPID. The VM must have a Proxmox VM generation ID.
+  Later admissions use the exact successful rollback recorded in the journal.
+  Each lease pins the generation returned by Proxmox. A conflicting generation,
+  missing task history, or an older active lease without a generation requires
+  operator reconciliation. Establish who owns the current disk and reconcile the
+  journal from external evidence before allowing another mutation.
 - `capacity.token_file` (separate read-only token), `capacity.storage`,
   `capacity.minimum_memory_mib`, `capacity.minimum_storage_mib`,
   `capacity.other_reserved_memory_mib`, and `capacity.protected_guest_ids`.
+
+Before first startup set `controller_guest_id` to the controller VM on the provider node
+and `ledger_witness` to a private file outside the database restore set. Run
+`pilot.py CONFIG.json --enroll-ledger` once after confirming the slot is idle.
+Each ledger commit durably advances a separate revision witness. The controller
+also checks its own Proxmox VM generation using the audit credential, so a
+whole-VM rollback cannot revive an old witness. A mismatch or interrupted
+commit holds the allocator for offline reconciliation. Preserve both records
+and review later renewals, holds, operations and storage evidence before recovery.
+Never overwrite the witness with an old copy to make a restored ledger start.
+Reserve mutation of the slot to this controller. Enrollment requires all-owner
+task history via the node's read-only `Sys.Audit` permission.
 
 The capacity reader needs audit access to the node, its VM/LXC inventory,
 and the selected datastore. It has no provider mutation rights. The controller
@@ -48,7 +68,7 @@ explicitly until shared reservation discovery is implemented.
 | POST /v1/leases | Task name, request key, recipe `debian13-amd64`, duration in seconds, and `ssh_public_key` (OpenSSH Ed25519 with no comment). Immediate capacity rejection, or a recorded lease ID. |
 | GET /v1/leases/{id} | Inspect the journal and advance observed provider tasks. Ready leases include the guest's reported SSH endpoint after its key is installed. |
 | POST /v1/leases/{id}/renew | Duration in seconds. Extends an active lease from now without shortening its existing deadline. |
-| POST /v1/leases/{id}/release | An explicit `discard_disposable_data: true` for pilot data. Stops the owned slot and restores its clean snapshot. Poll inspect until released. |
+| POST /v1/leases/{id}/release | Stops the owned slot, verifies its workspace checkpoint and restores its clean snapshot. Poll inspect until released. |
 
 An expired lease is overdue and keeps the slot reserved. Provider intent is
 saved before issuing a mutation, together with recent task IDs of the same
@@ -80,18 +100,17 @@ python3 allocator/client.py --record <record-id> --registry-client <registry.py>
 ```
 
 Use the same options with `inspect <id>`, `renew <id> --seconds 900`, or
-`release <id> --discard-disposable-data` for qualification data. The client
+`release <id>` to preserve the workspace and return the slot. The client
 returns JSON, with structured rejection details on stderr and exit status 2.
 Capacity rejections require a new caller decision. The client never retries
 mutations automatically.
 
 
-## Opt-in staged reclamation
+## Checkpoint-gated reclamation
 
 Set `reclamation.verifier_token_file` to a separate private bearer credential.
-The default `reclamation.grace_seconds` is 7200. New requests may opt in with
-`--reclaim-on-expiry`. Previous leases keep their original policy. An opted-in
-lease remains renewable during grace. After grace the controller stops the guest
+The default `reclamation.grace_seconds` is 7200. Every new lease requires the verifier and uses automatic reclamation.
+Previous leases retain their original policy. A new lease remains renewable during grace. After grace the controller stops the guest
 and holds its disk while the exporter obtains and verifies a checkpoint. Early
 `release <id> --preserve-checkpoint` starts the same process. An opted-in
 lease cannot be reset through the discard option.
@@ -108,13 +127,13 @@ the challenge and one of these outcomes.
 - `failed` with a short reason. The disk stays reserved and the error is
   visible to the owner. After 24 hours the pending export requires owner
   review. The owner can use `retry-export <id>` after repairing the cause.
-  Retry resets the failure window and invalidates previous challenges.
+  Retry resets the failure window and rotates the verifier challenge. The storage tag stays fixed so the worker can recover an earlier successful write.
   After 24 hours the owner can also record `retain-failed-export <id>
   --reason <reason>`, or explicitly authorize discard with
   `discard-failed-export <id> --confirm-lease <id> --reason <reason>`.
   The controller journals the exact discard decision with its reset intent.
 - `verified` with the full encrypted repository snapshot ID, expected
-  `/lease-{id}.tar.gz` path, and independently downloaded SHA-256. The
+  `/lease-{id}.tar.gz` path, independently downloaded SHA-256, `storage_managed: true` and `restore_verified: true`. The
   controller checks the stopped guest and its observed start history, records
   the receipt, and completes rollback through the same durable task journal.
   Repeating the exact receipt is safe. Inspect returns the checkpoint path,
@@ -328,7 +347,7 @@ override preserves the affected principal, prior reason and data disposition.
 Use `resume <predecessor> --task <task> --request-key <new-operation-key>
 --seconds <duration> --identity <new-private-key>` with the owner's ordinary
 credential. The task client requires the adjacent `restore_workspace.py`
-helper and a fresh Ed25519 identity. The controller records the predecessor,
+helper and a fresh Ed25519 identity. The controller reserves the selected recovery point until the replacement acknowledges the restore or releases the slot. An interrupted restore can resume using the same request key. The controller records the predecessor,
 requirements and chosen acknowledged checkpoint on the replacement. The
 default selects a retained final checkpoint, otherwise the newest available
 incremental one. Use `--checkpoint-id` for a particular incremental version.
@@ -356,3 +375,17 @@ owner sign-in. Proxy EventSource responses with buffering disabled and preserve
 WebSocket upgrades for Guacamole. Verify terminal input and the clipboard login
 through the review route, and check that another machine and a foreign origin are
 refused. Retire the account, keys, gateway and review VM at teardown.
+
+
+### Recovery verification and retries
+
+Before acknowledging an archive the worker extracts it into an empty private
+directory using the same extractor and limits as the guest. Allow temporary
+space for both a decompressed tar stream and its extracted files (up to 512 MiB each). The limit covers headers and padding. The validator accepts up to 20,000 archive entries and 64 MiB of compressed input. On Linux its child process also has memory and CPU limits. An incompatible final checkpoint leaves the original disk held.
+The verifier must attest both managed storage and successful restore validation.
+
+An owner retry keeps the original storage challenge. The worker looks up that
+challenge and verifies any snapshot already written before creating another.
+At retention expiry the worker also reconciles attempts without a receipt by
+their exact challenge and archive path. Command failures report the stage, exit
+status and a recognized diagnostic without publishing raw stderr.

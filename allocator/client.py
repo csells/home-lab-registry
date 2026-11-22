@@ -139,6 +139,11 @@ def resume_workspace(endpoint, args):
     point, ssh = lease['resume_point'], lease['ssh']
     if point['lease'] != args.predecessor:
         raise ValueError('Replacement lineage differs from the requested predecessor')
+    result = {'lease': lease_id, 'workspace': '~/workspace', 'recovery_point': point,
+              'coverage': ('Declared workspace at final capture.' if point['capture'] == 'final'
+                           else 'Declared checkpoint only. Later unacknowledged changes are unavailable.')}
+    if lease.get('restore_completed_at'):
+        return {**result, 'restore': 'previously-restored', 'acknowledged_at': lease['restore_completed_at']}
     grant = api(origin + '/checkpoint-recovery', {'checkpoint_id': point['checkpoint_id']})
     if point['sha256'] != grant['sha256']:
         raise ValueError('The authorized recovery point changed')
@@ -160,12 +165,11 @@ def resume_workspace(endpoint, args):
                    '-i', str(args.identity), ssh['user']+'@'+ip,
                    shlex.join(['python3','-c',helper,point['sha256'],lease_id])]
         with archive.open('rb') as stream:
-            result = subprocess.check_output(command, stdin=stream, timeout=180, text=True).strip()
-        if result not in ('restored','previously-restored'):
+            acknowledgment = subprocess.check_output(command, stdin=stream, timeout=180, text=True).strip()
+        if acknowledgment not in ('restored','previously-restored'):
             raise ValueError('The guest did not acknowledge the restore')
-    return {'lease': lease_id, 'workspace': '~/workspace', 'restore': result, 'recovery_point': point,
-            'coverage': ('Declared workspace at final capture.' if point['capture'] == 'final'
-                         else 'Declared checkpoint only. Later unacknowledged changes are unavailable.')}
+    api('/v1/leases/' + lease_id + '/restore-complete', {'sha256': point['sha256']})
+    return {**result, 'restore': acknowledgment}
 
 
 def main():
@@ -192,14 +196,14 @@ def main():
     acquire.add_argument('--ssh-public-key', type=Path, required=True)
     acquire.add_argument('--recipe', default='debian13-amd64')
     acquire.add_argument('--requirements', type=json.loads, help='Required OS, architecture, GPU, vCPUs, memory_mib or disk_mib as JSON')
-    acquire.add_argument('--reclaim-on-expiry', action='store_true')
+    acquire.add_argument('--reclaim-on-expiry', action='store_true', help=argparse.SUPPRESS)
     for operation in ('inspect', 'renew', 'release', 'hold', 'assign-reviewer', 'remove-reviewer', 'reviewer-hold', 'override-reviewer', 'retry-export', 'pin', 'unpin', 'recover', 'delegate-renewal', 'revoke-renewal', 'delegated-renew', 'retain-failed-export', 'discard-failed-export', 'checkpoint'):
         command = sub.add_parser(operation)
         command.add_argument('lease')
         if operation == 'renew':
             command.add_argument('--seconds', type=int, required=True)
         elif operation == 'release':
-            disposition = command.add_mutually_exclusive_group(required=True)
+            disposition = command.add_mutually_exclusive_group()
             disposition.add_argument('--discard-disposable-data', action='store_true')
             disposition.add_argument('--preserve-checkpoint', action='store_true')
         elif operation == 'assign-reviewer':
@@ -279,8 +283,9 @@ def main():
         if args.command == 'acquire':
             key = ' '.join(args.ssh_public_key.read_text().split()[:2])
             payload = {'task': args.task, 'request_key': args.request_key, 'seconds': args.seconds,
-                       'recipe': args.recipe, 'ssh_public_key': key,
-                       'reclaim_on_expiry': args.reclaim_on_expiry}
+                       'recipe': args.recipe, 'ssh_public_key': key}
+            if args.reclaim_on_expiry:
+                payload['reclaim_on_expiry'] = True
             if args.requirements is not None:
                 payload['requirements'] = args.requirements
         else:
@@ -293,7 +298,7 @@ def main():
             elif args.command == 'release':
                 route += '/release'
                 payload = {'discard_disposable_data': args.discard_disposable_data,
-                           'preserve_checkpoint': args.preserve_checkpoint}
+                           'preserve_checkpoint': not args.discard_disposable_data}
             elif args.command in ('assign-reviewer', 'remove-reviewer'):
                 route += '/reviewer'
                 payload = {'reviewer': getattr(args, 'reviewer', None)}

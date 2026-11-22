@@ -5,8 +5,15 @@ import os
 def public_access(record):
     return record['spec'].get('resources',{}).get('management_access',[])
 
-def credential(private,machine,login):
+def credential(private,machine,login,machines=()):
     # Only explicitly provisioned mappings; never interpret registry paths or client paths.
+    target = os.environ.get('LAB_DASHBOARD_ACCESS_TARGET')
+    if target is not None:
+        allowed = any(record['id'] == machine == target and
+                      any(route.get('id') == login and route.get('password_available') is True
+                          for route in record.get('access', ())) for record in machines)
+        if not allowed:
+            return None
     data=json.loads((private/'machine-passwords.json').read_text())
     value=data.get(machine,{}).get(login)
     return value if isinstance(value,str) and value else None

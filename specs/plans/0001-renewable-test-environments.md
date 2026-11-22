@@ -562,3 +562,32 @@ the cached comparison result while that user request is outstanding. A second
 test verified automatic reconnection after an HTTP failure closed EventSource.
 These checks used the actual registry, collectors and staging ingress. Public
 owner-session observations are recorded in the private deployment record.
+
+### Staging qualification after release review
+
+New leases use checkpoint-gated reclamation by default. The operator enrolled
+the idle Linux slot with its exact rollback, disk identity and a controller
+ledger witness. A stale lease generation could not stop the running task.
+A pre-renewal copy of the actual ledger also failed the witness check while
+the VM generation was still current. The reconciler reads all-owner provider
+history using the separate node audit identity.
+
+A test guest containing 20,001 empty files passed its two-hour grace boundary
+using an accelerated test deadline. The worker stopped the guest and rejected
+the compressed archive under the guest restore limits. It held the original
+disk until the test owner exercised the explicit failed-export disposition.
+A separate small workspace round-tripped through encrypted storage, release
+and a matching replacement. The replacement retained its recovery point
+across a simulated retention deadline and acknowledged the restored file.
+A stale cached SSH address was corrected from the live guest agent.
+
+The authenticated staging dashboard copied the disposable login credential,
+opened its browser terminal and completed a comparison across all configured
+collectors. A different machine and a foreign-origin copy request were denied.
+The recovery count uses the same eligibility rule as retrieval.
+
+An interrupted verification after a real encrypted backup left the source disk
+held. Explicit retry rotated the verifier challenge, reused the stored snapshot
+under its original storage tag, completed a fresh readback and released the slot.
+An inventory of the dedicated repository after retry matched every physical
+snapshot to an acknowledged receipt.

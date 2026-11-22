@@ -13,7 +13,8 @@ class LeaseReviewTest(unittest.TestCase):
                    deadline REAL, released_at REAL, hold_mode TEXT, hold_reason TEXT,
                    reviewer TEXT, reviewer_hold TEXT, reviewer_reason TEXT,
                    export_error TEXT, checkpoint TEXT)""")
-        db.execute('CREATE TABLE incremental_checkpoint (lease_id TEXT, receipt TEXT)')
+        db.execute('CREATE TABLE incremental_checkpoint (id TEXT, lease_id TEXT, receipt TEXT)')
+        db.execute("CREATE TABLE restore_hold (replacement TEXT, source TEXT, checkpoint_id TEXT)")
         db.execute("INSERT INTO lease (id,phase) VALUES ('held','awaiting-export')")
         db.executemany("INSERT INTO lease (id,phase) VALUES (?,'released')",
                        [(str(i),) for i in range(30)])

@@ -15,6 +15,7 @@ from pathlib import Path
 
 from checkpoints import object_name
 from client import request
+from restore_workspace import MAX_ARCHIVE
 
 TAG = 'lease-final-export'
 METADATA_LIMIT = 1024 ** 2
@@ -24,36 +25,61 @@ class ExportError(Exception):
     pass
 
 
-def collect(command, output, limit, timeout, source=None):
+def collect(command, output, limit, timeout, source=None, *, stage='storage'):
     deadline = time.monotonic() + timeout
+    # Keep only recognized diagnostics. Arbitrary subprocess output can contain secrets.
+    diagnostics = bytearray()
     with subprocess.Popen(command, stdin=source if source is not None else subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as job:
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as job:
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(job.stdout, selectors.EVENT_READ)
+                selector.register(job.stderr, selectors.EVENT_READ)
                 size = 0
-                while True:
+                while selector.get_map():
                     remaining = deadline - time.monotonic()
-                    if remaining <= 0 or not selector.select(remaining):
-                        raise ExportError('Export command timed out.')
-                    chunk = os.read(job.stdout.fileno(), 65536)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > limit:
-                        raise ExportError('Export command exceeded its output limit.')
-                    output.write(chunk)
-            if job.wait(timeout=max(0, deadline - time.monotonic())) != 0:
-                raise ExportError('Export command reported failure.')
+                    events = selector.select(max(0, remaining))
+                    if remaining <= 0 or not events:
+                        raise ExportError(f'{stage}: command timed out.')
+                    for key, _ in events:
+                        chunk = os.read(key.fd, 65536)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                        elif key.fileobj is job.stderr:
+                            diagnostics.extend(chunk)
+                            del diagnostics[:-4096]
+                        else:
+                            size += len(chunk)
+                            if size > limit:
+                                raise ExportError(f'{stage}: exceeded output limit.')
+                            output.write(chunk)
+            code = job.wait(timeout=max(0, deadline - time.monotonic()))
+            if code:
+                reason = next((label for fragment, label in (
+                    (b'expanded checkpoint exceeds', 'workspace budget exceeded'),
+                    (b'unsupported file type', 'unsupported archive entry'),
+                    (b'outside', 'path outside workspace'),
+                    (b'insufficient temporary space', 'insufficient temporary space'),
+                    (b'temporary storage budget', 'temporary storage budget exceeded'),
+                    (b'no space left', 'storage full'), (b'permission denied', 'permission denied'),
+                    (b'connection refused', 'connection refused'), (b'timed out', 'connection timeout'),
+                    (b'slot identity changed', 'slot identity changed'),
+                    (b'another lease', 'lease identity mismatch'),
+                    (b'workspace is missing', 'workspace missing or redirected'),
+                    (b'repository is already locked', 'repository locked'),
+                ) if fragment in diagnostics.lower()), 'unclassified command failure')
+                raise ExportError(f'{stage}: {reason} (exit {code}).')
         finally:
             if job.poll() is None:
                 job.kill()
+            job.stdout.close()
+            job.stderr.close()
         output.seek(0)
 
 
-def command_json(command, timeout, source=None):
+def command_json(command, timeout, source=None, *, stage="storage metadata"):
     with tempfile.TemporaryFile() as output:
-        collect(command, output, METADATA_LIMIT, timeout, source)
+        collect(command, output, METADATA_LIMIT, timeout, source, stage=stage)
         return output.read()
 
 
@@ -67,6 +93,14 @@ def store(config, source, filename, challenge, timeout):
     tag = 'lease-export-' + challenge
     restic = config['restic_command']
     limit = config.get('max_archive_bytes', 64 * 1024 ** 2)
+    source.seek(0, os.SEEK_END)
+    if not 0 < source.tell() <= MAX_ARCHIVE:
+        raise ExportError('Archive exceeds the supported restore size.')
+    source.seek(0)
+    with tempfile.TemporaryFile() as result:
+        collect([sys.executable, str(Path(__file__).with_name('restore_workspace.py')), '--validate'],
+                result, 1024, timeout, source, stage='Workspace restore validation')
+    source.seek(0)
     expected = digest(source)
     snapshots = json.loads(command_json(restic + ['snapshots', '--tag', tag, '--json'], timeout))
     if not isinstance(snapshots, list) or len(snapshots) > 1:
@@ -78,7 +112,7 @@ def store(config, source, filename, challenge, timeout):
         snapshot = existing['id']
     else:
         upload = command_json(restic + ['backup', '--stdin', '--stdin-filename', filename,
-                                         '--tag', TAG, '--tag', tag, '--json'], timeout, source)
+                                         '--tag', TAG, '--tag', tag, '--json'], timeout, source, stage='storage backup')
         summaries = [entry for line in upload.splitlines() if line.strip()
                      for entry in [json.loads(line)] if entry.get('message_type') == 'summary']
         if len(summaries) != 1:
@@ -87,7 +121,7 @@ def store(config, source, filename, challenge, timeout):
     if not isinstance(snapshot, str) or not re.fullmatch(r'[a-f0-9]{64}', snapshot):
         raise ExportError('Backup did not return a full snapshot ID.')
     with tempfile.TemporaryFile() as restored:
-        collect(restic + ['dump', snapshot, '/' + filename], restored, limit, timeout)
+        collect(restic + ['dump', snapshot, '/' + filename], restored, limit, timeout, stage='storage readback')
         if digest(restored) != expected:
             raise ExportError('Downloaded checkpoint differs from the source.')
     return {'snapshot': snapshot, 'path': '/' + filename, 'sha256': expected}
@@ -98,23 +132,27 @@ def export(config, job):
     if (not re.fullmatch(r'[a-f0-9]{32}', lease) or not re.fullmatch(r'[a-f0-9]{32}', challenge)
             or guest != str(config['guest_id'])):
         raise ExportError('Export job does not match the configured slot.')
+    storage_challenge = job['storage_challenge']
+    if not re.fullmatch(r'[a-f0-9]{32}', storage_challenge):
+        raise ExportError('Invalid storage operation identity.')
     limit = config.get('max_archive_bytes', 64 * 1024 ** 2)
     timeout = config.get('command_timeout', 120)
     with tempfile.TemporaryFile() as source:
         capture = config['capture_command'] + [guest, lease]
-        collect(capture, source, limit, timeout)
+        collect(capture, source, limit, timeout, stage='stopped disk capture')
         if not source.read(1):
             raise ExportError('Capture produced no bytes.')
         source.seek(0)
-        receipt = store(config, source, object_name(lease), challenge, timeout)
-    return {'outcome': 'verified', 'challenge': challenge, 'storage_managed': True, **receipt}
+        receipt = store(config, source, object_name(lease), storage_challenge, timeout)
+    return {'outcome': 'verified', 'challenge': challenge, 'storage_managed': True, 'restore_verified': True, **receipt}
 
 
 def expire(config, job):
     lease, challenge, snapshot = (job[key] for key in ('lease_id', 'challenge', 'snapshot'))
     checkpoint = job.get('checkpoint_id')
     if (not re.fullmatch(r'[a-f0-9]{32}', lease) or not re.fullmatch(r'[a-f0-9]{32}', challenge)
-            or not re.fullmatch(r'[a-f0-9]{64}', snapshot)
+            or not (snapshot is None and job.get('unacknowledged') is True or
+                    isinstance(snapshot, str) and re.fullmatch(r'[a-f0-9]{64}', snapshot))
             or (checkpoint is not None and checkpoint != challenge)
             or job['path'] != '/' + object_name(lease, checkpoint)):
         raise ExportError('Expiry job has an invalid checkpoint identity.')
@@ -130,17 +168,19 @@ def expire(config, job):
     snapshots = observed('--tag', tag)
     if snapshots:
         existing, = snapshots
-        if (existing['id'] != snapshot or existing['paths'] != [job['path']]
+        if snapshot is None and job.get('unacknowledged') is True:
+            snapshot = existing['id']
+        if (not re.fullmatch(r'[a-f0-9]{64}', snapshot) or existing['id'] != snapshot or existing['paths'] != [job['path']]
                 or not {TAG, tag} <= set(existing['tags'])):
             raise ExportError('Expiry would affect a different snapshot.')
         command_json(restic + ['forget', snapshot, '--json'], timeout)
     stored_ids = command_json(restic + ['list', 'snapshots'], timeout).decode('ascii').split()
     if any(not re.fullmatch(r'[a-f0-9]{64}', snapshot_id) for snapshot_id in stored_ids):
         raise ExportError('Backup storage did not return a valid snapshot inventory.')
-    if snapshot in stored_ids:
+    if snapshot in stored_ids or (job.get('unacknowledged') and observed('--tag', tag)):
         raise ExportError('The expired checkpoint is still visible in storage.')
     return {'lease_id': lease, 'checkpoint_id': checkpoint, 'snapshot': snapshot,
-            'claim': job['claim'], 'absent': True}
+            'claim': job['claim'], 'absent': True, 'unacknowledged': bool(job.get('unacknowledged'))}
 
 
 def process(config):
