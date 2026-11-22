@@ -1,14 +1,13 @@
 # Current home-lab architecture
 
-Baseline 2026-10-28, with the inventory rollout verified 2026-11-20. This describes the whole lab's architectural roles and relationships,
-using the current registry records and registry/dashboard source through `1f70fb1`.
-Reading a deployment record is not a fresh end-to-end health check. Private machine
-names, addresses, placements, capacities, credentials and dated operational evidence
-remain exclusively in the registry; this document is not a second inventory.
+Reconciled 2026-11-22 against `main` at `63624fb`, the verified November 20
+inventory rollout and the November 21 backup collector promotion. The staging
+section records the separately verified allocator at `e86592f`. The registry
+holds current machine inventory, access references and operational evidence.
 
 The [vision](../vision/home-lab.md) describes intended outcomes. The
-[environment leasing plan](../plans/0001-renewable-test-environments.md) describes
-proposed work, not an installed subsystem.
+[environment leasing plan](../plans/0001-renewable-test-environments.md) tracks
+staging evidence and remaining delivery.
 
 ## System boundaries
 
@@ -110,14 +109,12 @@ persistent integrations, reviewable application deployments and disposable stagi
 These are separate from the agent process that requested them. A test VM need not
 run the coding agent.
 
-Provisioning, capacity admission, ownership tracking and cleanup are currently
-procedural. Existing hypervisor APIs do not provide a lab-wide renewable environment
-contract. There is no implemented general lease controller, automatic reconstruction
-of matching environments or durable task-evidence API in this repository.
+Stable provisioning uses registry runbooks and hypervisor administration for capacity,
+ownership and cleanup. The separate Linux staging pilot exercises a renewable
+lease, checkpoint recovery and matching replacement through one controller.
 
-Bazel remote caching and distributed build execution remain vision-level goals
-unless independently registered and qualified. They are not established by the
-current worker pool or this document.
+Use the registry to discover independently qualified build services and their
+access paths. Task-level Bazel bindings through the allocator remain open.
 
 ## Shared application capabilities
 
@@ -173,9 +170,10 @@ and displays low-overhead CPU/RAM/GPU/disk history. Collectors retain bounded lo
 history and stream while viewed. Collectors also serve local guest inventory over
 mutually authenticated TLS; the dashboard receives an initial cached report,
 then changes and freshness heartbeats, and expires stale states. Collector-side
-hypervisor sampling continues at its configured interval. Registry record edits
-are loaded at startup or by Reconcile now. Background runtime collection no longer uses SSH. Browser terminals keep
-their separate SSH identity. Health checks, guest inventory and address presence
+hypervisor sampling continues at its configured interval. **Reconcile now**
+reloads the catalog and reconnects to the collector streams. Startup also
+loads current records. Background runtime collection uses mTLS and browser
+terminals use pinned SSH. Health checks, guest inventory and address presence
 remain separate from resource streaming; some run independently of viewers. Cached
 metrics history is not a durable experiment archive.
 
@@ -188,37 +186,61 @@ scheduled agent inference. Warnings and incomplete verification remain visible w
 
 The [registry/dashboard architecture](registry-dashboard.md) documents the HTTPS
 API, SQLite state, collectors, authentication, update cadence and source modules.
+[Plan 0005](../plans/0005-inventory-coverage-and-change-delivery.md) tracks metadata
+change delivery, native event sources and coverage beyond hypervisor guests.
 
 ## Allocator staging
 
-The Linux pilot runs in a disposable staging environment. A SQLite operation
-ledger governs one pre-provisioned Proxmox slot. The controller fences mutations
-with guest generation and a separate ledger witness. Task credentials grant
-access to the owned guest. Capacity requests return a reason when they cannot
-be admitted. The staged dashboard shows leases alongside the registry's existing
-views.
+The allocator runs in disposable staging. One SQLite operation ledger governs
+a pre-provisioned slot, an on-demand Debian pool on independent Proxmox hosts
+and one prepared Tart Xcode recipe. The Linux pool uses a pinned template and
+bounded CPU, memory and disk sizes. The controller records intent before dispatch
+and fences mutations with
+guest generation and a separate ledger witness. Task credentials grant access
+to the leased guest. Admission verifies capacity and returns a reason for
+refusals. [Controller](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/pilot.py) · [Dynamic provider](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/pve_dynamic.py)
 
-The export worker validates and reads back task workspace checkpoints in a
-dedicated encrypted Drive repository before releasing the slot. The controller
-and worker enforce separate lease and checkpoint retention. The staged expiry
-credential is time-limited and scoped to that checkpoint repository. Broader
-placement, Apple adapters and production job-launcher integration remain in
-[the allocator plan](../plans/0001-renewable-test-environments.md).
+The export worker validates and reads back the declared workspace from a dedicated
+encrypted Drive repository before reuse or deletion. Checkpoints have independent
+retention and remain available after guest deletion. The staged expiry credential
+is time-limited and scoped to that repository. A matching replacement restored
+an acknowledged checkpoint. The staged Linux interruption drill recovered
+the saved workspace into a matching replacement after expiry and deletion.
+A separate journal backup verified the saved lease state and receipts. Full
+restore with an in-flight provider operation still needs qualification. [Export worker](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/exporter.py) · [Recovery client](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/client.py)
+
+The staged dashboard presents lease history with the catalog and shows a managed
+clone when the controller's active intent matches the collector's exact machine,
+guest ID, type and name. Password-copy and terminal controls apply only to the
+disposable review machine. A fresh task ran an iPhone simulator UI test via the
+staged Tart adapter and retrieved its workspace after release. The standalone
+task client also verified registry discovery, scoped credential refresh and
+revocation. The CUDA probe ran independently of the allocator.
+
+Ordinary simulator tests can run directly through the Mac's installed Xcode.
+The native path runs outside the allocator today. Clean macOS and toolchain
+qualification and guest lifecycle testing can use the staged Tart recipe.
+Native admission, wider placement and task grants for shared services remain in
+[plan 0001](../plans/0001-renewable-test-environments.md).
 
 ## Configuration backup and recovery
 
 One central Backrest controller orchestrates configuration exports using registry
 source resolution and constrained, pinned SSH access. Restic and rclone provide
 versioned encrypted storage in Google Drive, the sole retained backup destination.
-Temporary export staging and working caches are not independent backup systems.
-Private deployment manifests determine actual coverage; a listed service is not
-necessarily proven recoverable.
+Temporary export staging and working caches are local working state. A
+failed collection can leave staging that must be inspected before retry.
+Private manifests and restore evidence determine actual coverage. The scoped
+collector in [PR #1](https://github.com/csells/home-lab-registry/pull/1) shipped
+with verified encrypted round trips for 17 remote collection paths. Source
+details are in the [registry/dashboard architecture](registry-dashboard.md#configuration-backup-and-recovery).
 
 Configuration backup, media synchronization, source control and task artifacts serve
 different purposes. Git preserves public source; it does not replace private
 configuration recovery. Media files are not implied to be in configuration archives.
-Future task-evidence retention must integrate with the approved durable destination
-without treating existing configuration backups as a complete evidence service.
+The staged allocator retains task checkpoints in a separate encrypted repository
+at the same destination. Configuration archives cover the declared configuration
+scope, and task checkpoints cover the declared workspace.
 
 Registry recovery requires exported catalog data and private bootstrap/access
 material retrievable without the failed registry host. Recovering a service also

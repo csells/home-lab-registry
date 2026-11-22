@@ -221,6 +221,13 @@ function showAccuracy(a){
   const verified=h.status==='verified'&&!stale;
   const state=verified?'verified':h.status==='unconfigured'?'no collector configured':'unverified';
   section.append(el('h3','',h.machine_id+' · '+state+(verified?' · '+age(h.checked):'')));
+  if(h.hardware && h.hardware.expires>now() && !data.error){
+   const facts=h.hardware;
+   section.append(el('p','',facts.architecture+' '+facts.os+' · '+facts.logical_cpus+
+    ' logical CPUs · '+bytes(facts.memory_bytes)+' RAM · Hardware checked '+age(facts.checked)));
+  }else if(h.status!=='unconfigured'){
+   section.append(el('p','',h.hardware?'Hardware report expired':'Hardware not verified'));
+  }
   if(verified){
    const list=el('ul');
    for(const g of h.guests){

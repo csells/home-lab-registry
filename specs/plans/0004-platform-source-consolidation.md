@@ -1,8 +1,8 @@
 # Reusable platform source and deployment boundaries
 
-Status: in progress, 2026-11-20. Reviewed operator-specific integration source has
-been captured in the operator's private deployment repository. No public service
-source import, runtime change or promotion is claimed by this documentation update.
+Status: active, reconciled 2026-11-22. The reviewed backup collector shipped,
+and selected integration sources have a private home. Reusable Apple tooling,
+qualified device tooling and remaining exporter provenance are open.
 
 ## Outcome
 
@@ -31,18 +31,31 @@ repository pointer is unknown ownership, not permission to relocate code.
 - [ ] Resolve each candidate's actual deployed revision, Git origin/history and owner
   through the authenticated registry and source checkout. Compare deployed files
   with source; keep private findings in operational records.
+  The reviewed private integrations and [merged collector delivery](#verified-private-source-progress)
+  have provenance evidence. Resolve parity and ownership for remaining candidates.
 - [ ] Separate reusable code/templates from deployment values and incident scripts.
   Review for credentials, private catalog data, personal data, licensing and attribution.
+  The collector separates generic export and provider code from private deployment
+  profiles. Review the Apple helpers, image tooling and device integrations individually.
 - [ ] Import one bounded reusable component at a time, with placeholders/secret
   references, source history where useful, and build/deployment/recovery instructions.
+  The [scoped collector](../../backup/README.md) is available on main. The
+  [allocator source](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/README.md) is available for staging review.
+  Reusable Apple worker imports and any additional exporters remain open.
 - [ ] Give deployment-specific assets a maintained private source home. Configuration
   backups provide recovery evidence, not a substitute for reviewed source ownership.
+  The bounded operator-integration batch has a private home. Establish a home and
+  ownership for remaining assets as they are verified.
 - [ ] Verify source/deployment parity and backup coverage before updating registry
   source pointers; source relocation alone does not authorize deploying a changed build.
+  The backup deployment record confirms source hashes and production restore evidence
+  for the reviewed slice. Verify parity and recovery for each later delivery.
 - [ ] Verify service code changes in a disposable VM against actual lab interfaces,
   preserve stable state, and obtain explicit staged-candidate promotion approval.
+  The collector review exercised actual sources and encrypted restore, then was merged
+  and promoted with staging cleanup. Apply the same gate to pending service changes.
 
-## Verified private-source progress (2026-11-20)
+## Verified private-source progress
 
 The operator's private workspace now maintains reviewed Plex sync code/units, Alook
 service/startup definitions, mail-ddclient unit and selected backup exporters/playbooks.
@@ -62,8 +75,10 @@ evidence. Disabled historical plans retain their archives.
 
 Remaining source work covers the reusable Apple worker and image/setup tooling,
 device tooling with verified ownership, and any exporters outside the reviewed
-collector delivery. Check the actual source revision, license and deployment
-parity before importing each component. The private operations plan tracks
+collector delivery. The staged Tart allocator has lifecycle evidence for one
+recipe. Qualify its source and installation inputs for a reproducible rollout.
+Check the actual source revision, license and deployment parity before importing
+each component. The private operations plan tracks
 individual application and hardware recovery limits.
 
 ## Completion criteria

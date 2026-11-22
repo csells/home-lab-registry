@@ -100,6 +100,13 @@ an active record with capability `lease-pilot`. Treat this as a staging-only
 interface. Obtain the trust material and the task credential through the
 authorized operator path before accessing the endpoint.
 
+The allocator is usable from any agent platform with its standard HTTPS
+interface or the Python client. A trusted launcher can run
+`prepare_task.py CONFIG TASK_REF --reuse` against its private session root
+to issue or refresh the same task's access. Give the agent only the resulting
+task files. A registry reader token only authorizes discovery. Each shared
+service's registry record specifies its own access procedure.
+
 ```sh
 python3 allocator/client.py --record <record-id> --registry-client <registry.py> \
   --ca <ca.pem> --token-file <task-token> acquire --task <task> \
@@ -111,6 +118,11 @@ Use the same options with `inspect <id>`, `renew <id> --seconds 900`, or
 returns JSON, with structured rejection details on stderr and exit status 2.
 Capacity rejections require a new caller decision. The client never retries
 mutations automatically.
+
+A task with a supplied manifest uses `client.py --session SESSION capabilities`
+and `client.py --session SESSION leases` to find suitable recipes and its own
+recent environments. The same input works for acquisition, renewal and
+checkpoint recovery.
 
 
 ## Checkpoint-gated reclamation
@@ -559,3 +571,20 @@ and request `{"os":"macos","architecture":"arm64"}` through the usual
 `acquire` command. A replacement uses a fresh SSH key. Revoke the task
 credential and clean up its local access files after the task's environment
 has been released or explicitly handed over.
+
+### Worker recipe maintenance
+
+A dynamic Proxmox scope can include `qualification` with the SHA-256 of its
+verified source image, `bootstrap_revision`, and `template_config_sha256`.
+The operator verifies the source image and pins the resulting template config
+with `DynamicScope.config_digest` at enrollment. The controller checks the
+live template configuration, DHCP network profile, and permitted clone
+storage. Before start it compares the clone's network profile while allowing
+the provider-assigned MAC. Existing unversioned bindings retain their
+configuration; changing an enrolled version requires a deliberate re-enrollment.
+
+Run `maintenance.py OBSERVATION.json` with the current and desired recipes,
+latest admitted lease owners, and observed spare capacity. It reports whether
+the change entails a reboot, disk growth, or replacement and calculates
+additional capacity while both generations exist. Use the reported blocker
+before changing the worker. The command performs no provider writes.

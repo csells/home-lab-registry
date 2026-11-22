@@ -35,12 +35,13 @@ type Guest struct {
 // GuestReport is a bounded-lifetime observation. Guests is nil, not empty,
 // whenever the inventory could not be read.
 type GuestReport struct {
-	Status   string   `json:"status"`
-	Source   string   `json:"source,omitempty"`
-	Checked  float64  `json:"checked,omitempty"`
-	Expires  float64  `json:"expires,omitempty"`
-	Guests   []Guest  `json:"guests"`
-	Warnings []string `json:"warnings,omitempty"`
+	Status   string           `json:"status"`
+	Source   string           `json:"source,omitempty"`
+	Checked  float64          `json:"checked,omitempty"`
+	Expires  float64          `json:"expires,omitempty"`
+	Guests   []Guest          `json:"guests"`
+	Warnings []string         `json:"warnings,omitempty"`
+	Hardware *hardwareReading `json:"hardware,omitempty"`
 }
 
 // GuestConfig selects the local inventory. Proxmox uses the local API with a
@@ -142,9 +143,10 @@ func newGuestCollector(cfg GuestConfig) (guestCollector, error) {
 	}
 	// Outlive both missed collections and the dashboard's display pipeline.
 	lifetime := max(3*cfg.interval().Seconds(), 300)
+	hardware := hardwareCollector()
 	report := func(source string, guests []Guest, err error) GuestReport {
 		checked := timestamp()
-		r := GuestReport{Status: "available", Source: source, Checked: checked, Expires: checked + lifetime, Guests: guests}
+		r := GuestReport{Status: "available", Source: source, Checked: checked, Expires: checked + lifetime, Guests: guests, Hardware: hardware()}
 		if err != nil {
 			log.Printf("guest inventory: %v", err)
 			r.Status, r.Guests, r.Warnings = "unavailable", nil, []string{err.Error()}
@@ -278,7 +280,7 @@ type guestState struct {
 func (s *guestState) set(r GuestReport) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	different := s.report.Status != r.Status || s.report.Source != r.Source || !reflect.DeepEqual(s.report.Guests, r.Guests) || !reflect.DeepEqual(s.report.Warnings, r.Warnings)
+	different := s.report.Status != r.Status || s.report.Source != r.Source || !reflect.DeepEqual(s.report.Guests, r.Guests) || !reflect.DeepEqual(s.report.Warnings, r.Warnings) || !reflect.DeepEqual(s.report.Hardware, r.Hardware)
 	s.report = r
 	if s.changed == nil {
 		s.changed = make(chan struct{})

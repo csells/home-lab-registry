@@ -78,18 +78,23 @@ def reconcile(records, observations, now=None, *, lease_claims=None, lease_unver
     for key, host in hosts.items():
         configured = host['spec'].get('resources', {}).get('metrics_stream', {}).get('enabled')
         sample = observations.get(key, {})
+        hardware = sample.get('hardware')
+        if hardware:
+            hardware = {**hardware, 'expires': hardware['checked'] + MAX_AGE}
         if not configured and not sample:
             reports.append(dict(machine_id=key, status='unconfigured', guests=[], checked=None))
             continue
         expected += 1
         if not fresh(sample, now):
             issue('collector-unverified', key, sample.get('error') or 'Guest report absent, expired or invalid; missing guests cannot be inferred.')
-            reports.append(dict(machine_id=key, status='unverified', checked=sample.get('checked'), guests=[]))
+            reports.append(dict(machine_id=key, status='unverified', checked=sample.get('checked'),
+                                guests=[], hardware=hardware))
             continue
         verified += 1
         entries = sample['entries']
         observed = {g['id']: g for g in entries}
-        report = dict(machine_id=key, status='verified', checked=sample['checked'], expires=min(sample['expires'], sample['checked']+MAX_AGE), guests=[])
+        report = dict(machine_id=key, status='verified', checked=sample['checked'],
+                      expires=min(sample['expires'], sample['checked']+MAX_AGE), guests=[], hardware=hardware)
         templates = host['spec'].get('resources', {}).get('templates', [])
         if isinstance(templates, dict): template_ids = set(templates)
         else: template_ids = {str(t.get('id', t.get('vmid', t.get('name')))) for t in templates}

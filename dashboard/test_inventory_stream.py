@@ -10,6 +10,13 @@ class InventoryStreamTests(unittest.TestCase):
   self.assertEqual(parse_report(value)['entries'],[g])
   value['guests']=[g,g]
   with self.assertRaises(ValueError):parse_report(value)
+ def test_hardware_evidence_has_independent_freshness(self):
+  now=time.time()
+  reading={'os':'linux','architecture':'amd64','logical_cpus':4,'memory_bytes':16<<30,'checked':now}
+  value={'status':'unavailable','warnings':['provider offline'],'hardware':reading}
+  self.assertEqual(parse_report(value)['hardware'],reading)
+  self.assertIsNone(parse_report({**value,'hardware':{**reading,'checked':now+60}})['hardware'])
+  self.assertIsNone(parse_report({**value,'hardware':{**reading,'logical_cpus':True}})['hardware'])
  def test_configure_does_not_poll_an_unchanged_endpoint(self):
   monitor=InventorySubscriptions(None,threading.Event());endpoints={'host':('https://host:9911/stream','host')}
   with patch('machine_runtime.threading.Thread') as thread:

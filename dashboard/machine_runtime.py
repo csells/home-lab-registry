@@ -148,8 +148,10 @@ class InventorySubscriptions:
 
 def parse_report(value):
     if not isinstance(value,dict):raise ValueError('Invalid guest report')
+    hardware = parse_hardware(value.get('hardware'))
     if value.get('status') in ('waiting','unavailable'):
-        return {'error':str((value.get('warnings') or ['Collector waiting'])[0])[:200],'checked':time.time()}
+        return {'error':str((value.get('warnings') or ['Collector waiting'])[0])[:200],
+                'checked':time.time(),'hardware':hardware}
     if value.get('status')!='available':raise ValueError('Invalid guest status')
     checked,expires=value.get('checked'),value.get('expires')
     if not all(isinstance(x,(int,float)) and math.isfinite(x) for x in (checked,expires)):raise ValueError('Invalid report timestamps')
@@ -159,4 +161,17 @@ def parse_report(value):
     for g in value['guests']:
         if not isinstance(g,dict) or not isinstance(g.get('id'),str) or not isinstance(g.get('state'),str) or g['id'] in states:raise ValueError('Invalid guest identity')
         states[g['id']]=g['state'];entries.append({k:g[k] for k in ('id','name','type','state','template') if k in g})
-    return {'checked':checked,'expires':expires,'entries':entries,'guests':states}
+    return {'checked':checked,'expires':expires,'entries':entries,'guests':states,'hardware':hardware}
+
+def parse_hardware(value):
+    if not isinstance(value, dict):
+        return None
+    system, arch = value.get('os'), value.get('architecture')
+    count, memory, checked = value.get('logical_cpus'), value.get('memory_bytes'), value.get('checked')
+    if (system not in ('darwin', 'linux', 'windows', 'freebsd')
+            or arch not in ('amd64', 'arm64', '386', 'arm', 'riscv64', 'ppc64le', 's390x')
+            or type(count) is not int or not 0 < count <= 65536
+            or type(memory) is not int or not 0 < memory <= 1 << 60
+            or type(checked) not in (int, float) or not 0 < checked <= time.time() + 5):
+        return None
+    return dict(os=system, architecture=arch, logical_cpus=count, memory_bytes=memory, checked=checked)

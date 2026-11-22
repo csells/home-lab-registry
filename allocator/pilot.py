@@ -290,6 +290,8 @@ class Capacity:
         total, available = self.positive(memory['total']), self.positive(memory['available'])
         if available > total or not storage['active'] or not storage['enabled'] or storage.get('shared', 1):
             raise ValueError('Invalid node memory or inactive slot storage')
+        if self.dynamic:
+            self.dynamic.preflight_storage(storage)
         available_storage = self.positive(storage['avail'])
         admission = shape or (self.dynamic.default if self.dynamic else recipe)
         pending_slot_memory = admission['memory_mib'] * MIB if require_slot and (
@@ -638,6 +640,21 @@ class Pilot:
         if row['owner'] != owner:
             raise Rejected('unknown_lease', 'No lease has this identifier.', 404)
         return row
+
+    def task_leases(self, owner):
+        rows = self.db.execute("""
+            SELECT id, task, phase, deadline, recipe, released_at, resume_point, checkpoint
+            FROM lease WHERE owner=? ORDER BY phase='released', rowid DESC LIMIT 50
+        """, (owner,))
+        leases = []
+        for row in rows:
+            lease = {key: row[key] for key in (
+                'id', 'task', 'phase', 'deadline', 'recipe', 'released_at')}
+            lease['predecessor'] = json.loads(row['resume_point'] or '{}').get('lease')
+            receipt = json.loads(row['checkpoint'] or '{}')
+            lease['final_checkpoint'] = bool(receipt and not receipt.get('purged_at'))
+            leases.append(lease)
+        return {'leases': leases}
 
     def verify_generation(self, row):
         self.db.verify()
@@ -1590,6 +1607,9 @@ def main():
             try:
                 if parts == ['v1','capabilities'] and self.command == 'GET':
                     self.respond(controller.capabilities())
+                    return
+                if parts == ['v1', 'leases'] and self.command == 'GET':
+                    self.respond(controller.task_leases(owner))
                     return
                 if reservation_route and self.command == 'GET' and len(parts) == 2:
                     self.respond({'reservations': controller.reservations.list(reservation_owner)})

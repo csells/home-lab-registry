@@ -1,5 +1,8 @@
 # Inventory reconciliation
 
+Status: finished with a remainder, reconciled 2026-11-22. Shipped 2026-11-20.
+Remaining coverage and change-delivery work moved to [plan 0005](../0005-inventory-coverage-and-change-delivery.md).
+
 ## Outcome
 
 People and agents can distinguish registered intent from freshly observed deployments,
@@ -120,86 +123,19 @@ cards and Resources graph. Previous binaries and dashboard code were retained
 outside staging and checked for readability. The dedicated staging VM and disks,
 audit account and review route were removed.
 
-Remaining follow-up: registry metadata change delivery, OS-native lifecycle
-events, native/cloud presence discovery and deployment-tool registration.
+## Evidence for archival
 
+| Requirement | Implemented evidence |
+| --- | --- |
+| Authenticated guest observations, identity and freshness | [Collector guest reader](../../../agent/guests.go), [collector tests](../../../agent/guests_test.go) and the authenticated fleet rollout. |
+| Explicit deployment binding and separate discrepancy categories | [Comparison](../../../dashboard/reconciliation.py) and [comparison tests](../../../dashboard/test_reconciliation.py) cover structured bindings, stale reports, templates, retired records and valid shared guests. |
+| Current observations with historical records preserved | [Guest subscription](../../../dashboard/machine_runtime.py) preserves complete reports. Comparison reads catalog records and observations without rewriting them. The production browser showed authenticated host coverage. |
+| Change events, heartbeats, browser SSE and deterministic manual comparison | [Collector stream test](../../../agent/guest_stream_test.go), [dashboard stream handler](../../../dashboard/server.py) and [subscription tests](../../../dashboard/test_inventory_stream.py). Production verified all configured collectors and manual comparison. |
+| Registration and verified retirement procedures | [Inventory reconciliation guide](../../../docs/inventory-reconciliation.md). |
+| Reviewed rollout and cleanup | Implementation merged in `51631f7`. The [production verification record in Git](https://github.com/csells/home-lab-registry/commit/33a7376ddf5c5b3e3fdea29d2fc1a8a434eb2318) and operator evidence record document the live checks, preserved rollback and staging cleanup. |
 
-## Catalog metadata change candidate
+## Remaining follow-up
 
-The registry can send a bounded, reader-authenticated change stream. A committed
-catalog edit wakes the dashboard, which reloads current registry records.
-Heartbeats carry no catalog data and do not reload it. Connection and reconnection
-invalidate the dashboard cache so a missed change does not require event replay.
-Health checks and machine presence do not trigger metadata reloads.
-
-Configure `catalog_change_stream: true` in the dashboard reader configuration
-after its registry exposes `GET /v1/catalog/changes` on the trusted HTTPS origin.
-The feature defaults off for older registry versions. Manual reconciliation
-continues to work independently.
-
-A run in the disposable staging VM used an isolated copy of real catalog records
-and the actual lab collector streams. Retiring the copy of an existing staging
-record updated the candidate dashboard without a manual refresh. All six
-configured collectors remained verified. Staging writes used a separately
-generated credential and stayed in the isolated catalog.
-
-## Native and externally managed deployment observations
-
-A service can bind to an exact native or external deployment through
-`resources.runtime_binding` with `kind`, `provider`, and `instance`.
-The operator enrolls an observer for that exact binding in the candidate
-registry's `runtime_publishers` configuration. Its credential permits posting
-only to the bound record. A changed or retired binding invalidates the observed
-state and rejects reports from the previous enrollment.
-
-A trusted local observer can use `registry/publish_runtime.py CONFIG --systemd`
-with an exact unit. An external provider adapter uses the same publisher with
-`--state` after verifying the provider-side identity. An observer reports
-`missing` only for an explicit absence. Provider failure, denied access and stale
-data are unverified. Runtime presence is separate from functional service health.
-The registry pushes bounded freshness updates alongside catalog changes.
-
-## Deployment-tool registration
-
-New deployment tooling should call `registry/register_deployment.py` with the
-trusted registry client and a manifest after confirming the provider identity.
-The manifest declares the owner, exact runtime binding, and immutable
-`resources.deployment_generation`. A retry can verify the same active
-generation after an interrupted acknowledgment. A different generation or
-retired record cannot be overwritten. After checking provider teardown, the
-same tool retires the matching generation and verifies the registry readback.
-The helper has no provider-mutation permissions.
-
-The candidate exercised registration retry and wrong-generation retirement
-against an actual disposable Proxmox clone. Runtime publishers used the real
-systemd service and authenticated Eero network identity. The staging dashboard
-updated from the catalog stream, with all six configured guest collectors
-verified. The native observation route rejected updates after the deployment
-binding changed.
-
-## Native Proxmox wake events
-
-On a Linux Proxmox collector, optionally configure
-`guests.task_events_directory` to the local Proxmox task directory.
-Linux inotify invalidates the guest snapshot when Proxmox updates active tasks
-or the completed task index. The collector reads the authenticated Proxmox API
-to determine guest state and coalesces rapid task updates. The local
-`interval_seconds` sample remains a freshness fallback for unavailable or
-unsupported event sources. The dashboard does not poll the fleet.
-
-A temporary local collector on the actual Proxmox host observed a disposable
-guest's start and removal before its five-minute fallback sample. The candidate
-did not replace the installed collector.
-
-## Native Tart wake events
-
-Set `guests.tart_watch_events: true` on a macOS collector running as the
-Tart owner. It watches the local inventory and VM directories. Tart creates
-its control socket when starting a VM. When Tart's configuration lock
-identifies a running process, the collector also watches that process exit.
-Both signals refresh the cached inventory through `tart list`. The local
-sample preserves freshness when a path or process watch is unavailable.
-
-A separate local collector on the actual Mac streamed clone creation, start,
-stop, and deletion using Tart 2.39.0. All four updates arrived before its
-five-minute fallback sample. No installed collector was replaced.
+Registry metadata change delivery, OS-native lifecycle events, native/cloud
+presence discovery, physical hardware refresh and mandatory deployment-tool
+registration continue in [plan 0005](../0005-inventory-coverage-and-change-delivery.md).

@@ -365,7 +365,9 @@ def main():
     s.catalog.probe_credentials=c.get('probe_credentials',{})
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.minimum_version=ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(c['cert'],c['key']); s.socket=context.wrap_socket(s.socket,server_side=True)
-    stop=threading.Event(); threading.Thread(target=monitor,args=(s.catalog,stop),daemon=True).start()
+    stop = threading.Event()
+    if c.get('health_probes_enabled', True):
+        threading.Thread(target=monitor, args=(s.catalog, stop), daemon=True).start()
     LOG.info('Registry listening on port %s',s.server_port)
     try: s.serve_forever()
     finally: stop.set(); s.server_close()

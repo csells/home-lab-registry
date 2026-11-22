@@ -22,9 +22,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def discover(registry_client, record_id):
-    value = json.loads(subprocess.check_output(
-        [sys.executable, str(registry_client), 'get', record_id], timeout=15))
+def discover(registry_client, record_id, *, registry_config=None):
+    command = [sys.executable, str(registry_client)]
+    if registry_config is not None:
+        command += ['--config', str(registry_config)]
+    value = json.loads(subprocess.check_output(command + ['get', record_id], timeout=15))
     spec = value['spec']
     if spec.get('lifecycle') != 'active' or 'lease-pilot' not in spec.get('capabilities', []):
         raise ValueError('Record does not describe an active lease pilot')
@@ -187,6 +189,7 @@ def main():
     parser.add_argument('--token-file', type=Path)
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('capabilities')
+    sub.add_parser('leases', help='List recent leases owned by this task, with active leases first')
     resume = sub.add_parser('resume')
     resume.add_argument('predecessor')
     resume.add_argument('--task', required=True)
@@ -279,6 +282,9 @@ def main():
             return 0
         if args.command == 'capabilities':
             print(json.dumps(request(endpoint, args.ca, args.token_file, '/v1/capabilities', None)))
+            return 0
+        if args.command == 'leases':
+            print(json.dumps(request(endpoint, args.ca, args.token_file, '/v1/leases', None)))
             return 0
         if args.command in ('issue-task-credential', 'revoke-task-credential'):
             payload = {'task_ref': args.task_ref}

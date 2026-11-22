@@ -1,4 +1,5 @@
 """Proxmox clone lifecycle within one enrolled staging guest ID and storage scope."""
+import hashlib
 import json
 import re
 import subprocess
@@ -37,6 +38,7 @@ class DynamicScope:
         self.template_volume = settings['template_volume']
         self.bounds = settings['maximum']
         self.default = settings['default']
+        self.qualification = settings.get('qualification')
         keys = {'vcpus', 'memory_mib', 'disk_mib'}
         if (not IDENTIFIER.fullmatch(storage) or not IDENTIFIER.fullmatch(self.template_name)
                 or self.template == self.guest_id
@@ -49,12 +51,55 @@ class DynamicScope:
         self.boot_volume = re.compile(
             re.escape(storage) + r':' + re.escape(self.guest_id) + r'/vm-' +
             re.escape(self.guest_id) + r'-disk-[0-9]+\.raw')
+        if self.qualification is not None:
+            self.validate_qualification(self.qualification)
+
+    @staticmethod
+    def validate_qualification(qualification):
+        if (not isinstance(qualification, dict)
+                or set(qualification) != {'image_sha256', 'bootstrap_revision', 'template_config_sha256'}
+                or any(not isinstance(qualification[key], str)
+                       or not re.fullmatch(r'[a-f0-9]{64}', qualification[key])
+                       for key in ('image_sha256', 'template_config_sha256'))
+                or not isinstance(qualification['bootstrap_revision'], str)
+                or not IDENTIFIER.fullmatch(qualification['bootstrap_revision'])):
+            raise ValueError('Qualify the recipe with image and template digests and a bootstrap revision')
+
+    @staticmethod
+    def config_digest(config):
+        data = {key: value for key, value in config.items() if key not in ('digest', 'lock')}
+        return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+    @staticmethod
+    def network(config):
+        if ({key for key in config if re.fullmatch(r'net[0-9]+', key)} != {'net0'}
+                or {key for key in config if re.fullmatch(r'ipconfig[0-9]+', key)} != {'ipconfig0'}
+                or config.get('ipconfig0') != 'ip=dhcp'):
+            raise Rejected('recipe_network_unverified', 'The recipe needs a single DHCP interface.')
+        interface = config['net0'].split(',')
+        if not re.fullmatch(r'virtio=(?:[a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}', interface[0]):
+            raise Rejected('recipe_network_unverified', 'The recipe needs a pinned virtio network configuration.')
+        options = sorted(interface[1:])
+        if (sum(field.startswith('bridge=') for field in options) != 1
+                or any(field == 'link_down=1' for field in options)):
+            raise Rejected('recipe_network_unverified', 'The recipe requires an active enrolled bridge.')
+        return options
+
+    def preflight_storage(self, storage_status):
+        if self.qualification is None:
+            return
+        if (storage_status.get('type') != 'dir'
+                or 'images' not in storage_status.get('content', '').split(',')):
+            raise Rejected('recipe_storage_unverified',
+                           'The qualified raw full-clone recipe requires directory storage with VM images enabled.')
 
     def identity(self):
         identity = [self.api.base, self.node, self.guest_id, self.api.identity, self.storage,
                 self.template, self.template_name, self.template_uuid, self.template_volume, self.default, self.bounds]
         if self.pool:
             identity.append(self.pool)
+        if self.qualification is not None:
+            identity.append(self.qualification)
         return identity
 
     def template_config(self):
@@ -65,6 +110,10 @@ class DynamicScope:
                 or config.get('scsi0', '').split(',')[0] != self.template_volume
                 or 'size=' + str(self.default['disk_mib'] // 1024) + 'G' not in config.get('scsi0', '').split(',')):
             raise Rejected('template_identity_changed', 'The enrolled clean DHCP template could not be verified.')
+        if self.qualification is not None:
+            if self.config_digest(config) != self.qualification['template_config_sha256']:
+                raise Rejected('template_identity_changed', 'The versioned template configuration changed.')
+            self.network(config)
         return config
 
     def storage_files(self):
@@ -166,6 +215,8 @@ class DynamicScope:
         if (config.get('name') != self.name(lease) or config.get('template') or config.get('lock')
                 or config.get('ipconfig0') != 'ip=dhcp'):
             raise Rejected('dynamic_identity_changed', 'The allocated clone failed exact identity or DHCP verification.')
+        if self.qualification is not None and self.network(config) != self.network(self.template_config()):
+            raise Rejected('recipe_network_unverified', 'The clone network differs from the enrolled template.')
         hardware = [item.removeprefix('uuid=') for item in config['smbios1'].split(',') if item.startswith('uuid=')]
         if len(hardware) != 1 or uuid_field(hardware[0]) == self.template_uuid:
             raise Rejected('dynamic_identity_changed', 'The clone lacks an independent hardware identity.')
