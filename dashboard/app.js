@@ -354,6 +354,7 @@ $('reconcile').onclick=async()=>{
    const report=await result.json();
    if(report.comparison?.id===reconcileRequested&&report.comparison.state==='complete'){
     data.inventory_accuracy=report.inventory_accuracy;
+    finishComparison(report);
     showDiscrepancies();
    }else finishComparison(report);
   }

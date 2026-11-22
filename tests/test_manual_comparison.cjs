@@ -33,4 +33,20 @@ vm.runInContext(script, browser);
   browser.showDiscrepancies();
   assert.match($('reconcile-status').textContent, /Comparison finished.*6 of 6/);
   console.log('PASS manual comparison waits for its own accepted result');
+
+  data.comparison = undefined;
+  data.inventory_accuracy = null;
+  const completed = {comparison:{id:'fallback-comparison',state:'complete'},inventory_accuracy:accuracy};
+  let requests = 0;
+  browser.fetch = async () => {
+    requests++;
+    if (requests === 1) return {ok:true,json:async()=>({id:'fallback-comparison'})};
+    return requests===2 ? {ok:true,json:async()=>completed} : {ok:false,status:503};
+  };
+  browser.setTimeout = queueMicrotask;
+  await $('reconcile').onclick();
+  assert.equal(requests, 2, 'a completed HTTP status should settle the operation');
+  assert.match($('reconcile-status').textContent, /Comparison finished.*6 of 6/);
+  assert.equal(data.inventory_accuracy, accuracy);
+  console.log('PASS status fallback completes and updates the comparison with browser SSE absent');
 })().catch(error => { console.error(error); process.exitCode = 1; });
