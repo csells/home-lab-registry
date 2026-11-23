@@ -164,7 +164,10 @@ fn extract_tar(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {
             file.as_file().set_times(modified)?;
             if regular_paths.insert(leaf.clone()) {
                 if let Err(error) = file.persist_noclobber(&leaf) {
-                    if error.error.kind() != io::ErrorKind::Unsupported {
+                    // Darwin reports ENOTSUP separately from EOPNOTSUPP.
+                    if error.error.kind() != io::ErrorKind::Unsupported
+                        && error.error.raw_os_error() != Some(libc::ENOTSUP)
+                    {
                         return Err(error.into());
                     }
                     // Tart's VirtioFS share supports hard links but cannot
