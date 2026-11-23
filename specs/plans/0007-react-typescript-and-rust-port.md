@@ -27,3 +27,18 @@ disposable staging deployment. Preserve separate release and rollback artifacts
 and keep production approvals explicit for each cutover. Measure idle work,
 stream behavior, and recovery against the prior candidate. Any intended behavior
 change requires its own test and rationale.
+
+## First staging delivery
+
+Revision `3359475` ports the shared dashboard inventory state, Discrepancies,
+and Leases to React and TypeScript. It keeps the established Python API and
+same-origin authentication. The remaining views still render through the
+existing JavaScript and use the shared inventory state during the transition.
+
+Seven TypeScript behavior tests cover event ordering, comparison ownership,
+stream loss, invalid snapshots, and lease page ordering. The browser fixture
+passed at phone and desktop widths, including lease pagination. The full
+disposable preview verified six live collectors, a real health failure and
+recovery, reconciliation through the matching receipt with browser SSE blocked,
+stream recovery, and navigation through all dashboard tabs. The built bundle
+was verified over authenticated HTTP with the same content security policy.
