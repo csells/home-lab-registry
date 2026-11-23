@@ -5,6 +5,7 @@ import pathlib
 import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -29,6 +30,7 @@ with ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=st
                     accuracy = {'checked':stamp,'hosts':[],'findings':[],
                                 'coverage':{'verified':2,'expected':2,'unconfigured':0}}
                     snapshot = {'fetched_at':stamp,'server_time':stamp,'machines':[],'backups':[],
+                                'lease_review_enabled':True,
                                 'services':[{'id':'web','name':'Web','host':'test','lifecycle':'active',
                                              'capabilities':[],'health':{'status':'unhealthy','expires':stamp+60}}],
                                 'inventory_accuracy':accuracy}
@@ -37,6 +39,17 @@ with ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=st
                     page.route('**/api/reconcile',lambda route:route.fulfill(status=202,json={'id':'owned'}))
                     page.route('**/api/reconciliation',lambda route:route.fulfill(json={
                         'comparison':{'id':'owned','state':'complete'},'inventory_accuracy':accuracy}))
+                    def leases(route):
+                        query = parse_qs(urlsplit(route.request.url).query)
+                        scope = query.get('scope', ['current'])[0]
+                        current = scope == 'current'
+                        more = 'before' in query
+                        tasks = ['Current task'] if current else ['Older task' if more else 'Recent release']
+                        route.fulfill(json={'as_of':stamp,'counts':{'current':1,'released':2},
+                            'leases':[{'id':task,'task':task,'owner':'fixture','phase':'ready' if current else 'released',
+                                       'deadline':stamp+60,'checkpoint_count':0} for task in tasks],
+                            'next_before':None if current or more else 2})
+                    page.route('**/api/leases?*', leases)
                     page.goto(f'http://127.0.0.1:{server.server_port}/#discrepancies')
                     badge = page.locator('#discrepancy-count')
                     expect(badge).to_have_text('1')
@@ -47,9 +60,17 @@ with ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Quiet, directory=st
                     page.locator('#services-tab').click()
                     expect(badge).to_have_text('1')
                     expect(page.locator('#cards')).to_contain_text('Web')
+                    page.locator('#leases-tab').click()
+                    expect(page.locator('#leases')).to_contain_text('Current task')
+                    page.get_by_role('button',name='History 2').click()
+                    expect(page.locator('#leases')).to_contain_text('Recent release')
+                    page.get_by_role('button',name='Show more leases').click()
+                    expect(page.locator('#leases')).to_contain_text('Older task')
+                    expect(page.locator('#leases')).to_contain_text('Recent release')
+                    expect(page.locator('#leases')).not_to_contain_text('Current task')
                     assert not errors, errors
                     page.close()
-                    print(f'PASS {width}px: React badge, scoped receipt fallback and Services navigation',flush=True)
+                    print(f'PASS {width}px: React badge, scoped receipt fallback, Services and paginated Leases',flush=True)
             finally:
                 browser.close()
     finally:

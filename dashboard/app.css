@@ -45,5 +45,5 @@ nav{flex-wrap:nowrap;column-gap:20px;overflow-x:auto}nav button{flex:none;white-
 #accuracy-scope{color:var(--muted);font-size:.875rem}
 
 #leases-tab[hidden], #inventory-panel[hidden], #lease-panel[hidden], #updated[hidden] { display: none; }
-#discrepancy-badge-slot { display: contents; }
+#discrepancy-badge-slot, #lease-badge-slot { display: contents; }
 #discrepancy-count.has-errors { background: #fbe9e9; color: var(--red); }

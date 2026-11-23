@@ -2,17 +2,29 @@ import { useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { DashboardInventory } from './inventory.ts';
+import { LeaseList } from './leases.ts';
+import { LeaseView } from './lease-view.tsx';
 import { age, describeDiscrepancies, findingGroups, tally } from './discrepancies.ts';
 import type { Finding } from './inventory.ts';
 
 declare global {
   interface Window {
     labDashboardInventory: DashboardInventory;
+    labLeaseList: LeaseList;
   }
 }
 
 const store = new DashboardInventory();
 window.labDashboardInventory = store;
+const leases = new LeaseList();
+window.labLeaseList = leases;
+
+let leaseReport = store.read().inventory.lease_issues;
+store.subscribe(() => {
+  const next = store.read().inventory.lease_issues;
+  if (next !== leaseReport && next?.status === 'verified') leases.updateCounts(next);
+  leaseReport = next;
+});
 
 function FindingList({ items }: { items: Finding[] }) {
   return <ul>{items.map((item, index) => <li key={JSON.stringify([item.category, item.target, item.guest_id, item.code, index])}>
@@ -68,3 +80,7 @@ function Discrepancies({ badge }: { badge: HTMLElement }) {
 const section = document.getElementById('discrepancies-panel');
 const badge = document.getElementById('discrepancy-badge-slot');
 if (section && badge) createRoot(section).render(<Discrepancies badge={badge} />);
+
+const leaseSection = document.getElementById('lease-panel');
+const leaseBadge = document.getElementById('lease-badge-slot');
+if (leaseSection && leaseBadge) createRoot(leaseSection).render(<LeaseView leases={leases} badge={leaseBadge} />);

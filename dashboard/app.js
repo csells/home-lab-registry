@@ -1,6 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id);
 const inventoryStore=window.labDashboardInventory;
+const leaseList=window.labLeaseList;
 const views = ['machines','discrepancies','services','backups','map','leases'];
 if (location.pathname === '/leases') history.replaceState(null, '', '/' + location.search + '#leases');
 const initialView = location.hash.slice(1);
@@ -118,6 +119,7 @@ function render(){
  const leases = view === 'leases';
  const discrepancies = view === 'discrepancies';
  const enteringLeases = leases && $('lease-panel').hidden;
+ if(!leases&&!$('lease-panel').hidden)leaseList.hide();
  $('inventory-panel').hidden = leases || discrepancies;
  $('lease-panel').hidden = !leases;
  $('discrepancies-panel').hidden = !discrepancies;
@@ -130,7 +132,7 @@ function render(){
  if (leases) {
    if (enteringLeases) {
      refreshVisible();
-     LeaseHistory.open();
+     void leaseList.select('current');
    }
    return;
  }
@@ -159,7 +161,6 @@ inventoryStore.subscribe(()=>{
   $('leases-tab').hidden=!data.lease_review_enabled;
   if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}
  }
- if(data.lease_issues?.status==='verified')LeaseHistory.showCounts(data.lease_issues);
  if(!copying&&!$('cards').contains(document.activeElement))render();
 });
 
@@ -194,7 +195,7 @@ addEventListener('popstate', () => {
   const name = location.hash.slice(1) || 'machines';
   if (views.includes(name)) switchView(name,true);
 });
-$('search').oninput=render;$('host').onchange=render;$('refresh').onclick=()=>view==='leases'?LeaseHistory.load():refreshCatalog();document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';
+$('search').oninput=render;$('host').onchange=render;$('refresh').onclick=()=>view==='leases'?leaseList.refresh():refreshCatalog();document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';
 
 function findingItem(f){
  return el('li','',f.target+(f.guest_id?' / '+f.guest_id:'')+' — '+f.message+(f.name?' ('+f.name+')':''));
