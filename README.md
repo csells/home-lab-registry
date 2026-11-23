@@ -83,6 +83,24 @@ Install the resulting `dashboard/dashboard-react.js` alongside the dashboard
 HTML and CSS. The server delivers the bundle as a same-origin static asset.
 
 
+### Native service candidate
+
+The disposable review uses the Rust executables with the existing private
+configuration and data formats. Build on the deployment platform with Cargo
+and the platform's C toolchain and OpenSSL development files.
+
+```sh
+cargo build --locked --release --manifest-path registry/rust/Cargo.toml
+cargo build --locked --release --manifest-path dashboard/rust/Cargo.toml
+cargo build --locked --release --manifest-path allocator/rust/Cargo.toml
+registry/rust/target/release/lab-registry --config <registry-config.json>
+dashboard/rust/target/release/lab-dashboard <dashboard-directory> 8089
+```
+
+The dashboard directory contains the built browser bundle and its private
+configuration. See [the allocator deployment guide](allocator/README.md#rust-controller-candidate)
+for its independent witness and staging cutover.
+
 Dashboard `private/` files (never committed):
 
 | File | Contents |
