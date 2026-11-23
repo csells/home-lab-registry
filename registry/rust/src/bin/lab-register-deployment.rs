@@ -7,7 +7,10 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use lab_registry::{client::RegistryClient, deployment::DeploymentCatalog};
+use lab_registry::{
+    client::RegistryClient,
+    deployment::{DeploymentCatalog, DeploymentIdentity, RuntimeState, observe_systemd},
+};
 use serde_json::{Value, json};
 
 #[derive(Parser)]
@@ -26,6 +29,8 @@ struct Args {
 enum Action {
     Register,
     Retire,
+    /// Verify a local unit after installation or removal and sync the exact catalog generation.
+    SyncSystemd,
 }
 
 async fn execute(args: Args) -> Result<Value, Box<dyn Error>> {
@@ -47,6 +52,24 @@ async fn execute(args: Args) -> Result<Value, Box<dyn Error>> {
     let result = match args.action {
         Action::Register => catalog.register(&args.record, &spec).await?,
         Action::Retire => catalog.retire(&args.record, &spec).await?,
+        Action::SyncSystemd => {
+            DeploymentIdentity::from_spec(&spec)?;
+            if spec["lifecycle"] != "active" {
+                return Err("Use the original active deployment manifest".into());
+            }
+            let binding = &spec["resources"]["runtime_binding"];
+            if binding["kind"] != "native" || binding["provider"] != "systemd" {
+                return Err("Systemd sync requires a native systemd deployment binding".into());
+            }
+            let unit = binding["instance"].as_str().ok_or("Missing systemd unit")?;
+            match observe_systemd(unit).await? {
+                RuntimeState::Present => catalog.register(&args.record, &spec).await?,
+                RuntimeState::Missing => catalog.retire(&args.record, &spec).await?,
+                RuntimeState::Unverified => {
+                    return Err("Could not verify the unit on the deployment host".into());
+                }
+            }
+        }
     };
     Ok(
         json!({"id":result["id"], "revision":result["revision"], "lifecycle":result["spec"]["lifecycle"]}),

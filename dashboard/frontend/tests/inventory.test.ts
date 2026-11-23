@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { describeDiscrepancies } from '../discrepancies.ts';
 import { DashboardInventory } from '../inventory.ts';
 import type { InventorySnapshot, ComparisonReport } from '../inventory.ts';
 
@@ -101,4 +102,14 @@ test('a startup event cannot hide Leases when the initial inventory response arr
   store.apply({ ...snapshot(28), lease_review_enabled: true });
   store.apply(snapshot(32), 'stream');
   assert.equal(store.read().inventory.lease_review_enabled, false);
+});
+
+test('coverage distinguishes machines without guest workloads from unconfigured collectors', () => {
+  const baseline = {
+    ...accuracy,
+    coverage: { verified: 6, expected: 6, unconfigured: 1, not_applicable: 2 },
+  };
+  const result = describeDiscrepancies({ ...snapshot(30), inventory_accuracy: baseline }, 31);
+  assert.match(result.scope, /1 host has no configured guest collector/);
+  assert.match(result.scope, /2 machines outside guest inventory scope/);
 });

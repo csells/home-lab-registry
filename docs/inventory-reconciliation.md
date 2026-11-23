@@ -44,6 +44,14 @@ not evidence of deletion. A stopped guest still exists and consumes storage.
 
 ## Retire deployments
 
+A native systemd deployment tool can call
+`lab-register-deployment --config PATH sync-systemd RECORD MANIFEST` on the
+deployment host after installation and again after removing the unit and
+reloading systemd. Use the original active manifest, including its exact unit,
+owner, and deployment generation. A stopped unit still has a deployment and
+stays registered. An inconclusive lookup leaves the catalog alone. Keep catalog
+writer credentials in the deployment tool's private operator context.
+
 After authorized teardown, verify that the exact guest and its dedicated storage are
 gone, preserve required external evidence, retire the corresponding records, then
 reconcile again. Never retire records merely because a host failed to report.
@@ -53,6 +61,12 @@ reconcile again. Never retire records merely because a host failed to report.
 - **Unregistered guest:** fresh discovery has no service or machine binding.
 - **Missing guest:** a registered binding is absent from a fresh complete host report.
 - **Collector unverified:** absent, expired, invalid or failed observations.
+- **Collector unconfigured:** an active machine has no configured guest
+  collector and its guest-inventory scope is still unknown.
+- **Guest inventory outside scope:** a machine with a verified non-host role
+  can declare `resources.guest_inventory.not_applicable_reason`. The dashboard
+  ignores this declaration when a collector is configured, an observation
+  exists, or an active guest record names the machine as its parent.
 - **Deployment unmapped:** service presence cannot be joined to structured placement.
 - **Expired lease:** ownership needs review or renewal; no automatic deletion.
 - **Duplicate machine:** two machine records claim the same guest. Several services

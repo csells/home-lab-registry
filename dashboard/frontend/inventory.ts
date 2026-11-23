@@ -70,6 +70,7 @@ export interface InventoryRecord {
 export interface HostReport {
   machine_id: string;
   status: string;
+  reason?: string;
   expires?: number;
   checked?: number;
   hardware?: { expires: number; checked: number; architecture: string; os: string; logical_cpus: number; memory_bytes: number };
@@ -80,7 +81,7 @@ export interface InventoryAccuracy {
   hosts: HostReport[];
   findings: Finding[];
   deployments?: { record_id: string; state: string; expires: number }[];
-  coverage: { verified: number; expected: number; unconfigured: number };
+  coverage: { verified: number; expected: number; unconfigured: number; not_applicable?: number };
 }
 
 interface ComparisonReceipt {

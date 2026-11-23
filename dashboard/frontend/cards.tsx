@@ -59,6 +59,9 @@ function HostInventory({ id, inventory, now }: { id: string; inventory: Inventor
   const report = inventory.inventory_accuracy;
   const host = report?.hosts.find(item => item.machine_id === id);
   if (!host || !report) return null;
+  if (host.status === 'not_applicable') {
+    return <div className="host-inventory"><strong>Guest inventory outside scope</strong> · {host.reason}</div>;
+  }
   const verified = host.status === 'verified' && (host.expires ?? 0) > now && !inventory.error;
   const label = verified ? 'Guest inventory verified' : host.status === 'unconfigured'
     ? 'Guest inventory collector not configured' : 'Guest inventory unverified';

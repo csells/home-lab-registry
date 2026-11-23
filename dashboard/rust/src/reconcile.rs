@@ -277,15 +277,29 @@ pub(crate) fn comparison(
         }
         record_issues(record, now, &mut findings, &mut deployments);
     }
+    let claimed_hosts: HashSet<_> = claims.keys().map(|(host, _)| host.as_str()).collect();
     let mut expected = 0;
     let mut verified = 0;
+    let mut not_applicable = 0;
     for host in &active_hosts {
         let id = host["id"].as_str().unwrap_or_default();
         let resources = &host["spec"]["resources"];
         let report = reports.get(id);
         if resources["metrics_stream"]["enabled"] != true && report.is_none() {
-            host_reports
-                .push(json!({"machine_id":id,"status":"unconfigured","guests":[],"checked":null}));
+            let reason = resources["guest_inventory"]["not_applicable_reason"]
+                .as_str()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty() && !claimed_hosts.contains(id));
+            if let Some(reason) = reason {
+                not_applicable += 1;
+                host_reports.push(
+                    json!({"machine_id":id,"status":"not_applicable","reason":reason,
+                    "guests":[],"checked":null}),
+                );
+            } else {
+                host_reports.push(json!({"machine_id":id,"status":"unconfigured",
+                    "guests":[],"checked":null}));
+            }
             continue;
         }
         expected += 1;
@@ -418,7 +432,8 @@ pub(crate) fn comparison(
         "verified"
     };
     json!({"checked":now,"coverage_status":coverage,"status":if findings.is_empty(){coverage}else{"attention"},
-           "coverage":{"verified":verified,"expected":expected,"unconfigured":active_hosts.len()-expected},
+           "coverage":{"verified":verified,"expected":expected,
+                       "unconfigured":active_hosts.len()-expected-not_applicable,"not_applicable":not_applicable},
            "findings":findings,"hosts":host_reports,"deployments":deployments,
            "scope":"Deployment presence from guest inventories and enrolled runtime sources. Application health is reported separately."})
 }
@@ -426,6 +441,32 @@ pub(crate) fn comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guest_coverage_separates_devices_without_guests_from_missing_collectors() {
+        let machine = |id, resources| {
+            json!({"id":id,"spec":{
+                "lifecycle":"active","capabilities":["machine"],"resources":resources
+            }})
+        };
+        let exempt = json!({"guest_inventory":{"not_applicable_reason":"Desktop-only workload"}});
+        let records = [
+            machine("machine-desktop", exempt.clone()),
+            machine("machine-unknown", json!({})),
+            machine("machine-contradicted", exempt),
+            json!({"id":"active-guest","spec":{"lifecycle":"active","resources":{
+                "runtime_binding":{"kind":"guest","machine_id":"machine-contradicted","guest_id":"100"}
+            }}}),
+        ];
+        let comparison = comparison(&records, &HashMap::new(), &LeaseOwnership::default(), 103.0);
+        assert_eq!(comparison["coverage"]["not_applicable"], 1);
+        assert_eq!(comparison["coverage"]["unconfigured"], 2);
+        let hosts = comparison["hosts"].as_array().unwrap();
+        assert_eq!(hosts[0]["status"], "not_applicable");
+        assert_eq!(hosts[0]["reason"], "Desktop-only workload");
+        assert_eq!(hosts[1]["status"], "unconfigured");
+        assert_eq!(hosts[2]["status"], "unconfigured");
+    }
 
     #[test]
     fn only_fresh_complete_inventory_can_report_a_missing_guest() {

@@ -136,7 +136,14 @@ export function describeDiscrepancies(inventory: InventorySnapshot, now: number)
     ? (coverage.verified - expiredHosts.size) + ' of ' + coverage.expected + ' configured hosts verified'
     : 'Guest inventory unavailable'];
   if (stale && coverage) scope.push('Guest inventory needs a refresh');
-  if (coverage?.unconfigured) scope.push(coverage.unconfigured + ' hosts have no configured guest collector');
+  if (coverage?.unconfigured) {
+    const noun = coverage.unconfigured === 1 ? ' host has' : ' hosts have';
+    scope.push(coverage.unconfigured + noun + ' no configured guest collector');
+  }
+  if (coverage?.not_applicable) {
+    const noun = coverage.not_applicable === 1 ? ' machine' : ' machines';
+    scope.push(coverage.not_applicable + noun + ' outside guest inventory scope');
+  }
   if (audit) scope.push('Last IP audit ' + audit.status + ' · ' + new Date(audit.at).toLocaleString());
   return { problems, summary: summary.join(' · '), scope: scope.join(' · '), findings };
 }

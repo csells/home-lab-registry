@@ -278,26 +278,30 @@ fn ttl() -> u64 {
     900
 }
 
+pub async fn observe_systemd(unit: &str) -> Result<RuntimeState, Box<dyn Error>> {
+    if !unit
+        .strip_suffix(".service")
+        .is_some_and(|name| identifier(name, 180, b"_.@:-"))
+    {
+        return Err("Use an exact systemd service unit name".into());
+    }
+    let mut command = Command::new("/usr/bin/systemctl");
+    command.args(["show", "--property=Id,LoadState", "--", unit]);
+    Ok(local(command)
+        .await
+        .map_or(RuntimeState::Unverified, |result| {
+            classify_systemd(
+                unit,
+                result.status.success(),
+                &String::from_utf8_lossy(&result.stdout),
+            )
+        }))
+}
+
 impl Publisher {
     pub async fn systemd(&self) -> Result<RuntimeState, Box<dyn Error>> {
         let unit = self.unit.as_deref().ok_or("Missing systemd unit")?;
-        if !unit
-            .strip_suffix(".service")
-            .is_some_and(|name| identifier(name, 180, b"_.@:-"))
-        {
-            return Err("Use an exact systemd service unit name".into());
-        }
-        let mut command = Command::new("/usr/bin/systemctl");
-        command.args(["show", "--property=Id,LoadState", "--", unit]);
-        Ok(local(command)
-            .await
-            .map_or(RuntimeState::Unverified, |result| {
-                classify_systemd(
-                    unit,
-                    result.status.success(),
-                    &String::from_utf8_lossy(&result.stdout),
-                )
-            }))
+        observe_systemd(unit).await
     }
 
     pub async fn launchd(&self) -> Result<RuntimeState, Box<dyn Error>> {
