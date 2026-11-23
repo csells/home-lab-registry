@@ -23,6 +23,14 @@ fn restore_preserves_history_resets_observations_and_never_overwrites() {
             Some(2),
         )
         .unwrap();
+    // This saved SQLite timestamp exposed a one-ULP drift during JSON restore.
+    let source = rusqlite::Connection::open(root.path().join("source.db")).unwrap();
+    source
+        .execute(
+            "UPDATE history SET updated=?1 WHERE revision=2",
+            [1795465135.3389513_f64],
+        )
+        .unwrap();
     let export = root.path().join("archive.json");
     std::fs::write(
         &export,
