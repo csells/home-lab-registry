@@ -400,6 +400,15 @@ pub fn archive_workspace(workspace: &Path, output: impl Write) -> io::Result<()>
             } else {
                 return Err(invalid("Workspace contains an unsupported entry."));
             }
+            let (sign, elapsed) = match metadata.modified()?.duration_since(UNIX_EPOCH) {
+                Ok(elapsed) => ("", elapsed),
+                Err(before_epoch) => ("-", before_epoch.duration()),
+            };
+            if !sign.is_empty() || elapsed.subsec_nanos() != 0 {
+                // The standard tar header stores whole seconds. PAX preserves the exact time.
+                let mtime = format!("{sign}{}.{:09}", elapsed.as_secs(), elapsed.subsec_nanos());
+                archive.append_pax_extensions([("mtime", mtime.as_bytes())])?;
+            }
             archive.append_path_with_name(&path, relative)?;
         }
         pending.extend(directories.into_iter().rev());

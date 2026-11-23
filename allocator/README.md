@@ -565,6 +565,12 @@ VM, so the pool grant must remain valid after release. Grant template clone,
 pool allocation and configuration, scoped storage, and the existing bridge
 separately. Use a distinct audit-only token for capacity.
 
+Before a staging lifecycle test, verify the validity of both Proxmox tokens
+and the restricted capture grant for the entire acquire, export and release
+window. Confirm the audit token can read node, inventory and storage status,
+and the provisioning token can read the enrolled template. An expired grant
+needs renewal within the existing staging scope before admitting test work.
+
 Configure the exporter slot with `dynamic_capture: true`. Its restricted
 `export_dynamic_disk.pl` command checks the lease-derived name, hardware UUID,
 generation, pinned raw file, expected allocation size and stopped state
