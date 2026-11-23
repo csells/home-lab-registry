@@ -5,9 +5,14 @@ pub mod task_resume;
 pub mod workspace;
 
 mod native_provider;
+pub mod restic_scope;
+mod storage;
+pub use storage::{run_exporter, worker_lock};
+mod alerts;
+pub use alerts::{deliver_alert, run_alert_recipient};
+pub mod checkpoint_worker;
 mod tart;
 pub mod tart_worker;
-pub mod restic_scope;
 
 mod capacity;
 

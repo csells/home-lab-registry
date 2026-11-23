@@ -427,7 +427,7 @@ fn dispatch(
     }
 }
 
-fn tls(settings: &Value) -> Result<Option<RustlsConfig>, Box<dyn Error>> {
+pub(crate) fn tls(settings: &Value) -> Result<Option<RustlsConfig>, Box<dyn Error>> {
     if settings.is_null() {
         return Ok(None);
     }

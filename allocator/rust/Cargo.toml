@@ -10,6 +10,7 @@ clap = { version = "4", features = ["derive"] }
 tar = "0.4"
 flate2 = "1"
 libc = "0.2"
+http-body-util = "0.1"
 shlex = "2"
 curl = { version = "0.4", features = ["static-curl"] }
 ipnet = { version = "2", features = ["serde"] }

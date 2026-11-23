@@ -799,6 +799,7 @@ dependencies = [
  "curl",
  "flate2",
  "form_urlencoded",
+ "http-body-util",
  "ipnet",
  "libc",
  "reqwest",
