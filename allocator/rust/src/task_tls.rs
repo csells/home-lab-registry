@@ -13,7 +13,7 @@ use rustls::{
 use x509_cert::{
     Certificate,
     der::{Decode, asn1::ObjectIdentifier},
-    ext::pkix::ExtendedKeyUsage,
+    ext::pkix::{ExtendedKeyUsage, KeyUsage},
 };
 
 pub(crate) fn client_config(pem: &[u8]) -> Result<ClientConfig, &'static str> {
@@ -88,14 +88,17 @@ impl ServerCertVerifier for AllocatorIdentity {
         if now.as_secs() > after {
             return Err(CertificateError::Expired.into());
         }
+        let key_usage = info
+            .get_extension::<KeyUsage>()
+            .map_err(|_| CertificateError::BadEncoding)?;
+        if key_usage.is_some_and(|(_, usage)| !usage.digital_signature()) {
+            return Err(CertificateError::InvalidPurpose.into());
+        }
         const SERVER_AUTH: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.1");
-        const ANY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.37.0");
         let usages = info
             .get_extension::<ExtendedKeyUsage>()
             .map_err(|_| CertificateError::BadEncoding)?;
-        if usages.is_some_and(|(_, usage)| {
-            !usage.0.contains(&SERVER_AUTH) && !usage.0.contains(&ANY_USAGE)
-        }) {
+        if usages.is_some_and(|(_, usage)| !usage.0.contains(&SERVER_AUTH)) {
             return Err(CertificateError::InvalidPurpose.into());
         }
         verify_server_name(&ParsedCertificate::try_from(end_entity)?, name)?;

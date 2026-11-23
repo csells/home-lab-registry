@@ -410,19 +410,57 @@ mod transport_tests {
 
     #[test]
     fn private_ca_tls_and_bearer_auth_work_in_the_portable_client() {
-        request_with_certificate("basicConstraints=critical,CA:FALSE");
+        request_with_certificate(
+            "basicConstraints=critical,CA:FALSE",
+            "subjectAltName=IP:127.0.0.1",
+            None,
+            true,
+        );
     }
 
     #[test]
     fn the_exact_legacy_self_signed_broker_certificate_still_works() {
-        request_with_certificate("basicConstraints=critical,CA:TRUE");
+        request_with_certificate(
+            "basicConstraints=critical,CA:TRUE",
+            "subjectAltName=IP:127.0.0.1",
+            None,
+            true,
+        );
     }
 
-    fn request_with_certificate(constraints: &str) {
+    #[test]
+    fn legacy_broker_certificate_cannot_send_credentials_for_the_wrong_name_or_purpose() {
+        request_with_certificate(
+            "basicConstraints=critical,CA:TRUE",
+            "subjectAltName=IP:127.0.0.2",
+            None,
+            false,
+        );
+        request_with_certificate(
+            "basicConstraints=critical,CA:TRUE",
+            "subjectAltName=IP:127.0.0.1",
+            Some("keyUsage=critical,keyCertSign,cRLSign"),
+            false,
+        );
+        request_with_certificate(
+            "basicConstraints=critical,CA:TRUE",
+            "subjectAltName=IP:127.0.0.1",
+            Some("extendedKeyUsage=anyExtendedKeyUsage"),
+            false,
+        );
+    }
+
+    fn request_with_certificate(
+        constraints: &str,
+        san: &str,
+        key_usage: Option<&str>,
+        accepted: bool,
+    ) {
         let root = tempfile::tempdir().unwrap();
         let certificate = root.path().join("tls.pem");
         let key = root.path().join("key.pem");
-        let out = Command::new("openssl")
+        let mut provision = Command::new("openssl");
+        provision
             .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout"])
             .arg(&key)
             .arg("-out")
@@ -433,12 +471,14 @@ mod transport_tests {
                 "-subj",
                 "/CN=fixture",
                 "-addext",
-                "subjectAltName=IP:127.0.0.1",
+                san,
                 "-addext",
                 constraints,
-            ])
-            .output()
-            .unwrap();
+            ]);
+        if let Some(usage) = key_usage {
+            provision.args(["-addext", usage]);
+        }
+        let out = provision.output().unwrap();
         assert!(
             out.status.success(),
             "{}",
@@ -456,12 +496,26 @@ mod transport_tests {
                 .unwrap(),
         );
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
         let endpoint = format!("https://{}", listener.local_addr().unwrap());
         let token = "task-fixture-token-0123456789abcdef";
         let task_token = root.path().join("token");
         fs::write(&task_token, token).unwrap();
         let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let (stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("TLS fixture received no connection: {error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
@@ -472,10 +526,13 @@ mod transport_tests {
             let mut lines = String::new();
             loop {
                 let mut line = String::new();
-                if channel.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                    break;
+                match channel.read_line(&mut line) {
+                    Err(_) if !accepted => return false,
+                    Err(error) => panic!("TLS fixture read failed: {error}"),
+                    Ok(0) => break,
+                    Ok(_) if line == "\r\n" => break,
+                    Ok(_) => lines.push_str(&line),
                 }
-                lines.push_str(&line);
             }
             let request = lines.to_ascii_lowercase();
             assert!(request.starts_with("get /v1/capabilities http/1.1\r\n"));
@@ -484,10 +541,19 @@ mod transport_tests {
             io.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"ok\":true}").unwrap();
             io.conn.send_close_notify();
             io.flush().unwrap();
+            true
         });
         let client = TaskClient::new(&endpoint, certificate, task_token).unwrap();
-        let result = client.request("/v1/capabilities", None).unwrap();
-        assert_eq!(result, json!({"ok":true}));
-        server.join().unwrap();
+        let result = client.request("/v1/capabilities", None);
+        assert_eq!(
+            server.join().unwrap(),
+            accepted,
+            "whether the server received the request"
+        );
+        if accepted {
+            assert_eq!(result.unwrap(), json!({"ok":true}));
+        } else {
+            assert!(result.is_err());
+        }
     }
 }
