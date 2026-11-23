@@ -82,3 +82,39 @@ pub(crate) fn private(file: &File) -> io::Result<bool> {
     }
     Ok(true)
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn credential_acl_rejects_an_everyone_read_grant() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("registry.json");
+        std::fs::write(&path, "{}").unwrap();
+        let who = Command::new("whoami.exe")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()
+            .unwrap();
+        assert!(who.status.success());
+        let user = String::from_utf8(who.stdout).unwrap();
+        let sid = user.trim().rsplit(',').next().unwrap().trim_matches('"');
+        assert!(sid.starts_with("S-1-"));
+        let restrict = Command::new("icacls.exe")
+            .arg(&path)
+            .args(["/inheritance:r", "/grant:r", &format!("*{sid}:(F)")])
+            .output()
+            .unwrap();
+        assert!(restrict.status.success());
+        assert!(private(&File::open(&path).unwrap()).unwrap());
+
+        let broaden = Command::new("icacls.exe")
+            .arg(&path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(broaden.status.success());
+        assert!(!private(&File::open(&path).unwrap()).unwrap());
+    }
+}
