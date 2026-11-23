@@ -2,7 +2,7 @@ mod process;
 pub mod task_client;
 pub mod task_resume;
 
-pub mod workspace;
+pub use lab_workspace as workspace;
 
 mod native_provider;
 pub mod restic_scope;
@@ -25,7 +25,7 @@ pub mod http;
 mod export;
 mod owners;
 mod recovery;
-pub use controller::Controller;
+pub use controller::{Controller, enroll};
 mod controller;
 mod request;
 mod rows;
@@ -44,6 +44,7 @@ pub use journal::{Intent, LeaseJournal};
 mod review;
 pub use review::{GuestScope, lease_inventory, lease_review};
 mod ledger;
+mod ledger_schema;
 
 pub use ledger::Ledger;
 
@@ -91,3 +92,7 @@ impl From<rusqlite::Error> for Rejected {
         )
     }
 }
+
+pub use process::bounded as bounded_command;
+pub use storage::collect_capture;
+pub use tart_worker::available_bytes as available_disk;

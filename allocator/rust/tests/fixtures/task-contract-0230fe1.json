@@ -1,0 +1,146 @@
+{
+  "api_version": 1,
+  "capabilities": "/v1/capabilities",
+  "operations": {
+    "acquire": {
+      "body_schema": "acquire",
+      "method": "POST",
+      "path": "/v1/leases"
+    },
+    "inspect": {
+      "method": "GET",
+      "path": "/v1/leases/{id}"
+    },
+    "list": {
+      "method": "GET",
+      "path": "/v1/leases"
+    },
+    "release": {
+      "body_schema": "release",
+      "method": "POST",
+      "path": "/v1/leases/{id}/release"
+    },
+    "renew": {
+      "body_schema": "renew",
+      "method": "POST",
+      "path": "/v1/leases/{id}/renew"
+    }
+  },
+  "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "schemas": {
+    "acquire": {
+      "dependentRequired": {
+        "checkpoint_id": [
+          "resume_from"
+        ]
+      },
+      "properties": {
+        "checkpoint_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "type": "string"
+        },
+        "recipe": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reclaim_on_expiry": {
+          "const": true
+        },
+        "request_key": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "requirements": {
+          "additionalProperties": false,
+          "properties": {
+            "architecture": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "dependencies": {
+              "items": {
+                "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "disk_mib": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "distribution": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "gpu": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "memory_mib": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "os": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "vcpus": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "resume_from": {
+          "pattern": "^[a-f0-9]{32}$",
+          "type": "string"
+        },
+        "seconds": {
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ssh_public_key": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "task": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "task",
+        "request_key",
+        "seconds",
+        "ssh_public_key"
+      ],
+      "type": "object"
+    },
+    "release": {
+      "properties": {
+        "preserve_checkpoint": {
+          "const": true
+        }
+      },
+      "type": "object"
+    },
+    "renew": {
+      "properties": {
+        "seconds": {
+          "maximum": 31536000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seconds"
+      ],
+      "type": "object"
+    }
+  }
+}

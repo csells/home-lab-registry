@@ -1,6 +1,6 @@
 use std::{error::Error, io, path::Path, process::ExitCode};
 
-use lab_allocator::workspace;
+use lab_workspace as workspace;
 
 #[cfg(target_os = "linux")]
 fn limits() -> io::Result<()> {

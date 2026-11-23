@@ -858,7 +858,7 @@ impl Worker {
     }
 }
 
-fn available_bytes(path: &Path) -> io::Result<i64> {
+pub fn available_bytes(path: &Path) -> io::Result<i64> {
     use std::{ffi::CString, mem::MaybeUninit, os::unix::ffi::OsStrExt};
     let path = CString::new(path.as_os_str().as_bytes())?;
     let mut stat = MaybeUninit::<libc::statvfs>::uninit();

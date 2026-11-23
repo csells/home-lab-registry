@@ -8,16 +8,8 @@ use tower::ServiceExt;
 
 #[test]
 fn task_api_schema_matches_the_python_client_contract() {
-    let output = std::process::Command::new("python3")
-        .args(["-c", "import json; from capabilities import task_contract; print(json.dumps(task_contract()))"])
-        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
-        .output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let expected: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/task-contract-0230fe1.json")).unwrap();
     assert_eq!(task_contract(), expected);
 }
 

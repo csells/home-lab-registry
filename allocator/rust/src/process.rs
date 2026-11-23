@@ -8,7 +8,7 @@ use std::{
 
 use wait_timeout::ChildExt;
 
-pub(crate) fn bounded(
+pub fn bounded(
     command: &mut Command,
     input: Option<&File>,
     timeout: Duration,

@@ -801,6 +801,7 @@ dependencies = [
  "form_urlencoded",
  "http-body-util",
  "ipnet",
+ "lab-workspace",
  "libc",
  "reqwest",
  "ring",
@@ -820,6 +821,17 @@ dependencies = [
  "url",
  "uuid",
  "wait-timeout",
+]
+
+[[package]]
+name = "lab-workspace"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "ring",
+ "serde_json",
+ "tar",
+ "tempfile",
 ]
 
 [[package]]

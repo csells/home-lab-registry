@@ -1,6 +1,6 @@
 use std::{io, path::PathBuf, process::ExitCode};
 
-use lab_allocator::workspace::archive_workspace;
+use lab_workspace::archive_workspace;
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);

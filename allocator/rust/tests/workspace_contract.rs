@@ -107,3 +107,15 @@ fn workspace_round_trip_preserves_exact_filenames_data_and_internal_symlinks() {
     fs::hard_link(root.join("sub/café-東京-🐍.bin"), root.join("hardlink")).unwrap();
     assert!(archive_workspace(&root, Vec::new()).is_err());
 }
+
+#[test]
+fn macos_tar_padding_is_accepted_but_nonzero_garbage_is_rejected() {
+    let mut input = archive(b"native BSD tar writes zero padding", None);
+    input.resize(10240, 0);
+    let valid = tempfile::tempdir().unwrap();
+    lab_allocator::workspace::extract_workspace(input.as_slice(), valid.path()).unwrap();
+    assert!(valid.path().read_dir().unwrap().next().is_some());
+    input[10239] = 1;
+    let invalid = tempfile::tempdir().unwrap();
+    assert!(lab_allocator::workspace::extract_workspace(input.as_slice(), invalid.path()).is_err());
+}

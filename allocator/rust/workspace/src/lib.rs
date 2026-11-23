@@ -2,16 +2,21 @@ use std::{
     collections::VecDeque,
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, Write},
+    io::{self, BufRead, BufReader, Read, Seek, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, symlink},
     path::{Component, Path, PathBuf},
 };
 
-use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
+use flate2::{Compression, bufread::GzDecoder, write::GzEncoder};
 use ring::digest::{Context, SHA256};
 use serde_json::{Value, json};
 
-use crate::tokens::hex;
+fn hex(text: &str, size: usize) -> bool {
+    text.len() == size
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 pub const MAX_ARCHIVE: u64 = 64 * 1024 * 1024;
 pub const MAX_EXPANDED: u64 = 512 * 1024 * 1024;
@@ -138,15 +143,34 @@ pub fn extract_workspace(source: impl Read, target: &Path) -> io::Result<()> {
 
 pub fn verify_workspace_with_limit(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {
     let mut unpacked = tempfile::tempfile_in(target.parent().ok_or_else(escaped)?)?;
-    let copied = io::copy(
-        &mut MultiGzDecoder::new(source).take(limit.saturating_add(1)),
-        &mut unpacked,
-    )?;
-    if copied > limit {
-        return Err(budget());
-    }
+    decode_gzip(source, &mut unpacked, limit)?;
     unpacked.rewind()?;
     extract_tar(unpacked, target, limit)
+}
+
+fn decode_gzip(source: impl Read, target: &mut impl Write, limit: u64) -> io::Result<()> {
+    let mut input = BufReader::new(source);
+    let mut left = limit;
+    loop {
+        let mut member = GzDecoder::new(&mut input);
+        let copied = io::copy(&mut member.by_ref().take(left.saturating_add(1)), target)?;
+        left = left.checked_sub(copied).ok_or_else(budget)?;
+        drop(member);
+        // BSD tar can pad its compressed stream to a record boundary. Match
+        // gzip's zero padding rule while still checking every member trailer.
+        loop {
+            let chunk = input.fill_buf()?;
+            if chunk.is_empty() {
+                return Ok(());
+            }
+            let skipped = chunk.iter().take_while(|byte| **byte == 0).count();
+            let padding_only = skipped == chunk.len();
+            input.consume(skipped);
+            if !padding_only {
+                break;
+            }
+        }
+    }
 }
 
 fn extract_tar(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {

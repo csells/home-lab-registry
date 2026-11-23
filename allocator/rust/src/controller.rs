@@ -182,6 +182,7 @@ impl Controller {
         let verify = provider.clone();
         let generation: Generation = Box::new(move || verify.generation());
         let mut ledger = Ledger::open(database, witness, generation)?;
+        ledger.migrate()?;
         let slots = provider.slots()?;
         let unbound = collect_unbound(ledger.connection(), &slots)?;
         for (id, slot) in unbound {
@@ -1130,4 +1131,39 @@ mod tests {
             "request_key_conflict"
         );
     }
+}
+
+pub fn enroll(config: &Path) -> Result<(), Rejected> {
+    let invalid = || {
+        Rejected::new(
+            "configuration_invalid",
+            "Missing allocator ledger configuration.",
+            503,
+        )
+    };
+    let settings = std::fs::read(config)
+        .ok()
+        .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+        .ok_or_else(invalid)?;
+    let database = settings["database"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+        .ok_or_else(invalid)?;
+    let witness = settings["ledger_witness"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .map(Path::new)
+        .ok_or_else(invalid)?;
+    let provider = Provider::native(&settings)?;
+    let slots = provider.slots()?;
+    for id in slots.keys() {
+        provider.call(json!({"action":"enrollment-check","slot_id":id}))?;
+    }
+    let bindings = slots
+        .iter()
+        .map(|(id, slot)| (id.as_str(), slot.identity.as_str()))
+        .collect::<Vec<_>>();
+    Ledger::enroll(database, witness, || provider.generation(), &bindings)?;
+    Ok(())
 }

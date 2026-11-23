@@ -753,3 +753,20 @@ mod tests {
         assert_eq!(slot.capture_command, ["capture"]);
     }
 }
+
+pub fn collect_capture(
+    command: &mut Command,
+    output: &mut File,
+    limit: u64,
+    timeout: Duration,
+) -> io::Result<()> {
+    collect(
+        command,
+        None,
+        output,
+        limit,
+        timeout,
+        "guest filesystem capture",
+    )
+    .map_err(io::Error::other)
+}

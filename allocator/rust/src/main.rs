@@ -1,25 +1,29 @@
 use std::path::PathBuf;
 
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(about = "Run the home-lab lease allocator.")]
+struct Options {
+    configuration: PathBuf,
+    #[arg(long, conflicts_with = "provider_adapter")]
+    enroll_ledger: bool,
+    #[arg(long, hide = true)]
+    provider_adapter: Option<PathBuf>,
+}
+
 #[tokio::main(worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .without_time()
         .with_target(false)
         .init();
-    let mut args = std::env::args_os().skip(1);
-    let config = args
-        .next()
-        .map(PathBuf::from)
-        .ok_or("Usage: lab-allocator <config.json> [--provider-adapter <provider_adapter.py>]")?;
-    let adapter = match (args.next(), args.next(), args.next()) {
-        (None, None, None) => None,
-        (Some(flag), Some(path), None) if flag == "--provider-adapter" => Some(PathBuf::from(path)),
-        _ => {
-            return Err(
-                "Usage: lab-allocator <config.json> [--provider-adapter <provider_adapter.py>]"
-                    .into(),
-            );
-        }
-    };
-    lab_allocator::http::serve(config, adapter).await
+    let options = Options::parse();
+    if options.enroll_ledger {
+        tokio::task::spawn_blocking(move || lab_allocator::enroll(&options.configuration))
+            .await??;
+        println!("Idle slot and independent ledger witness enrolled.");
+        return Ok(());
+    }
+    lab_allocator::http::serve(options.configuration, options.provider_adapter).await
 }
