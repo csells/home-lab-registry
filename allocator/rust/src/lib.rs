@@ -1,3 +1,7 @@
+mod process;
+pub mod task_client;
+pub mod task_resume;
+
 pub mod workspace;
 
 mod native_provider;

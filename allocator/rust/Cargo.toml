@@ -5,6 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+
 tar = "0.4"
 flate2 = "1"
 libc = "0.2"
