@@ -17,3 +17,5 @@ ssh_known_hosts
 /dashboard/dashboard-react.js
 
 /dashboard/rust/target/
+
+/registry/rust/target/
