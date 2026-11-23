@@ -141,25 +141,49 @@ fn linux() -> Result<Entries, Err> {
     let addresses = json_command("ip", &["-j", "-4", "addr"])?;
     let links = json_command("ip", &["-j", "link"])?;
     let mut rows = linux_links(&addresses, &links)?;
-    let root = Path::new("/");
-    let mut paths = ifupdown(root)?;
-    paths.extend(dir_files(root, "etc/netplan", |_| true)?);
-    paths.extend(dir_files(root, "etc/systemd/network", |name| {
-        name.ends_with(".network")
-    })?);
-    paths.extend(dir_files(
-        root,
-        "etc/NetworkManager/system-connections",
-        |_| true,
-    )?);
-    paths.extend(dir_files(root, "etc/cloud/cloud.cfg.d", |name| {
-        name.contains("network")
-    })?);
-    let mut modes = BTreeMap::new();
+    read_linux_profiles(Path::new("/"), &links, &mut rows);
+    if rows.is_empty() {
+        rows.push(json!({"reason":"No interface evidence collected"}));
+    }
+    Ok(rows)
+}
+
+fn read_linux_profiles(root: &Path, links: &Value, rows: &mut Entries) {
+    let mut paths = ["etc/network/interfaces", "etc/network/interfaces.new"]
+        .into_iter()
+        .map(|file| root.join(file))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
     let mut saved = Vec::new();
+    for folder in [
+        "etc/network/interfaces.d",
+        "etc/netplan",
+        "etc/systemd/network",
+        "etc/NetworkManager/system-connections",
+        "etc/cloud/cloud.cfg.d",
+    ] {
+        let found = dir_files(root, folder, |name| match folder {
+            "etc/systemd/network" => name.ends_with(".network"),
+            "etc/cloud/cloud.cfg.d" => name.contains("network"),
+            _ => true,
+        });
+        match found {
+            Ok(found) => paths.extend(found),
+            Err(_) => saved.push(json!({
+                "reason":"Saved network profile directory could not be read",
+                "source":root.join(folder)
+            })),
+        }
+    }
+    let mut modes = BTreeMap::new();
     for path in paths {
-        let profile = profile_text(&path)?;
         let filename = path.display().to_string();
+        let Ok(profile) = profile_text(&path) else {
+            saved.push(
+                json!({"reason":"Saved network profile could not be read","source":filename}),
+            );
+            continue;
+        };
         if filename.contains("/netplan/") || filename.contains("/cloud/") {
             if profile.lines().any(|line| {
                 let line = line.trim();
@@ -207,7 +231,7 @@ fn linux() -> Result<Entries, Err> {
             }
         }
     }
-    for row in &mut rows {
+    for row in rows.iter_mut() {
         if row["assignment"] != "dhcp"
             && let Some(mode) = row["interface"].as_str().and_then(|name| modes.get(name))
             && matches!(mode.as_str(), "dhcp" | "static")
@@ -216,10 +240,6 @@ fn linux() -> Result<Entries, Err> {
         }
     }
     rows.extend(saved);
-    if rows.is_empty() {
-        rows.push(json!({"reason":"No interface evidence collected"}));
-    }
-    Ok(rows)
 }
 
 fn plist_read(path: &Path) -> Result<Value, Err> {
@@ -901,4 +921,24 @@ pub fn collect(guest_only: bool, tart_names: &[String], guest_binary: &str) -> E
 
 pub fn remote_appliance(input: impl io::Read) -> Result<Entries, Err> {
     appliance::remote(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_saved_profile_does_not_hide_live_interface_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let etc = root.path().join("etc/network");
+        fs::create_dir_all(&etc).unwrap();
+        fs::write(etc.join("interfaces"), "iface eth0 inet dhcp\n").unwrap();
+        fs::write(etc.join("interfaces.new"), [0xff]).unwrap();
+        let links = json!([{"ifname":"eth0","address":"02:00:00:00:00:01"}]);
+        let mut rows =
+            vec![json!({"interface":"eth0","address":"192.0.2.11","assignment":"unknown"})];
+        read_linux_profiles(root.path(), &links, &mut rows);
+        assert_eq!(rows[0]["assignment"], "dhcp");
+        assert_eq!(rows[1]["reason"], "Saved network profile could not be read");
+    }
 }
