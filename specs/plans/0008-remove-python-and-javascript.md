@@ -58,3 +58,27 @@ where the behavior needs it.
 The staged runtime retains its existing catalog, ledger witness, scoped
 credentials, and rollback artifacts. Stable deployments and unrelated lab
 services were not changed.
+
+## Regression qualification
+
+The staged runtime at `d90e512` includes the parity corrections against main and
+the pre-migration allocator. The catalog and checkpoint services enforce read
+and write deadlines. The dashboard refreshes lease findings on demand, reports
+incomplete audits, reloads authorized origins, and isolates failing collector
+endpoints. The audit can send its native reader temporarily over pinned SSH
+and to running Proxmox guests through their existing guest interface.
+
+The authenticated preview verified manual refresh, lease history, live charts,
+and six of six configured collectors. The native audit queried real router
+reservations and read a disposable guest through both SSH and the QEMU guest
+agent. The backup review ran its explicit check against an encrypted Restic
+restore. A fixed-slot Linux lease uploaded a checkpoint, released, and returned
+its retained evidence. A matching replacement preserved its file mode and
+fractional PAX timestamp, and its final checkpoint remained readable after
+release. The on-demand slot's capacity credential returned HTTP 401 during
+qualification.
+
+The macOS client links system libraries. The Windows x86-64 task and registry
+clients cross-built successfully. The native Windows workflow covers TLS,
+private configuration ACLs and executable packaging when run on its Windows
+runner. Production promotion remains a separate operator decision.
