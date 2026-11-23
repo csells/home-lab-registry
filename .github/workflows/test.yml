@@ -33,6 +33,8 @@ jobs:
       - run: cargo +1.98.0 test --locked --manifest-path dashboard/rust/Cargo.toml
       - run: cargo +1.98.0 fmt --manifest-path registry/rust/Cargo.toml --check
       - run: cargo +1.98.0 test --locked --manifest-path registry/rust/Cargo.toml
+      - run: cargo +1.98.0 fmt --manifest-path allocator/rust/Cargo.toml --check
+      - run: cargo +1.98.0 test --locked --manifest-path allocator/rust/Cargo.toml
   collector:
     runs-on: ubuntu-latest
     steps:

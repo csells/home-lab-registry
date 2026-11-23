@@ -19,3 +19,5 @@ ssh_known_hosts
 /dashboard/rust/target/
 
 /registry/rust/target/
+
+/allocator/rust/target/

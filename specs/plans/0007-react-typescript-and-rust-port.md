@@ -58,11 +58,37 @@ blocked, a live metrics chart, and the staging-only terminal and password
 controls. Browser fixtures covered phone and desktop layout, history paging,
 the graph, GPU reading states, and closing and reopening chart streams.
 
-## Rust dashboard work in progress
+## Rust dashboard and catalog staging
 
-The first Rust contracts cover authenticated reads and static assets, the
-inventory stream, scoped password copy, and the refresh and reconciliation
-request boundary. Axum serves HTTP and SSE. Tokio watch channels retain the
-latest observation so a slow client does not accumulate an unbounded queue.
-Keep Python as the staged server until Rust is connected to the live registry,
-collectors, leases and terminal backend, and the full workflow passes.
+The disposable preview serves the Rust dashboard from revision `4f6d9bd` and
+the Rust registry from revision `4c4d65e`. The dashboard matched the Python
+backend's inventory and discrepancy identities across six collectors. Browser
+checks verified every tab, live chart readings, masked clipboard copying, the
+disposable Guacamole route, a service failure and recovery, and a matching
+reconciliation receipt while browser SSE was blocked. HTTP checks verified
+refresh, bounded stream state, and graceful shutdown.
+
+The Rust registry served a SQLite-consistent copy of the real staging catalog
+through its established TLS API. The Python client read and wrote it. Checks
+covered revision conflicts, health-only change delivery, scoped runtime
+publication, real collector mTLS identity, and export restored with the existing
+operator tool. The dashboard then repeated the browser checks against the Rust
+registry on the original staging TLS endpoint. The staged units have independent
+rollback artifacts.
+
+A 20-second comparison on the disposable VM measured 0.15% of one core and
+32.8 MiB RSS for Rust, versus 0.00% and 34.7 MiB for Python. Both servers had six
+idle collector subscriptions and no chart viewers. The sample is too brief to
+infer a steady-state CPU difference. A Linux regression test verifies the
+existing self-signed registry certificate and rejects a mismatched hostname.
+Collector streams still require their own TLS 1.3 identity.
+
+## Rust allocator work in progress
+
+Native tests verify the existing Python SQLite ledger and independent witness,
+single authority, stale database and controller generations, durable operation
+intent, and unique recovery of an otherwise unknown provider task. They also
+cover lease review and retained-checkpoint availability, owner and reviewer
+holds, renewal, and the requirement for verified export before reclamation.
+The existing allocator still serves the preview while the remaining controller
+routes, provider transitions and recovery are ported and tested.
