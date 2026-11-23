@@ -155,7 +155,7 @@ fn request_to(
     budget: (u64, u64),
     output: &mut impl Write,
 ) -> Result<Response, TaskError> {
-    use reqwest::{Certificate, blocking::Client, header, redirect, retry, tls::Version};
+    use reqwest::{blocking::Client, header, redirect, retry};
     use std::time::Duration;
 
     let (origin, path) = address;
@@ -167,9 +167,7 @@ fn request_to(
         return Err(TaskError::client("Invalid task credential file"));
     }
     let transport = |_: reqwest::Error| TaskError::client("Allocator HTTPS transport failed");
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let roots = Certificate::from_pem_bundle(&fs::read(ca)?)
-        .map_err(|_| TaskError::client("Invalid allocator CA file"))?;
+    let tls = crate::task_tls::client_config(&fs::read(ca)?).map_err(TaskError::client)?;
     let client = Client::builder()
         .http1_only()
         .no_proxy()
@@ -178,9 +176,7 @@ fn request_to(
         .retry(retry::never())
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(seconds))
-        .tls_backend_rustls()
-        .tls_version_min(Version::TLS_1_3)
-        .tls_certs_only(roots)
+        .use_preconfigured_tls(tls)
         .build()
         .map_err(transport)?;
     let target = format!("{origin}{path}");
@@ -414,6 +410,15 @@ mod transport_tests {
 
     #[test]
     fn private_ca_tls_and_bearer_auth_work_in_the_portable_client() {
+        request_with_certificate("basicConstraints=critical,CA:FALSE");
+    }
+
+    #[test]
+    fn the_exact_legacy_self_signed_broker_certificate_still_works() {
+        request_with_certificate("basicConstraints=critical,CA:TRUE");
+    }
+
+    fn request_with_certificate(constraints: &str) {
         let root = tempfile::tempdir().unwrap();
         let certificate = root.path().join("tls.pem");
         let key = root.path().join("key.pem");
@@ -430,7 +435,7 @@ mod transport_tests {
                 "-addext",
                 "subjectAltName=IP:127.0.0.1",
                 "-addext",
-                "basicConstraints=critical,CA:FALSE",
+                constraints,
             ])
             .output()
             .unwrap();

@@ -361,6 +361,7 @@ pub async fn run(config: &Path) -> Result<(), Box<dyn Error>> {
         certificate,
         Duration::from_secs(8),
     )
+    .http1_only()
     .serve(app.into_make_service())
     .await?;
     Ok(())

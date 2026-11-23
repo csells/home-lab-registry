@@ -1,6 +1,7 @@
 mod process;
 pub mod task_client;
 pub mod task_resume;
+mod task_tls;
 
 pub use lab_workspace as workspace;
 
