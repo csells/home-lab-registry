@@ -1,3 +1,5 @@
+pub mod workspace;
+
 mod native_provider;
 mod tart;
 
