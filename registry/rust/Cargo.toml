@@ -19,7 +19,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 subtle = "2"
-tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "process", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.43", features = ["bundled"] }
 serde_json = "1"

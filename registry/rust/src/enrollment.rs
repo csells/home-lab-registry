@@ -62,7 +62,7 @@ fn sha256(token: &str) -> String {
     hex
 }
 
-fn binding_valid(value: &Value) -> bool {
+pub(crate) fn binding_valid(value: &Value) -> bool {
     matches!(value["kind"].as_str(), Some("native" | "external"))
         && value["provider"]
             .as_str()

@@ -1,3 +1,5 @@
+pub mod deployment;
+
 mod restore;
 pub use restore::restore_export;
 pub mod client;
