@@ -3,17 +3,21 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::Rejected;
+use crate::{Rejected, native_provider::NativeProvider};
 
 #[derive(Clone)]
-pub struct Provider {
-    adapter: PathBuf,
-    settings: PathBuf,
+pub struct Provider(Backend);
+
+#[derive(Clone)]
+enum Backend {
+    Native(Arc<NativeProvider>),
+    Legacy { adapter: PathBuf, settings: PathBuf },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -24,7 +28,7 @@ pub enum ProviderKind {
     Tart,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Slot {
     pub identity: String,
     pub recipe: String,
@@ -60,18 +64,30 @@ pub(crate) fn unavailable() -> Rejected {
 
 impl Provider {
     pub fn new(adapter: PathBuf, settings: PathBuf) -> Self {
-        Self { adapter, settings }
+        Self(Backend::Legacy { adapter, settings })
+    }
+
+    pub fn native(settings: &Value) -> Result<Self, Rejected> {
+        Ok(Self(Backend::Native(Arc::new(NativeProvider::open(
+            settings,
+        )?))))
     }
 
     pub fn call(&self, request: Value) -> Result<Value, Rejected> {
+        let Backend::Legacy { adapter, settings } = &self.0 else {
+            let Backend::Native(provider) = &self.0 else {
+                unreachable!()
+            };
+            return provider.call(request);
+        };
         const OUTPUT_LIMIT: u64 = 256 * 1024;
         let request = serde_json::to_vec(&request).map_err(|_| unavailable())?;
         if request.len() > 128 * 1024 {
             return Err(unavailable());
         }
         let mut child = Command::new("python3")
-            .arg(&self.adapter)
-            .arg(&self.settings)
+            .arg(adapter)
+            .arg(settings)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     net::{IpAddr, SocketAddr},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
@@ -447,7 +447,7 @@ fn tls(settings: &Value) -> Result<Option<RustlsConfig>, Box<dyn Error>> {
     Ok(Some(RustlsConfig::from_config(Arc::new(config))))
 }
 
-pub async fn serve(config: PathBuf, adapter: PathBuf) -> Result<(), Box<dyn Error>> {
+pub async fn serve(config: PathBuf, adapter: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let settings: Value = serde_json::from_slice(&std::fs::read(&config)?)?;
     let credentials = Credentials::read(&settings)?;
     let tls = tls(&settings["tls"])?;
@@ -465,8 +465,16 @@ pub async fn serve(config: PathBuf, adapter: PathBuf) -> Result<(), Box<dyn Erro
         return Err(invalid_configuration().into());
     }
     let listener = std::net::TcpListener::bind(SocketAddr::new(address, port))?;
-    let provider = Provider::new(adapter, config);
-    let controller = Arc::new(Mutex::new(Controller::open(&settings, provider)?));
+    let controller = tokio::task::spawn_blocking(move || {
+        let provider = if let Some(adapter) = adapter {
+            Provider::new(adapter, config)
+        } else {
+            Provider::native(&settings)?
+        };
+        Controller::open(&settings, provider)
+    })
+    .await??;
+    let controller = Arc::new(Mutex::new(controller));
     let app = router(credentials, Some(controller.clone()));
     let handle = Handle::new();
 
@@ -526,8 +534,4 @@ pub async fn serve(config: PathBuf, adapter: PathBuf) -> Result<(), Box<dyn Erro
     checks.abort();
     result?;
     Ok(())
-}
-
-pub fn default_adapter() -> &'static Path {
-    Path::new("provider_adapter.py")
 }

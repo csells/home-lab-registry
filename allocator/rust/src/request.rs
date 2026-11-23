@@ -141,7 +141,7 @@ impl AcquireRequest {
     }
 }
 
-fn public_key(value: &Value) -> Result<String, Rejected> {
+pub(crate) fn public_key(value: &Value) -> Result<String, Rejected> {
     let approved = || {
         Rejected::new(
             "invalid_ssh_key",
