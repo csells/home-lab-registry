@@ -1,8 +1,9 @@
 # React, TypeScript and Rust port
 
-Status — active. Start from the dashboard health review candidate in
-[Plan 0006](0006-dashboard-health-review.md). Keep existing home-lab clients,
-the browser workflow, and persisted state compatible through the port.
+Status — implementation verified in disposable staging. Production promotion
+requires separate approval. The port builds on the dashboard health review
+candidate in [Plan 0006](0006-dashboard-health-review.md) and preserves the
+existing clients, browser workflow, and persisted state.
 
 ## Order of delivery
 
@@ -83,12 +84,38 @@ infer a steady-state CPU difference. A Linux regression test verifies the
 existing self-signed registry certificate and rejects a mismatched hostname.
 Collector streams still require their own TLS 1.3 identity.
 
-## Rust allocator work in progress
+## Rust allocator staging
 
-Native tests verify the existing Python SQLite ledger and independent witness,
-single authority, stale database and controller generations, durable operation
-intent, and unique recovery of an otherwise unknown provider task. They also
-cover lease review and retained-checkpoint availability, owner and reviewer
-holds, renewal, and the requirement for verified export before reclamation.
-The existing allocator still serves the preview while the remaining controller
-routes, provider transitions and recovery are ported and tested.
+Revision `421b062` serves the existing task, review, and worker APIs over TLS. Rust owns admission, lease state, durable provider intent, and checkpoint
+receipts in the existing SQLite ledger. The independent witness still fences
+mutations after a stale database restore or whole-controller rollback.
+Proxmox and Tart operations use the pinned provider tools. Existing workers
+still capture and recover the data through their scoped storage credentials.
+
+Native tests cover task credential issuance and revocation, owner isolation,
+request replay, witness fencing, unique recovery of an unknown provider task,
+renewals and holds, and exact storage receipts. The legacy task API schema and
+the lease review responses from a consistent copy of the actual staging
+database matched.
+
+On the disposable controller, the existing client acquired and resized a
+real Proxmox clone, renewed the lease, restarted the controller, and replayed
+the same request. A second principal was refused access. The task exported
+and recovered its incremental checkpoint, pinned and unpinned it, and restored
+the final checkpoint into a matching replacement with a fresh key. A separate
+fixed-slot lease expired under a 15-second staging grace, stored its workspace,
+and reset automatically. The mobile dashboard showed the live lease.
+
+A single Tart lease survived a controller restart and returned verified SSH
+access. Xcode ran and listed available iPad simulators. The worker then
+exported the declared workspace, the client downloaded and verified its bytes
+after release, and the worker confirmed that the owned clone and workspace
+were gone.
+
+The preview returned to its usual grace period, and the three test task
+credentials were revoked. The existing Python allocator started against the
+same idle ledger during the rollback check. Rust then resumed service, with
+matching lease review counts and history and no active leases or restore
+holds. During two 18-second idle samples, Python used 34.0 MiB RSS and 0.11%
+of one core, and Rust used 8.7 MiB RSS with no measured CPU ticks. These brief
+samples exclude guest and export work.
