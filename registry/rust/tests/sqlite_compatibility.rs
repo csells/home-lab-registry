@@ -1,27 +1,6 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
-
 use lab_registry::Catalog;
+use rusqlite::Connection;
 use serde_json::{Value, json};
-
-fn python(code: &str, paths: &[&Path]) {
-    let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let result = Command::new("python3")
-        .current_dir(cwd)
-        .arg("-c")
-        .arg(code)
-        .args(paths)
-        .output()
-        .expect("Python is required for the transition compatibility test");
-    assert!(
-        result.status.success(),
-        "Legacy command failed: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-}
-
 fn spec(name: &str) -> Value {
     json!({
         "name":name, "host":"test", "owner":"fixtures", "runbook":"test",
@@ -34,22 +13,12 @@ fn spec(name: &str) -> Value {
 fn python_catalog_remains_readable_and_rust_revisions_are_visible_to_legacy_clients() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("catalog.db");
-    python(
-        r#"
-import sys, time
-from registry import Catalog
-c = Catalog(sys.argv[1])
-c.put('service-test', dict(name='Original',host='test',owner='fixtures',runbook='test',
-    capabilities=['test'],dependencies=[],endpoints={},lifecycle='active',resources={
-        'runtime_binding':{'kind':'native','provider':'test','instance':'service'}
-    }), 0)
-c.observe('service-test', {'status':'healthy','evidence':'fixture check'}, revision=1)
-c.report_runtime('service-test', {'state':'present','ttl_seconds':120}, {
-    'kind':'native','provider':'test','instance':'service'
-})
-"#,
-        &[&path],
-    );
+    // Imported from Catalog on the pre-port comparison revision.
+    let legacy = Connection::open(&path).unwrap();
+    legacy
+        .execute_batch(include_str!("fixtures/catalog-0230fe1.sql"))
+        .unwrap();
+    drop(legacy);
     let catalog = Catalog::open(&path).unwrap();
     let before = catalog.get("service-test").unwrap();
     assert_eq!(before["revision"], 1);
@@ -66,47 +35,33 @@ c.report_runtime('service-test', {'state':'present','ttl_seconds':120}, {
     assert_eq!(after["health"]["status"], "unknown");
     assert_eq!(after["runtime_observation"]["state"], "present");
     assert!(after["spec"]["resources"].get("agent_presence").is_none());
-    python(
-        r#"
-import sys
-from registry import Catalog
-c = Catalog(sys.argv[1])
-assert c.get('service-test')['spec']['name'] == 'Renamed'
-history = c.history('service-test')
-assert [row['revision'] for row in history] == [1, 2]
-assert all(row['actor'] == 'writer' for row in history)
-"#,
-        &[&path],
+    let history = catalog.history("service-test").unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| entry["revision"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [1, 2]
     );
+    assert!(history.iter().all(|entry| entry["actor"] == "writer"));
 }
 
 #[test]
 fn export_restores_revision_history_with_existing_operator_tool_and_resets_observations() {
     let tmp = tempfile::tempdir().unwrap();
-    let database = tmp.path().join("source.db");
     let restored = tmp.path().join("restored.db");
     let export = tmp.path().join("export.json");
-    let catalog = Catalog::open(&database).unwrap();
-    catalog.put("service-test", spec("Original"), 0).unwrap();
-    catalog.put("service-test", spec("Renamed"), 1).unwrap();
-    catalog
-        .observe(
-            "service-test",
-            json!({"status":"healthy","evidence":"fixture check"}),
-            Some(2),
-        )
+    let original: Value =
+        serde_json::from_str(include_str!("fixtures/export-0230fe1.json")).unwrap();
+    std::fs::write(&export, serde_json::to_vec(&original).unwrap()).unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_lab-registry-restore"))
+        .args([&export, &restored])
+        .output()
         .unwrap();
-    std::fs::write(
-        &export,
-        serde_json::to_vec(&catalog.export().unwrap()).unwrap(),
-    )
-    .unwrap();
-    python(
-        r#"import runpy, sys
-sys.argv[0] = 'restore.py'
-runpy.run_path('restore.py', run_name='__main__')
-"#,
-        &[&export, &restored],
+    assert!(
+        result.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&result.stderr)
     );
     let recovery = Catalog::open(&restored).unwrap();
     assert_eq!(recovery.get("service-test").unwrap()["revision"], 2);
@@ -115,8 +70,8 @@ runpy.run_path('restore.py', run_name='__main__')
         "unknown"
     );
     assert_eq!(
-        catalog.history("service-test").unwrap(),
-        recovery.history("service-test").unwrap()
+        original["history"]["service-test"],
+        json!(recovery.history("service-test").unwrap())
     );
 }
 
@@ -155,10 +110,6 @@ fn only_bound_routes_move_for_verified_presence_and_legacy_readers_share_the_rec
     assert_eq!(
         guest["spec"]["endpoints"]["api"],
         "http://192.0.2.80:9080/health"
-    );
-    python(
-        "import sys; from registry import Catalog; assert Catalog(sys.argv[1]).get('service-test')['spec']['endpoints']['api']=='http://192.0.2.80:9080/health'",
-        &[&path],
     );
     assert_eq!(
         catalog.export().unwrap()["services"][0]["spec"]["endpoints"]["os"],

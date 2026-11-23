@@ -56,7 +56,7 @@ Proxmox/Cloudpods and Mac-worker recommendations; the
 which reusable components belong here. Deployment policy, inventory, credentials
 and personal integration values remain operator-controlled.
 
-- `registry/`: Python standard-library HTTPS API, SQLite catalog, revisions, health observations, probes and export/restore.
+- `registry/`: Rust HTTPS API, SQLite catalog, revisions, health observations, probes and export/restore.
 - `dashboard/`: read-only dashboard, cached streaming measurements, credential-copy endpoint, and Apache Guacamole session integration.
 - `agent/`: small Go collector using gopsutil, bounded local history and mutually authenticated TLS streams.
 - `deploy/metrics/`: collector installation, stream authentication and overhead validation.
@@ -67,7 +67,12 @@ This repository contains source, examples and the redacted screenshots above. Pr
 
 ## Deployment
 
-Use a dedicated Linux VM with Python 3.11+, Docker Compose and an authenticated HTTPS reverse proxy. Budget at least 2 GiB RAM for registry, dashboard and Guacamole; actual capacity depends on session count. Install Python dependencies from `requirements.txt`. Run the registry with `python3 registry/registry.py --config /etc/lab-registry/config.json`; inspect `--help` and the config fields at the end of that source. Supply TLS certificate/key, database path and independent reader/writer tokens privately. Bind/route the API only to trusted clients. Run the dashboard using `python3 dashboard/server.py` behind your proxy on loopback 8089. Example service-manager units are in `deploy/`; create their unprivileged accounts and make private files readable only by the appropriate service account.
+Use a dedicated Linux VM with an authenticated HTTPS reverse proxy. Docker
+Compose runs the optional Guacamole stack. Build the Rust binaries with Cargo,
+a C toolchain and OpenSSL development files. Provision independent registry
+reader and writer credentials and keep TLS keys and configuration private. The
+[example units](deploy/) run the registry and dashboard as unprivileged
+accounts. The dashboard listens on loopback behind the proxy.
 
 Build the React dashboard asset before installing the dashboard. Node 22.18
 or newer is required on the build machine.
@@ -80,10 +85,10 @@ npm run build --prefix dashboard/frontend
 ```
 
 Install the resulting `dashboard/dashboard-react.js` alongside the dashboard
-HTML and CSS. The server delivers the bundle as a same-origin static asset.
+HTML and CSS. Install the generated `dashboard/vendor/elk-worker.min.js` in the same release. The server delivers both as same-origin assets.
 
 
-### Native service candidate
+### Build and run the services
 
 The disposable review uses the Rust executables with the existing private
 configuration and data formats. Build on the deployment platform with Cargo
@@ -93,6 +98,7 @@ and the platform's C toolchain and OpenSSL development files.
 cargo build --locked --release --manifest-path registry/rust/Cargo.toml
 cargo build --locked --release --manifest-path dashboard/rust/Cargo.toml
 cargo build --locked --release --manifest-path allocator/rust/Cargo.toml
+cargo build --locked --release --manifest-path backup/rust/Cargo.toml
 registry/rust/target/release/lab-registry --config <registry-config.json>
 dashboard/rust/target/release/lab-dashboard <dashboard-directory> 8089
 ```
@@ -121,7 +127,7 @@ See the Guacamole README for terminal deployment. Preserve Authorization through
 
 ## Registry records
 
-The command-line client requires Python 3 and curl. Use `registry/client.py --help`. Credentials are passed privately to curl over stdin; TLS verification and sandbox proxy settings remain enabled. Records require name, host, owner, capabilities, endpoints, lifecycle, runbook and dependencies. Machine records include capability `machine`, `resources.kind: machine`, hardware, and `resources.management_access` entries with `id`, `label`, `url`, `username`, and `password_available`. SSH entries use ID `os` and `browser_terminal: /terminal/<host>/`. Optional `resources.console_login` supplies username, credential_id and password_available for host-console login. Service records can also use `resources.management_access` to show a username and Copy password button on their service card. Provision the password in the private mapping under the service record ID and access entry ID; never put it in registry metadata. Secret values belong only in the private mapping. `config_backup` records status, locations and notes. See tests for schema examples.
+Install `lab-registry-client` and curl. Use `lab-registry-client --help` to inspect the CLI. Credentials are passed privately to curl over stdin; TLS verification and sandbox proxy settings remain enabled. Records require name, host, owner, capabilities, endpoints, lifecycle, runbook and dependencies. Machine records include capability `machine`, `resources.kind: machine`, hardware, and `resources.management_access` entries with `id`, `label`, `url`, `username`, and `password_available`. SSH entries use ID `os` and `browser_terminal: /terminal/<host>/`. Optional `resources.console_login` supplies username, credential_id and password_available for host-console login. Service records can also use `resources.management_access` to show a username and Copy password button on their service card. Provision the password in the private mapping under the service record ID and access entry ID; never put it in registry metadata. Secret values belong only in the private mapping. `config_backup` records status, locations and notes. See tests for schema examples.
 
 Writes require writer authentication and `If-Match` revision preconditions. Readers cannot mutate the catalog. Health observations have expiry; unknown/stale is not proof of downtime. HTTP/TCP probes and local exporters are operator-configured; this is not automatic network discovery.
 
@@ -143,8 +149,6 @@ Take a SQLite-consistent export and back up private configuration, proxy, servic
 ## Tests
 
 ```sh
-(cd registry && python3 -m unittest -v)
-(cd dashboard && python3 -m unittest -v)
 npm --prefix dashboard/frontend ci
 npm --prefix dashboard/frontend run typecheck
 npm --prefix dashboard/frontend test
@@ -152,6 +156,10 @@ npm --prefix dashboard/frontend run build
 cargo test --locked --manifest-path registry/rust/Cargo.toml
 cargo test --locked --manifest-path dashboard/rust/Cargo.toml
 cargo test --locked --manifest-path allocator/rust/Cargo.toml
+cargo test --locked --manifest-path backup/rust/Cargo.toml
+cargo build --locked --manifest-path dashboard/rust/Cargo.toml --example browser_fixture
+(cd dashboard/frontend && npm exec -- playwright install chromium)
+npm --prefix dashboard/frontend run test:browser
 (cd agent && go test -race ./...)
 ```
 

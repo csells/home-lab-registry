@@ -22,3 +22,6 @@ ssh_known_hosts
 /registry/rust/target/
 
 /allocator/rust/target/
+
+/backup/rust/target/
+/backup/review/backup-review.js

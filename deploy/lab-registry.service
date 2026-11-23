@@ -5,7 +5,7 @@ Wants=network-online.target
 [Service]
 User=lab-registry
 Group=lab-registry
-ExecStart=/usr/bin/python3 /opt/lab-registry/registry.py --config /etc/lab-registry/config.json
+ExecStart=/opt/lab-registry/bin/lab-registry --config /etc/lab-registry/config.json
 Restart=on-failure
 RestartSec=3
 StateDirectory=lab-registry

@@ -5,7 +5,7 @@ Wants=network-online.target
 [Service]
 User=lab-dashboard
 WorkingDirectory=/opt/machine-dashboard
-ExecStart=/usr/bin/python3 /opt/machine-dashboard/server.py
+ExecStart=/opt/machine-dashboard/bin/lab-dashboard /opt/machine-dashboard 8089
 Restart=on-failure
 NoNewPrivileges=true
 PrivateTmp=true

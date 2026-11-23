@@ -52,7 +52,7 @@ Disk capacity keeps its 0–100% scale: stable capacity must remain visually sta
 All scales are printed below the charts; current readings show one decimal, and
 the live caption includes the sample time. No synthetic variation is added.
 
-`dashboard/check_charts.py` tests the actual rendered SVG at phone width against
+`dashboard/frontend/tests/browser/charts.test.ts` tests the actual rendered SVG at phone width against
 known changing and constant inputs, using an authenticated disposable preview.
 Provide credentials through `LAB_LOGIN_JSON`; never include credentials in URLs.
 This regression checks rendered pixel differences, not just sample arrival.
@@ -68,7 +68,7 @@ passed. Idle variation also passed the original failing browser check after the 
 ## Address-registration candidate (2026-10-11)
 
 Isolated Debian 13 VM, 2 vCPU / 2 GiB RAM; production services were not its runtime.
-The `tests/registration_e2e.py` fixture used real TLS certificates, a systemd
+The `dashboard/frontend/tests/live/registration-e2e.ts` fixture used real TLS certificates, a systemd
 collector, an actual dummy network interface changing from one IPv4 address to
 another, and a real constrained SSH export. This tests the address-change event;
 it does not claim a router DHCP lease-renewal or physical-host reboot test.

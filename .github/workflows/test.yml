@@ -3,18 +3,10 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  test:
+  typescript:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - run: pip install -r requirements.txt
-      - run: python -W error::ResourceWarning -m unittest discover -s registry -v
-      - run: python -m unittest discover -s allocator -v
-      - run: python -m unittest discover -s dashboard -v
-      - run: PYTHONPATH=backup:registry python -m unittest discover -s backup -v
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -22,17 +14,19 @@ jobs:
       - run: npm run typecheck --prefix dashboard/frontend
       - run: npm test --prefix dashboard/frontend
       - run: npm run build --prefix dashboard/frontend
+      - run: dashboard/frontend/node_modules/.bin/tsc --ignoreConfig --strict --noEmit --target es2022 --lib DOM,ES2022 --module esnext backup/review/checks.ts
   rust-services:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        crate: [registry, dashboard, allocator, backup]
+    env:
+      CRATE: ${{ matrix.crate }}
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
-      - run: cargo +1.98.0 fmt --manifest-path dashboard/rust/Cargo.toml --check
-      - run: cargo +1.98.0 test --locked --manifest-path dashboard/rust/Cargo.toml
-      - run: cargo +1.98.0 fmt --manifest-path registry/rust/Cargo.toml --check
-      - run: cargo +1.98.0 test --locked --manifest-path registry/rust/Cargo.toml
-      - run: cargo +1.98.0 fmt --manifest-path allocator/rust/Cargo.toml --check
-      - run: cargo +1.98.0 test --locked --manifest-path allocator/rust/Cargo.toml
+      - run: cargo +1.98.0 fmt --all --manifest-path "$CRATE/rust/Cargo.toml" --check
+      - run: cargo +1.98.0 test --locked --manifest-path "$CRATE/rust/Cargo.toml"
   collector:
     runs-on: ubuntu-latest
     steps:
@@ -43,27 +37,20 @@ jobs:
           cache-dependency-path: agent/go.sum
       - run: cd agent && go test -race ./...
       - run: cd agent && GOOS=darwin GOARCH=arm64 go build ./...
-  gpu-browser:
+  dashboard-browser:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - run: pip install playwright -r requirements.txt
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm ci --prefix dashboard/frontend
-      - run: npm run build --prefix dashboard/frontend
-      - run: playwright install --with-deps chromium
-      - run: python tests/check_gpu_browser.py
-      - run: python tests/check_map_browser.py
-      - run: python tests/check_discrepancies_browser.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gpu-browser-review
-          path: |
-            gpu-review-*.png
-            map-review-*.png
+      - run: npm ci
+        working-directory: dashboard/frontend
+      - run: npm run build
+        working-directory: dashboard/frontend
+      - run: npm exec -- playwright install --with-deps chromium
+        working-directory: dashboard/frontend
+      - run: rustup toolchain install 1.98.0 --profile minimal
+      - run: cargo +1.98.0 build --locked --manifest-path dashboard/rust/Cargo.toml --example browser_fixture
+      - run: npm run test:browser
+        working-directory: dashboard/frontend

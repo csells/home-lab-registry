@@ -1,7 +1,6 @@
 # Central configuration export
 
-`collect.py` is the Backrest export hook. Install alongside `registry/client.py`
-and `registry/resolve.py`, preserving their relative layout. The runtime base is
+`lab-backup-collect` is the Backrest export hook. Build it using `cargo build --locked --release --manifest-path backup/rust/Cargo.toml`. The runtime base is
 `/opt/backrest`; deployment manifests and credentials remain private.
 
 Sources are resolved from fresh registry presence for each export, with stable SSH
@@ -24,7 +23,7 @@ separately restricted tunnel.
 These bindings and all key material remain private.
 
 The provider key must execute a forced, read-only command for authorized guests.
-`proxmox_observe.py --policy /path/to/private-policy.json` accepts only
+`lab-backup-proxmox-observe --policy /path/to/private-policy.json` accepts only
 `discover ID` where the ID is in the operator-owned policy. That policy contains
 `node` and a `guests` object mapping decimal ID strings to `qemu` or `lxc`.
 It returns `vmid`, `kind`, `uuid` or `volume_id`, `state`, `observed_at` (Unix
@@ -57,7 +56,7 @@ Archive validation checks gzip completion and tar headers without rewriting the
 export. Mac PAX extension metadata remains in the original bytes for native restore;
 it does not produce GNU tar's repeated unknown-extension warnings on Linux.
 
-Run unit checks with `PYTHONPATH=backup:registry python -m unittest discover -s backup -v`.
+Run unit checks with `cargo test --locked --manifest-path backup/rust/Cargo.toml`.
 Real admission, credential and recovery acceptance must additionally run against
 the actual lab from disposable staging.
 
@@ -65,22 +64,27 @@ the actual lab from disposable staging.
 
 For a controller recovery drill, restore the required Backrest bootstrap files
 from an explicit encrypted snapshot into a fresh private directory. Use the
-list in `verify_controller.py` to select the files and `restic restore --verify`
-to verify their bytes. Run `python3 backup/verify_controller.py RESTORE_ROOT`
+list in `rust/src/bin/lab-backup-verify.rs` to select the files and `restic restore --verify`
+to verify their bytes. Run `lab-backup-verify RESTORE_ROOT`
 before starting the recovered controller. The check reports counts without
 printing restored credentials or configuration values. Keep the return of
 the Backrest service and repository access as separate runtime checks.
 
-`review/server.py --report /path/to/redacted-report.json --port 9084` serves a
+`lab-backup-review --report /path/to/redacted-report.json --port 9084` serves a
 loopback-only results page and evidence JSON. Supply only redacted source labels,
 verification statements and remaining gaps. It serves exactly `/`, `/report.json`
-and `/healthz`, never filesystem paths, credentials or backup archives. A separately
+`/healthz` and the generated `/checks.js`. It omits filesystem paths, credentials or backup archives. A separately
 owned authenticated relay may expose it for review; the page does not run tests or
 promote a build when refreshed.
 
-The review server can optionally take `--check /path/to/operator-owned-checks.py`
+The review server can optionally take `--check /path/to/operator-owned-checks`
 and `--origin https://authenticated-review.example`. Its explicit POST action runs
 only that fixed command, admits one job at a time, enforces the configured browser
 origin, and returns bounded status without command output. Refresh remains read-only.
 Use a dedicated disposable staging runtime and the minimum permissions needed by
 those checks; qualification can collect real exports and write temporary staging.
+
+Build the review script with the dashboard's pinned TypeScript toolchain. Run
+npm ci in dashboard/frontend, then run esbuild on backup/review/checks.ts.
+Install the resulting backup-review.js beside lab-backup-review or set --script
+to its path.

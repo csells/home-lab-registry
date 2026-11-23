@@ -11,14 +11,18 @@ Build the reviewed candidate from the repository root.
 
 ```sh
 cargo build --locked --release --manifest-path allocator/rust/Cargo.toml
-allocator/rust/target/release/lab-allocator /path/to/config.json \
-  --provider-adapter /path/to/checkout/allocator/provider_adapter.py
+allocator/rust/target/release/lab-allocator /path/to/config.json
 ```
 
-The native service uses the existing HTTPS routes, private configuration, SQLite
-schema and independent ledger witness. Keep the provider adapter beside its
-Python modules. Existing clients, provider tooling, storage workers and the
-operator's offline ledger enrollment command still apply.
+The service reads the existing private configuration, SQLite schema and
+independent ledger witness. Install the Linux allocator and storage workers
+from the same release and put the portable lab-restore-workspace binary beside
+lab-lease-exporter and lab-checkpoint-worker. On the Mac, install lab-tart-worker
+under the enrolled Tart account. Keep the existing read-only capture and
+storage roles. For a task that targets another platform, place that platform's
+lab-restore-workspace at restore-helpers/RECIPE/lab-restore-workspace beside
+lab-lease or provide its parent directory with --restore-helpers.
+The helper needs no OpenSSL installation inside the guest.
 
 During a staged switch, first verify the provider's pinned identities and
 capacity reads. Stop the old controller and exporter timer at an idle point.
@@ -48,7 +52,7 @@ The API defaults to loopback. A non-loopback listener requires TLS 1.3 and a
 certificate matching the registered endpoint. Each distinct staging bearer
 token identifies one task principal. Lease IDs are checked against that principal on every read or
 mutation. The request key is scoped to that principal. Run with
-`python3 allocator/pilot.py CONFIG.json`. Keep the SQLite database on persistent
+`lab-allocator CONFIG.json`. Keep the SQLite database on persistent
 storage outside the leased guest. Keep secrets in private files. Set the
 following configuration keys:
 
@@ -72,7 +76,7 @@ following configuration keys:
 
 Before first startup set `controller_guest_id` to the controller VM on the provider node
 and `ledger_witness` to a private file outside the database restore set. Run
-`pilot.py CONFIG.json --enroll-ledger` once after confirming the slot is idle.
+`lab-allocator CONFIG.json --enroll-ledger` once after confirming the slot is idle.
 Each ledger commit durably advances a separate revision witness. The controller
 also checks its own Proxmox VM generation using the audit credential, so a
 whole-VM rollback cannot revive an old witness. A mismatch or interrupted
@@ -124,14 +128,14 @@ interface. Obtain the trust material and the task credential through the
 authorized operator path before accessing the endpoint.
 
 The allocator is usable from any agent platform with its standard HTTPS
-interface or the Python client. A trusted launcher can run
-`prepare_task.py CONFIG TASK_REF --reuse` against its private session root
+interface or the native lease client. A trusted launcher can run
+`lab-prepare-task CONFIG TASK_REF --reuse` against its private session root
 to issue or refresh the same task's access. Give the agent only the resulting
 task files. A registry reader token only authorizes discovery. Each shared
 service's registry record specifies its own access procedure.
 
 ```sh
-python3 allocator/client.py --record <record-id> --registry-client <registry.py> \
+lab-lease --record <record-id> --registry-client <lab-registry-client> \
   --ca <ca.pem> --token-file <task-token> acquire --task <task> \
   --request-key <unique-key> --seconds 900 --ssh-public-key <key.pub>
 ```
@@ -142,12 +146,12 @@ returns JSON, with structured rejection details on stderr and exit status 2.
 Capacity rejections require a new caller decision. The client never retries
 mutations automatically.
 
-A task with a supplied manifest uses `client.py --session SESSION capabilities`
-and `client.py --session SESSION leases` to find suitable recipes and its own
+A task with a supplied manifest uses `lab-lease --session SESSION capabilities`
+and `lab-lease --session SESSION leases` to find suitable recipes and its own
 recent environments. The same input works for acquisition, renewal and
 checkpoint recovery.
 
-Use `client.py --session SESSION contract` or the authenticated
+Use `lab-lease --session SESSION contract` or the authenticated
 `GET /v1/contract` to discover the core routes and versioned JSON schemas for
 acquisition, renewal and release. Capability discovery reports the same API
 version and the currently qualified recipes. Requests still need to fit the
@@ -197,7 +201,7 @@ and delegated reviewer identities remain open.
 
 ### Backup worker
 
-Run `python3 allocator/exporter.py CONFIG.json` once per scheduling tick.
+Run `lab-lease-exporter CONFIG.json` once per scheduling tick.
 Configure the private controller `endpoint`, `ca_file`, scoped
 `verifier_token_file`, private `lock_file`, and the owned `guest_id`.
 Supply `capture_command` and `restic_command` as argument arrays. The capture
@@ -229,7 +233,7 @@ It does not prune repository-wide data. Expiry stays outstanding until the
 worker independently confirms the snapshot is absent. Metadata remains.
 
 Set `recovery.endpoint` and `recovery.worker_token_file` in the controller.
-Run `recovery.py` with the private TLS listener settings, controller HTTPS
+Run `lab-checkpoint-worker` with the private TLS listener settings, controller HTTPS
 endpoint and CA, the separate recovery worker token, and a read-only Restic
 adapter. Recovery never receives the task's general credential. An owner can
 run `recover <id> --output <archive.tar.gz>` after release. A short-lived
@@ -292,7 +296,7 @@ that act outside this allocator still need a shared admission authority.
 
 ### Restricting backup access
 
-Run `restic_scope.py` on the storage side with a private configuration
+Run `lab-restic-scope` on the storage side with a private configuration
 that sets `role` to `read`, `write`, or `expire` and binds the underlying
 `restic_command` to a dedicated encrypted allocator repository. Use
 separate credentials for the three command endpoints. Keep repository
@@ -303,7 +307,7 @@ Set the exporter's optional `retention_command` to the expiry endpoint.
 The standalone restic role uses a trusted deployment configuration.
 Never allow a caller to supply that configuration or repository argument.
 
-For an SSH adapter, bind each key to `restic_scope.py <private-role-config>
+For an SSH adapter, bind each key to `lab-restic-scope <private-role-config>
 --ssh-original-command` with OpenSSH's `restrict` and `command` key options.
 Configure the role and repository on the storage side. Each forced command
 parses arguments as data and refuses shell and out-of-role commands. Use
@@ -314,7 +318,7 @@ credentials differ.
 ### Export-failure notifications
 
 Configure a separate `reclamation.alert_token_file` on the controller and give
-only that credential to a scheduled `alerts.py CONFIG` worker. The worker
+only that credential to a scheduled `lab-lease-alert CONFIG` worker. The worker
 can read and acknowledge alerts. It has no lease, export or storage authority.
 A failed final export and its alert are recorded together in the lease ledger.
 Repeated failures of the same export attempt create one notification.
@@ -355,8 +359,8 @@ until the compressed raw stream finishes or times out. It opens no guest
 filesystem. Administrative storage writes outside Proxmox still require
 operator coordination.
 
-On the isolated worker, use `cold_capture.py CONFIG GUEST LEASE` as the
-exporter's capture command. Install Debian's `python3-guestfs` and its QEMU
+On the isolated worker, use `lab-cold-capture CONFIG GUEST LEASE` as the
+exporter's capture command. Install Debian's `guestfish` and its QEMU
 appliance there. Configure `source_command` as an argument array for the
 pinned SSH command, `spool_dir` as a disposable private directory,
 `disk_bytes` as the exact raw size, and `max_spool_bytes` as a bounded
@@ -422,7 +426,7 @@ override preserves the affected principal, prior reason and data disposition.
 
 Use `resume <predecessor> --task <task> --request-key <new-operation-key>
 --seconds <duration> --identity <new-private-key>` with the owner's ordinary
-credential. The task client requires the adjacent `restore_workspace.py`
+credential. The task client requires the adjacent `lab-restore-workspace`
 helper and a fresh Ed25519 identity. The controller reserves the selected recovery point until the replacement acknowledges the restore or releases the slot. An interrupted restore can resume using the same request key. The controller records the predecessor,
 requirements and chosen acknowledged checkpoint on the replacement. The
 default selects a retained final checkpoint, otherwise the newest available
@@ -468,7 +472,7 @@ status and a recognized diagnostic without publishing raw stderr.
 
 ### Multi-host placement preflight
 
-`placement.py INPUT` matches a Linux recipe against fresh, trusted observations
+`lab-placement INPUT` matches a Linux recipe against fresh, trusted observations
 from eligible workers. Each observation supplies a registry machine ID, timestamp,
 qualified recipe resources, measured memory and disk headroom, and the configured
 post-start minimums. It prefers the smallest available worker that fits and reports
@@ -572,7 +576,7 @@ reuse the retained checkpoint to create a matching replacement.
 
 ### Apple worker enrollment
 
-Run `tart_worker.py` as the operator-managed Tart account on the Mac. Enroll a
+Run `lab-tart-worker` as the operator-managed Tart account on the Mac. Enroll a
 single stopped template with its configuration digest, a dedicated private
 worker state directory, measured memory and storage floors, and an allowed
 DHCP IPv4 scope. Connect the staging controller through a pinned SSH tunnel.
@@ -580,7 +584,7 @@ The worker HTTP listener binds to loopback. Supply different control and
 capture credentials. Tasks receive neither credential and connect directly to
 the guest with their scoped SSH key.
 
-Run `python3 allocator/tart_worker.py CONFIG.json --preflight` to check the
+Run `lab-tart-worker CONFIG.json --preflight` to check the
 existing template pin, credential separation, idle slot and local headroom.
 The command does not start a worker or boot a guest. Keep worker state and the
 real configuration private. For routine simulator tests on an approved Mac,
@@ -594,14 +598,14 @@ creates its own SSH host identity and installs the task public key. The
 task's declared workspace is the project directory in its dedicated share.
 
 Enroll the matching export slot with `workspace_capture: true` and call
-`tart_capture.py` with the private capture configuration. Capture reads the
+`lab-tart-capture` with the private capture configuration. Capture reads the
 exact stopped workspace. The normal exporter validates the archive and
 checks an encrypted readback before the controller permits deletion.
 
-The trusted launcher runs `prepare_task.py` with a private registry client
+The trusted launcher runs `lab-prepare-task` with a private registry client
 configuration, the registered controller ID, its CA, and a scoped issuer
 credential. The task receives only a private access directory and passes
-its `session.json` to `client.py --session`. It can query `capabilities`
+its `session.json` to `lab-lease --session`. It can query `capabilities`
 and request `{"os":"macos","architecture":"arm64"}` through the usual
 `acquire` command. A replacement uses a fresh SSH key. Revoke the task
 credential and clean up its local access files after the task's environment
@@ -618,7 +622,7 @@ storage. Before start it compares the clone's network profile while allowing
 the provider-assigned MAC. Existing unversioned bindings retain their
 configuration; changing an enrolled version requires a deliberate re-enrollment.
 
-Run `maintenance.py OBSERVATION.json` with the current and desired recipes,
+Run `lab-lease-maintenance OBSERVATION.json` with the current and desired recipes,
 latest admitted lease owners, and observed spare capacity. It reports whether
 the change entails a reboot, disk growth, or replacement and calculates
 additional capacity while both generations exist. Use the reported blocker

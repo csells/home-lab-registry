@@ -6,21 +6,21 @@ The registry is the sole source of information about available machines and thei
 
 Resolve the registry URL, TLS CA and credentials from private `~/.config/home-lab/registry.json`, `LAB_REGISTRY_CONFIG`, or the client's `--config PATH`. The private config contains `url`, `ca_file`, `reader_token` and optionally `writer_token`. Protect it with mode 0600. Give consumers reader access only; never print tokens or put secrets in catalog records, command arguments or Git. Do not hardcode a registry host/address in this skill.
 
-The client requires Python 3 and curl. It reads credentials privately and sends curl configuration through stdin; credentials are not placed in command arguments or temporary files. Keep the sandbox proxy enabled and allow only the registry hostname reported by its network denial. A denied hostname, HTTP authorization error and interrupted response are different failures.
+The native client requires curl. It reads credentials privately and sends curl configuration through stdin; credentials are not placed in command arguments or temporary files. Keep the sandbox proxy enabled and allow only the registry hostname reported by its network denial. A denied hostname, HTTP authorization error and interrupted response are different failures.
 
 The curl transport avoids an upstream sandbox CONNECT-proxy tail-loss bug triggered by urllib's connection-close behavior ([upstream issue](https://github.com/anthropics/sandbox-runtime/issues/606)). It verifies TLS, refuses redirects, validates the complete JSON response and retries transient GET failures at most twice. Writes are never automatically replayed: after an ambiguous write failure, fetch the record and compare its revision/state before deciding what remains necessary. Do not extract tokens manually or disable TLS/sandbox restrictions to troubleshoot.
 
 If an agent tool truncates *displayed output* while the client exits successfully, save stdout to a task-owned file and select the required JSON fields. An `IncompleteRead`, curl transfer error, nonzero exit or empty file is an actual fetch failure, not display truncation. Preserve stderr and report the failing path; repeating a deterministic failure indefinitely is not recovery.
 
-Direct API requests must send `User-Agent: HomeLabRegistry/1` along with the bearer credential. The public access layer can reject Python’s default User-Agent with HTTP 403 / Cloudflare error 1010 before the registry sees the request. This is distinct from the registry’s 403 `Write credential required`, which requires a writer credential. Do not disable TLS verification or remove authentication to work around either error.
+Direct API requests must send `User-Agent: HomeLabRegistry/1` along with the bearer credential. The public access layer can reject unrecognized User-Agent values with HTTP 403 / Cloudflare error 1010 before the registry sees the request. This is distinct from the registry’s 403 `Write credential required`, which requires a writer credential. Do not disable TLS verification or remove authentication to work around either error.
 
-Resolve the installed skill directory and invoke its `scripts/registry.py` client. Examples below use `registry.py` as shorthand for that resolved command:
+Run the installed lab-registry-client. If it is missing, use the operator-approved release of the registry repository. Build registry/rust with Cargo and install its lab-registry-client binary on the agent’s PATH. Then verify reader access with the commands below.
 
 ```sh
-registry.py list --capability machine
-registry.py get RECORD_ID
-registry.py list --capability REQUIRED_CAPABILITY
-registry.py list --host HOST_NAME
+lab-registry-client list --capability machine
+lab-registry-client get RECORD_ID
+lab-registry-client list --capability REQUIRED_CAPABILITY
+lab-registry-client list --host HOST_NAME
 ```
 
 Machine records use the `machine` capability and `spec.resources.kind: "machine"`; IDs follow `machine-<name>`. Services and machines share the existing catalog API namespace. Discover IDs through the list response rather than assuming names. Historical evidence records are archives, not available workers.
@@ -36,10 +36,10 @@ For a machine, use a `machine-<name>` ID, capability `machine`, and `resources.k
 Each spec requires `name`, `host`, `owner`, `capabilities`, `endpoints`, `lifecycle`, `runbook` and `dependencies`. Use `credential_ref`, `deployment`, `resources`, `notes`, `backup`, `config_backup` and `probe` as applicable. Endpoint URLs must be credential-free. Write a spec JSON file, not the surrounding response envelope.
 
 ```sh
-registry.py put RECORD_ID SPEC.json --revision 0
-registry.py get RECORD_ID
-registry.py put RECORD_ID SPEC.json --revision CURRENT_REVISION
-registry.py history RECORD_ID
+lab-registry-client put RECORD_ID SPEC.json --revision 0
+lab-registry-client get RECORD_ID
+lab-registry-client put RECORD_ID SPEC.json --revision CURRENT_REVISION
+lab-registry-client history RECORD_ID
 ```
 
 Revision 0 creates; updates require the fetched revision. Preserve unrelated fields. On conflict, fetch and deliberately merge; never blindly overwrite with a newer revision. Read back the record after mutation. Update both host setup and affected service records after changes; adding a machine, template or service does not require a skill edit.
@@ -47,14 +47,14 @@ Revision 0 creates; updates require the fetched revision. Preserve unrelated fie
 After functional validation, publish bounded evidence:
 
 ```sh
-registry.py observe RECORD_ID --status healthy --evidence 'actual check and result' --ttl 300
+lab-registry-client observe RECORD_ID --status healthy --evidence 'actual check and result' --ttl 300
 ```
 
 Use unhealthy/unknown when appropriate. Updating a record invalidates old health evidence. Configure recurring probes or reporters and verify a scheduled run; a one-time observation is not monitoring.
 
 HTTP probes use `{"url":"https://example.internal/healthz","vantage":"registry","expected_status":200}`. They must be credential-free and return directly without redirects. TCP probes use `{"tcp_host":"HOST","tcp_port":22,"vantage":"registry"}` and establish connectivity only. Discover any additional supported reporter vantage points and bounded local checks through the registry service's runbook. Records must not provide arbitrary executable check commands. Verify readiness failures are not hidden by HTTP 200. Registration is explicit: deployment agents maintain records; process discovery is not automatic.
 
-After authorized teardown, use `registry.py retire RECORD_ID --revision CURRENT_REVISION`; history remains. `list --include-retired` includes retired entries. Check dependencies before retiring a host or shared service. Archive old evidence rather than presenting it as current setup or ongoing authorization.
+After authorized teardown, use `lab-registry-client retire RECORD_ID --revision CURRENT_REVISION`; history remains. `list --include-retired` includes retired entries. Check dependencies before retiring a host or shared service. Archive old evidence rather than presenting it as current setup or ongoing authorization.
 
 ## Backups and registry recovery
 

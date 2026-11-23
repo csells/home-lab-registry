@@ -1,0 +1,45 @@
+{
+  "exported_at": 1795418420.907551,
+  "history": {
+    "service-test": [
+      {
+        "actor": "writer",
+        "document": "{\"capabilities\": [\"test\"], \"dependencies\": [], \"endpoints\": {}, \"host\": \"test\", \"lifecycle\": \"active\", \"name\": \"Original\", \"owner\": \"fixtures\", \"resources\": {\"runtime_binding\": {\"instance\": \"service\", \"kind\": \"native\", \"provider\": \"test\"}}, \"runbook\": \"test\"}",
+        "revision": 1,
+        "updated": 1795418420.880507
+      },
+      {
+        "actor": "writer",
+        "document": "{\"capabilities\": [\"test\"], \"dependencies\": [], \"endpoints\": {}, \"host\": \"test\", \"lifecycle\": \"active\", \"name\": \"Renamed\", \"owner\": \"fixtures\", \"resources\": {\"runtime_binding\": {\"instance\": \"service\", \"kind\": \"native\", \"provider\": \"test\"}}, \"runbook\": \"test\"}",
+        "revision": 2,
+        "updated": 1795418420.901689
+      }
+    ]
+  },
+  "services": [
+    {
+      "id": "service-test",
+      "revision": 2,
+      "spec": {
+        "capabilities": [
+          "test"
+        ],
+        "dependencies": [],
+        "endpoints": {},
+        "host": "test",
+        "lifecycle": "active",
+        "name": "Renamed",
+        "owner": "fixtures",
+        "resources": {
+          "runtime_binding": {
+            "instance": "service",
+            "kind": "native",
+            "provider": "test"
+          }
+        },
+        "runbook": "test"
+      },
+      "updated_at": 1795418420.901689
+    }
+  ]
+}

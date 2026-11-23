@@ -1,5 +1,6 @@
 [package]
 name = "lab-allocator"
+default-run = "lab-allocator"
 version = "0.1.0"
 edition = "2024"
 publish = false

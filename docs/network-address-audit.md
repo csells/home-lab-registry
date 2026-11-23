@@ -4,7 +4,7 @@ The audit is a read-only deterministic job run on demand from an operator
 machine, not from the internet-facing dashboard:
 
 ```sh
-python3 dashboard/network_audit.py PRIVATE_DIRECTORY
+lab-network-audit PRIVATE_DIRECTORY
 ```
 
 It prints the result as JSON and exits nonzero when no result could be
@@ -38,7 +38,7 @@ Candidate work and tests run in a disposable VM; production promotion still
 requires approval.
 
 Run tests in the candidate VM with:
-`python3 -m unittest discover -s tests -p test_network_audit.py`.
+`cargo test --locked --manifest-path dashboard/rust/Cargo.toml --test network_contract`.
 
 ## Extended verification and runtime state
 
@@ -52,7 +52,10 @@ Provision pins through a trusted access path; do not automatically trust a newly
 observed certificate. HTTP-only appliance APIs must remain on the trusted LAN.
 
 Home Assistant OS uses guest-agent execution of `ip` and NetworkManager tools,
-without requiring Python. Ordinary running Linux guests use Python. Stopped
+through its supported CLI. Install lab-network-collect on each authorized host
+and on ordinary Linux guests that require live configuration coverage. Host
+targets can set collector_bin to an absolute installed path and use the existing
+pinned SSH credentials. Stopped
 single-NIC Proxmox guests are inspected with read-only loop devices and ext4
 `ro,noload` mounts; temporary mounts and volume activation are cleaned up.
 Saved pending interface profiles are included. Cloud-init templates with no
@@ -64,9 +67,8 @@ SystemConfiguration. None of these readers boots a guest.
 Results distinguish live verification, offline configuration verification,
 addresses outside the household LAN, violations, and missing evidence. Offline
 verification does not certify runtime behavior or arbitrary startup scripts.
-Host Python needs PyYAML when inspecting netplan YAML offline. Appliance readers
-need cryptography in the dashboard environment. SSH access is pinned; restricted
-Mac access can use a pinned SSH jump host without relaxing authorized-key rules.
+The collector parses supported saved netplan YAML and macOS network plists.
+Restricted Mac access can use a pinned SSH jump host.
 
 Guest power state on the dashboard comes from each machine's metrics agent
 (`/guests` on its mutually authenticated listener), not from this audit or SSH.

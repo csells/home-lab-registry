@@ -60,7 +60,7 @@ trusted channel. Guacamole receives the pinned host key with every connection;
 address changes do not trigger trust-on-first-use. Never pin a newly discovered
 key merely because its IP matches an announcement.
 
-`backup/collect.py` resolves the registered source before every export and requires
+`lab-backup-collect` resolves the registered source before every export and requires
 current presence. Its manifest uses `machine_id`, `username`, optional `port` and
 `filename`, instead of `user@IP`. The backup reader configuration is private at
 `private/registry-reader.json`; the SSH known-hosts alias must equal `machine_id`.
@@ -85,7 +85,7 @@ be enrolled or validated until they return.
 
 ## Qualification
 
-Run unit tests and `tests/registration_e2e.py` inside a disposable Linux VM only.
+Run unit tests and `dashboard/frontend/tests/live/registration-e2e.ts` inside a disposable Linux VM only.
 The end-to-end test requires root and `DISPOSABLE_VM_TEST=1`: it creates a dummy
 interface, real certificates, a system service, and an isolated registry, changes
 the interface address, verifies discovery/streaming and exports through real SSH.
