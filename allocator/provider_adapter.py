@@ -69,6 +69,7 @@ class Adapter:
             return {key: {
                 'identity': slot.identity(), 'recipe': slot.recipe, 'user': slot.user,
                 'host_key': slot.host_key, 'node': slot.provider.node, 'guest_id': slot.provider.guest_id,
+                'name': slot.provider.name if not slot.deletes_on_release else None,
                 'kind': 'tart' if slot.apple else 'dynamic' if slot.dynamic else 'fixed',
             } for key, slot in slots.items()}
         requested_slot = request.get('slot_id')

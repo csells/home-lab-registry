@@ -30,6 +30,7 @@ pub struct Slot {
     pub recipe: String,
     pub user: String,
     pub host_key: Option<String>,
+    pub name: Option<String>,
     pub node: String,
     pub guest_id: String,
     pub kind: ProviderKind,

@@ -35,6 +35,18 @@ pub fn lease_review(
     scope: &str,
     now: f64,
 ) -> Result<Value, Rejected> {
+    let tx = db.transaction()?;
+    let result = review_snapshot(&tx, before, scope, now)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+pub(crate) fn review_snapshot(
+    db: &Connection,
+    before: Option<&str>,
+    scope: &str,
+    now: f64,
+) -> Result<Value, Rejected> {
     let restriction = match scope {
         "all" | "counts" | "issues" => "1",
         "current" => "phase!='released'",
@@ -56,8 +68,7 @@ pub fn lease_review(
                 })
         })
         .transpose()?;
-    let tx = db.transaction()?;
-    let (active,released) = tx.query_row(
+    let (active,released) = db.query_row(
         "SELECT COUNT(*) FILTER (WHERE phase!='released'), COUNT(*) FILTER (WHERE phase='released') FROM lease",
         [], |row| Ok((row.get::<_,i64>(0)?,row.get::<_,i64>(1)?)),
     )?;
@@ -71,17 +82,15 @@ pub fn lease_review(
             ));
         }
         if scope == "issues" {
-            let (issues, deadline) = issues(&tx, now)?;
+            let (issues, deadline) = issues(db, now)?;
             result["issues"] = json!(issues);
             result["next_deadline"] = json!(deadline);
         }
-        tx.commit()?;
         return Ok(result);
     }
-    let (records, next) = page(&tx, before, restriction, now)?;
+    let (records, next) = page(db, before, restriction, now)?;
     result["leases"] = json!(records);
     result["next_before"] = json!(next);
-    tx.commit()?;
     Ok(result)
 }
 
