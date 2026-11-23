@@ -219,19 +219,29 @@ struct Appliance(String);
 
 impl Appliance {
     fn start() -> io::Result<Self> {
-        let response = lab_allocator::bounded_command(
-            Command::new("guestfish").args(["--listen", "--ro"]),
-            None,
-            Duration::from_secs(10),
-            4096,
-        )?;
-        let reply = String::from_utf8_lossy(&response.stdout);
+        // The guestfish listener inherits output descriptors after its
+        // launcher exits. A pipe would never reach EOF before the appliance exits.
+        let mut output = tempfile::tempfile()?;
+        let mut launcher = Command::new("guestfish")
+            .args(["--listen", "--ro"])
+            .stdin(Stdio::null())
+            .stdout(output.try_clone()?)
+            .stderr(Stdio::null())
+            .spawn()?;
+        let Some(status) = launcher.wait_timeout(Duration::from_secs(10))? else {
+            launcher.kill()?;
+            launcher.wait()?;
+            return Err(reject("Read-only guestfish launcher did not finish."));
+        };
+        output.rewind()?;
+        let mut reply = String::new();
+        output.take(4096).read_to_string(&mut reply)?;
         let id = reply
             .split(';')
             .next()
             .and_then(|text| text.trim().strip_prefix("GUESTFISH_PID="))
             .filter(|value| value.parse::<u32>().is_ok_and(|id| id > 1));
-        if !response.status.success() || id.is_none() {
+        if !status.success() || id.is_none() {
             return Err(reject("Could not start the read-only guestfish appliance."));
         }
         Ok(Self(id.unwrap_or_default().to_owned()))

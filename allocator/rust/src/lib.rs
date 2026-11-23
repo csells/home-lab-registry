@@ -5,6 +5,7 @@ pub mod task_resume;
 pub use lab_workspace as workspace;
 
 mod native_provider;
+pub mod operators;
 pub mod restic_scope;
 mod storage;
 pub use storage::{run_exporter, worker_lock};

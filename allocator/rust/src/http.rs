@@ -447,7 +447,7 @@ pub(crate) fn tls(settings: &Value) -> Result<Option<RustlsConfig>, Box<dyn Erro
     Ok(Some(RustlsConfig::from_config(Arc::new(config))))
 }
 
-pub async fn serve(config: PathBuf, adapter: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
+pub async fn serve(config: PathBuf) -> Result<(), Box<dyn Error>> {
     let settings: Value = serde_json::from_slice(&std::fs::read(&config)?)?;
     let credentials = Credentials::read(&settings)?;
     let tls = tls(&settings["tls"])?;
@@ -466,11 +466,7 @@ pub async fn serve(config: PathBuf, adapter: Option<PathBuf>) -> Result<(), Box<
     }
     let listener = std::net::TcpListener::bind(SocketAddr::new(address, port))?;
     let controller = tokio::task::spawn_blocking(move || {
-        let provider = if let Some(adapter) = adapter {
-            Provider::new(adapter, config)
-        } else {
-            Provider::native(&settings)?
-        };
+        let provider = Provider::native(&settings)?;
         Controller::open(&settings, provider)
     })
     .await??;

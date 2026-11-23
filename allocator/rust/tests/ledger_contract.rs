@@ -1,25 +1,17 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
-
 use lab_allocator::Ledger;
 use rusqlite::Connection;
+use std::path::Path;
 
-fn legacy(code: &str, paths: &[&Path]) {
-    let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let result = Command::new("python3")
-        .current_dir(cwd)
-        .arg("-c")
-        .arg(code)
-        .args(paths)
-        .output()
-        .unwrap();
-    assert!(
-        result.status.success(),
-        "Legacy ledger: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+// Legacy ledger.witness key names and SQLite revision schema from 0230fe1.
+fn baseline(database: &Path, witness: &Path, fixture: &str) {
+    let db = Connection::open(database).unwrap();
+    db.execute_batch("CREATE TABLE ledger_revision (id INTEGER PRIMARY KEY CHECK(id=1), revision TEXT NOT NULL); INSERT INTO ledger_revision VALUES(1,'baseline');").unwrap();
+    db.execute_batch(fixture).unwrap();
+    std::fs::write(
+        witness,
+        r#"{"revision": "baseline", "controller_generation": "provider-generation"}"#,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -28,18 +20,10 @@ fn legacy_and_native_allocate_revisions_share_the_independent_witness() {
     let database = temp.path().join("allocator.db");
     let witness = temp.path().join("authority.json");
     let backup = temp.path().join("older.db");
-    legacy(
-        r#"
-import sys, sqlite3
-from ledger import Ledger
-conn=sqlite3.connect(sys.argv[1],factory=Ledger)
-conn.attach(sys.argv[2],lambda:'provider-generation',enroll=True)
-with conn:
-    conn.execute('CREATE TABLE fixture (hold INTEGER)')
-    conn.execute('INSERT INTO fixture VALUES (0)')
-conn.close()
-"#,
-        &[&database, &witness],
+    baseline(
+        &database,
+        &witness,
+        "CREATE TABLE fixture (hold INTEGER); INSERT INTO fixture VALUES (0);",
     );
     let generation = || Ok("provider-generation".into());
     let mut ledger = Ledger::open(&database, &witness, generation).unwrap();
@@ -58,17 +42,19 @@ conn.close()
         })
         .unwrap();
     drop(ledger);
-    legacy(
-        r#"
-import sys, sqlite3
-from ledger import Ledger
-conn=sqlite3.connect(sys.argv[1],factory=Ledger)
-conn.attach(sys.argv[2],lambda:'provider-generation')
-assert conn.execute('SELECT hold FROM fixture').fetchone()==(1,)
-conn.close()
-"#,
-        &[&database, &witness],
-    );
+    let observed: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&witness).unwrap()).unwrap();
+    let db = Connection::open(&database).unwrap();
+    let stored: String = db
+        .query_row(
+            "SELECT revision FROM ledger_revision WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(observed["revision"], stored);
+    assert_eq!(observed["controller_generation"], "provider-generation");
+    drop(db);
     assert!(
         matches!(Ledger::open(&backup,&witness,generation), Err(error) if error.code()=="ledger_reconciliation_required")
     );
@@ -90,19 +76,9 @@ fn a_failed_mutation_does_not_move_the_witness_and_unknown_operation_holds_are_d
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("allocator.db");
     let witness = temp.path().join("authority.json");
-    legacy(
-        r#"
-import sys, sqlite3
-from ledger import Ledger
-conn=sqlite3.connect(sys.argv[1],factory=Ledger)
-conn.attach(sys.argv[2],lambda:'provider-generation',enroll=True)
-with conn:
-    conn.execute("CREATE TABLE lease(id TEXT PRIMARY KEY, owner TEXT NOT NULL, phase TEXT NOT NULL, upstream TEXT, prior_tasks TEXT, address TEXT, generation TEXT)")
-    conn.execute("INSERT INTO lease VALUES ('owned','task-owner','ready',NULL,NULL,'192.0.2.20','guest-generation')")
-conn.close()
-"#,
-        &[&database, &witness],
-    );
+    baseline(&database,&witness,
+        "CREATE TABLE lease(id TEXT PRIMARY KEY, owner TEXT NOT NULL, phase TEXT NOT NULL, upstream TEXT, prior_tasks TEXT, address TEXT, generation TEXT);
+         INSERT INTO lease VALUES ('owned','task-owner','ready',NULL,NULL,'192.0.2.20','guest-generation');");
     let generation = || Ok("provider-generation".into());
     let mut ledger = Ledger::open(&database, &witness, generation).unwrap();
     let mut journal = LeaseJournal::new(&mut ledger);

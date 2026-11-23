@@ -108,7 +108,7 @@ fn reservations(request: &Value) -> Result<[i64; 2], Rejected> {
     Ok(values)
 }
 
-fn verify_requirements(
+pub(crate) fn verify_requirements(
     requirements: &Value,
     offers: &Value,
     dependencies: &Value,

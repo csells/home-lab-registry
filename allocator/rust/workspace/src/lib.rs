@@ -148,7 +148,7 @@ pub fn verify_workspace_with_limit(source: impl Read, target: &Path, limit: u64)
     extract_tar(unpacked, target, limit)
 }
 
-fn decode_gzip(source: impl Read, target: &mut impl Write, limit: u64) -> io::Result<()> {
+pub fn decode_gzip(source: impl Read, target: &mut impl Write, limit: u64) -> io::Result<()> {
     let mut input = BufReader::new(source);
     let mut left = limit;
     loop {
@@ -298,9 +298,25 @@ pub fn restore(
         .truncate(true)
         .open(target.join(RECEIPT))?;
     serde_json::to_writer(&mut marker, &identity)?;
-    marker.sync_all()?;
+    sync_restore_marker(&marker)?;
     fs::rename(&target, &workspace)?;
     Ok("restored")
+}
+
+#[cfg(target_os = "macos")]
+fn sync_restore_marker(marker: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // macOS File::sync_all uses F_FULLFSYNC, which VirtioFS shared folders
+    // refuse. The standard fsync works on the shared workspace.
+    if unsafe { libc::fsync(marker.as_raw_fd()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_restore_marker(marker: &File) -> io::Result<()> {
+    marker.sync_all()
 }
 
 struct LimitedWriter<W> {

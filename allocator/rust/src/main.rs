@@ -6,10 +6,8 @@ use clap::Parser;
 #[command(about = "Run the home-lab lease allocator.")]
 struct Options {
     configuration: PathBuf,
-    #[arg(long, conflicts_with = "provider_adapter")]
+    #[arg(long)]
     enroll_ledger: bool,
-    #[arg(long, hide = true)]
-    provider_adapter: Option<PathBuf>,
 }
 
 #[tokio::main(worker_threads = 2)]
@@ -25,5 +23,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Idle slot and independent ledger witness enrolled.");
         return Ok(());
     }
-    lab_allocator::http::serve(options.configuration, options.provider_adapter).await
+    lab_allocator::http::serve(options.configuration).await
 }
