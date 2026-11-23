@@ -261,8 +261,11 @@ async function main(): Promise<void> {
     const memory = readFileSync("/proc/meminfo", "utf8").match(/^MemTotal:\s+(\d+)/m);
     assert.ok(memory);
     const share = rss / (Number(memory[1]) * 1024);
-    assert.ok(cpu < 1 && share < 0.01);
-    console.log("PASS collection and address migration with idle CPU " + cpu.toFixed(4) + "% and RAM " + (share * 100).toFixed(3) + "%");
+    const overhead = "Idle CPU " + cpu.toFixed(4) + "%, RAM " + (rss / 1024 ** 2).toFixed(2)
+      + " MiB (" + (share * 100).toFixed(3) + "%)";
+    console.log(overhead);
+    assert.ok(cpu < 1 && share < 0.01, overhead + " exceeds the 1% budget");
+    console.log("PASS collection, address migration, and idle overhead budget");
     if (keep) {
       const assets = join(root, "dashboard");
       const privateDirectory = join(assets, "private");
