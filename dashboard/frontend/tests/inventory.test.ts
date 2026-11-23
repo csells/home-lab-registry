@@ -90,3 +90,15 @@ test('an invalid event leaves the last usable snapshot intact', () => {
   assert.throws(() => store.apply({ ...snapshot(21), backups: { items: [] } }, 'stream'), /Invalid inventory/);
   assert.equal(store.read().inventory.fetched_at, 20);
 });
+
+test('a startup event cannot hide Leases when the initial inventory response arrives out of order', () => {
+  const store = new DashboardInventory();
+  store.apply(snapshot(30), 'stream');
+  store.apply({ ...snapshot(29), lease_review_enabled: true });
+  assert.equal(store.read().inventory.fetched_at, 30);
+  assert.equal(store.read().inventory.lease_review_enabled, true);
+  store.apply({ ...snapshot(31), lease_review_enabled: false });
+  store.apply({ ...snapshot(28), lease_review_enabled: true });
+  store.apply(snapshot(32), 'stream');
+  assert.equal(store.read().inventory.lease_review_enabled, false);
+});

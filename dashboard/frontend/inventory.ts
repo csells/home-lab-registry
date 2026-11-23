@@ -167,6 +167,7 @@ export class DashboardInventory {
   private listeners = new Set<() => void>();
   private transport: ComparisonTransport;
   private comparisonRun = 0;
+  private leaseAvailabilityAt = -Infinity;
 
   constructor(transport: ComparisonTransport = browserTransport) {
     this.transport = transport;
@@ -197,19 +198,27 @@ export class DashboardInventory {
   }
 
   apply(payload: unknown, source: 'http' | 'stream' = 'http'): boolean {
-    let snapshot = parseInventory(payload);
+    const snapshot = parseInventory(payload);
     const current = this.state.inventory;
+    // HTTP can supply feature availability even when its inventory is older than an SSE event.
+    // Older event schemas omit the field, so only timestamped explicit values supersede it.
+    const availabilityAt = snapshot.server_time ?? snapshot.fetched_at ?? 0;
+    const availability = snapshot.lease_review_enabled;
+    let leaseReviewEnabled = current.lease_review_enabled;
+    if (typeof availability === 'boolean' && availabilityAt >= this.leaseAvailabilityAt) {
+      this.leaseAvailabilityAt = availabilityAt;
+      leaseReviewEnabled = availability;
+    }
     if ((current.fetched_at || current.server_time) && !inventoriesOrdered(current, snapshot)) {
+      if (leaseReviewEnabled !== current.lease_review_enabled) {
+        this.publish({ inventory: { ...current, lease_review_enabled: leaseReviewEnabled } });
+      }
       this.observeComparison(snapshot);
       if (source === 'stream' && this.state.streamWarning) this.publish({ streamWarning: null });
       return false;
     }
-    // Direct inventory reads include the feature toggle. Older event schemas omit it.
-    if (snapshot.lease_review_enabled === undefined && current.lease_review_enabled !== undefined) {
-      snapshot = { ...snapshot, lease_review_enabled: current.lease_review_enabled };
-    }
     this.publish({
-      inventory: snapshot,
+      inventory: { ...snapshot, lease_review_enabled: leaseReviewEnabled },
       clockOffset: snapshot.server_time ? snapshot.server_time - Date.now() / 1000 : this.state.clockOffset,
       streamWarning: source === 'stream' ? null : this.state.streamWarning,
       requestWarning: source === 'http' ? null : this.state.requestWarning,
