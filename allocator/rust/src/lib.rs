@@ -1,3 +1,12 @@
+mod request;
+pub use request::{AcquireRequest, canonical_requirements};
+mod provider;
+pub use provider::{Provider, ProviderKind, Slot};
+mod credentials;
+pub use credentials::TaskCredentials;
+mod checkpoints;
+mod tokens;
+pub use checkpoints::CheckpointStore;
 mod lifecycle;
 pub use lifecycle::{LeasePhase, Lifecycle, ReclaimAction};
 mod journal;
@@ -10,22 +19,22 @@ pub use ledger::Ledger;
 
 #[derive(Debug)]
 pub struct Rejected {
-    code: &'static str,
+    code: String,
     reason: String,
     status: u16,
 }
 
 impl Rejected {
-    pub fn new(code: &'static str, reason: impl Into<String>, status: u16) -> Self {
+    pub fn new(code: impl Into<String>, reason: impl Into<String>, status: u16) -> Self {
         Self {
-            code,
+            code: code.into(),
             reason: reason.into(),
             status,
         }
     }
 
-    pub const fn code(&self) -> &'static str {
-        self.code
+    pub fn code(&self) -> &str {
+        &self.code
     }
     pub const fn status(&self) -> u16 {
         self.status
