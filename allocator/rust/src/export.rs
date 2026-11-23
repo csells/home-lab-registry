@@ -57,16 +57,27 @@ fn pending(row: &Value, stamp: f64) -> Result<(), Rejected> {
 
 impl Controller {
     pub fn next_export(&mut self) -> Result<Value, Rejected> {
-        let selected=self.database().query_row("SELECT id FROM lease WHERE phase='awaiting-export' AND checkpoint IS NULL
-            AND (export_failed_at IS NULL OR export_failed_at>?)
-            ORDER BY export_last_attempt_at IS NOT NULL,coalesce(export_last_attempt_at,export_requested_at),id LIMIT 1",
-            [now()-EXPORT_REVIEW],|row|row.get::<_,String>(0)).optional()?;
-        let export = if let Some(id) = selected {
-            self.pending_export(&id)?
-        } else {
-            Value::Null
-        };
-        Ok(json!({"export":export}))
+        let eligible = self
+            .database()
+            .prepare("SELECT id FROM lease WHERE phase='awaiting-export' AND checkpoint IS NULL
+                AND (export_failed_at IS NULL OR export_failed_at>?)
+                ORDER BY export_last_attempt_at IS NOT NULL,coalesce(export_last_attempt_at,export_requested_at),id")?
+            .query_map([now() - EXPORT_REVIEW], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut blocked = None;
+        for id in eligible {
+            match self.pending_export(&id) {
+                Ok(export) => return Ok(json!({"export":export})),
+                Err(problem) => {
+                    tracing::warn!(lease = id, code = problem.code(), "Final export remains held");
+                    blocked.get_or_insert(problem);
+                }
+            }
+        }
+        match blocked {
+            Some(problem) => Err(problem),
+            None => Ok(json!({"export":null})),
+        }
     }
 
     pub fn pending_export(&mut self, id: &str) -> Result<Value, Rejected> {
