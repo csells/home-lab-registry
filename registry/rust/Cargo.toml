@@ -6,6 +6,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+lab-http-transport = { path = "../../crates/http-transport" }
 tempfile = "3"
 clap = { version = "4", features = ["derive", "env"] }
 
@@ -31,3 +32,5 @@ url = "2"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio-stream = "0.1"
+
+tokio = { version = "1", features = ["test-util"] }

@@ -815,6 +815,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lab-http-transport"
+version = "0.1.0"
+dependencies = [
+ "axum-server",
+ "hyper-util",
+ "tokio",
+]
+
+[[package]]
 name = "lab-registry"
 version = "0.1.0"
 dependencies = [
@@ -825,6 +834,7 @@ dependencies = [
  "form_urlencoded",
  "futures-util",
  "ipnet",
+ "lab-http-transport",
  "reqwest",
  "ring",
  "rusqlite",

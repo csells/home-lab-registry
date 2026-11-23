@@ -285,3 +285,50 @@ fn the_cli_uses_private_configuration_and_existing_filters() {
     );
     assert_eq!(hits.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn server_accepts_hostname_bind_and_standard_cli_options() {
+    let help = Command::new(env!("CARGO_BIN_EXE_lab-registry"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--config"));
+
+    let root = tempfile::tempdir().unwrap();
+    certificate(root.path());
+    let port = std::net::TcpListener::bind(("localhost", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config = root.path().join("server.json");
+    std::fs::write(
+        &config,
+        json!({
+            "bind": "localhost", "port": port, "database": root.path().join("catalog.sqlite"),
+            "cert": root.path().join("cert.pem"), "key": root.path().join("key.pem"),
+            "reader_token": "test-reader", "writer_token": "test-writer",
+            "health_probes_enabled": false
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut registry = Command::new(env!("CARGO_BIN_EXE_lab-registry"))
+        .arg(format!("--config={}", config.display()))
+        .spawn()
+        .unwrap();
+    let connected = (0..100).any(|_| {
+        if let Ok(_connection) = std::net::TcpStream::connect(("localhost", port)) {
+            return true;
+        }
+        if registry.try_wait().unwrap().is_some() {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        false
+    });
+    let _ = registry.kill();
+    registry.wait().unwrap();
+    assert!(connected, "registry did not listen on localhost");
+}

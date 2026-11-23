@@ -114,10 +114,26 @@ async fn overrides(
 ) -> Result<HashMap<String, Target>, &'static str> {
     let mut result = endpoints.clone();
     if path.is_file() {
-        let values: HashMap<String, Endpoint> = read_json(path).await?;
-        for (id, endpoint) in values {
-            let target = Target::parse(&endpoint.url, Some(&endpoint.server_name))?;
-            result.insert(id, target);
+        let values: HashMap<String, Value> = match read_json(path).await {
+            Ok(values) => values,
+            Err(reason) => {
+                tracing::warn!(reason, "Guest endpoint overrides could not be read");
+                return Ok(result);
+            }
+        };
+        for (id, value) in values {
+            let target = serde_json::from_value::<Endpoint>(value)
+                .map_err(|_| "Invalid guest endpoint entry")
+                .and_then(|endpoint| Target::guest(&endpoint.url, &endpoint.server_name));
+            match target {
+                Ok(target) => {
+                    result.insert(id, target);
+                }
+                Err(reason) => {
+                    tracing::warn!(reason, "Guest endpoint override is unavailable");
+                    result.remove(&id);
+                }
+            }
         }
     }
     Ok(result)
@@ -167,6 +183,7 @@ impl Dashboard {
         };
         let mut registered_collectors = HashSet::new();
         let mut applied_generation = 0;
+        let mut lease_checked_generation = 0;
         let mut compared = None;
         let mut current_comparison = None;
         let mut comparison_deadline = Instant::now();
@@ -226,8 +243,15 @@ impl Dashboard {
                     Err(reason) => catalog.failed(reason),
                 }
             }
-            if reader_count > 0 && lease_issues.is_some() && Instant::now() >= lease_due {
+            if lease_read_due(
+                lease_issues.is_some(),
+                reader_count,
+                applied_generation,
+                lease_checked_generation,
+                lease_due,
+            ) {
                 let (issue, delay) = read_lease_issues(&lease_settings).await;
+                lease_checked_generation = applied_generation;
                 lease_due = Instant::now() + delay;
                 let mut current = lease_issues.clone().unwrap_or_default();
                 if let Some(object) = current.as_object_mut() {
@@ -314,6 +338,18 @@ impl Dashboard {
     }
 }
 
+fn lease_read_due(
+    enabled: bool,
+    reader_count: usize,
+    catalog_generation: u64,
+    lease_generation: u64,
+    deadline: Instant,
+) -> bool {
+    enabled
+        && (catalog_generation > lease_generation
+            || (reader_count > 0 && Instant::now() >= deadline))
+}
+
 async fn read_lease_issues(path: &Path) -> (Value, Duration) {
     const INTERVAL: Duration = Duration::from_secs(20);
     let result = lease_page(path, "issues", None).await.and_then(|report| {
@@ -341,5 +377,44 @@ async fn read_lease_issues(path: &Path) -> (Value, Duration) {
             tracing::warn!(reason, "Lease issues unavailable");
             (json!({"status":"unavailable"}), INTERVAL)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_explicit_catalog_refresh_updates_the_lease_snapshot_even_without_stream_viewers() {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        assert!(lease_read_due(true, 0, 4, 3, deadline));
+        assert!(!lease_read_due(true, 0, 4, 4, deadline));
+        assert!(!lease_read_due(true, 1, 4, 4, deadline));
+        assert!(!lease_read_due(false, 1, 4, 3, deadline));
+        assert!(lease_read_due(true, 1, 4, 4, Instant::now()));
+    }
+
+    #[tokio::test]
+    async fn guest_overrides_use_https_origins_and_isolate_invalid_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("guest-endpoints.json");
+        tokio::fs::write(&path, json!({
+            "machine-test": {"url":"https://collector.example.invalid/guests","server_name":"collector.example.invalid"},
+            "machine-other": {"url":"https://other.example.invalid","server_name":"other.example.invalid"},
+            "machine-invalid": {"url":"http://invalid.example.invalid","server_name":"invalid.example.invalid"},
+            "machine-malformed": false
+        }).to_string()).await.unwrap();
+
+        let mut declared = HashMap::new();
+        declared.insert(
+            "machine-existing".into(),
+            Target::parse("https://existing.example.invalid:9911/stream", None).unwrap(),
+        );
+        let configured = overrides(&path, &declared).await.unwrap();
+        assert_eq!(configured["machine-test"].port, 443);
+        assert_eq!(configured["machine-other"].port, 443);
+        assert!(configured.contains_key("machine-existing"));
+        assert!(!configured.contains_key("machine-invalid"));
+        assert!(!configured.contains_key("machine-malformed"));
     }
 }

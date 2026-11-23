@@ -13,7 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    collector::Target,
+    collector::{OpenError, Target},
     inventory::{Kind, fields, kind},
     metrics::Frames,
     unix_time,
@@ -327,14 +327,25 @@ async fn collect_guest_reports(target: Target, private: PathBuf, observer: Obser
     let mut retry = Duration::from_secs(1);
     loop {
         if let Err(reason) = guest_stream(&target, &private, &observer, &mut retry).await {
-            tracing::warn!(reason, "Guest inventory stream unavailable");
+            let permanent = matches!(reason, OpenError::Http(status) if matches!(status.as_u16(), 401 | 403 | 404 | 405));
+            tracing::warn!(
+                reason = reason.reason(),
+                "Guest inventory stream unavailable"
+            );
+            let message = if permanent {
+                "Inventory stream unsupported or unauthorized; collector upgrade required"
+            } else {
+                "Inventory stream unavailable; collector upgrade or recovery required"
+            };
             observer.publish(Report {
                 checked: Some(unix_time()),
-                error: Some(
-                    "Inventory stream unavailable; collector upgrade or recovery required".into(),
-                ),
+                error: Some(message.into()),
                 ..Report::default()
             });
+            if permanent {
+                // The worker remains registered until the endpoint changes or is explicitly refreshed.
+                return;
+            }
         }
         sleep(retry).await;
         retry = (retry * 2).min(Duration::from_secs(300));
@@ -346,7 +357,7 @@ async fn guest_stream(
     private: &std::path::Path,
     observer: &Observer,
     retry: &mut Duration,
-) -> Result<(), &'static str> {
+) -> Result<(), OpenError> {
     let mut response = target
         .open(
             private,

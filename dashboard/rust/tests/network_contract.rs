@@ -73,3 +73,37 @@ fn saved_dhcp_and_pending_alias_edits_remain_visible_together() {
     assert_eq!(links[0]["assignment"], "dhcp");
     assert_eq!(links[0]["mac"], "aa:bb:cc:dd:ee:ff");
 }
+
+#[test]
+fn a_saved_networkd_address_section_cannot_hide_behind_dhcp() {
+    use lab_dashboard::network::collector::saved_profiles;
+    use std::fs;
+
+    let root = tempfile::tempdir().unwrap();
+    let profiles = root.path().join("etc/systemd/network");
+    fs::create_dir_all(&profiles).unwrap();
+    fs::write(
+        profiles.join("10-eth0.network"),
+        "[Match]\nName=eth0\n[Network]\nDHCP=ipv4\nAddress=192.0.2.10/24\n[Address]\nAddress=192.0.2.20/24\n",
+    )
+    .unwrap();
+    let mac = "02:00:00:00:00:01";
+    let rows = saved_profiles(root.path(), mac, false).unwrap();
+    let checked = compare(
+        rows,
+        &json!([{"ip":"192.0.2.10","mac":mac}]),
+        &["192.0.2.0/24"],
+    )
+    .unwrap();
+    assert_eq!(
+        checked
+            .iter()
+            .map(|row| (&row["address"], row["status"].as_str().unwrap()))
+            .collect::<Vec<_>>(),
+        [
+            (&json!(null), "offline-config-verified"),
+            (&json!("192.0.2.10"), "offline-config-verified"),
+            (&json!("192.0.2.20"), "violation"),
+        ]
+    );
+}

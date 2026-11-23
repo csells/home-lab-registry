@@ -1,0 +1,13 @@
+[package]
+name = "lab-http-transport"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+axum-server = { version = "0.9", features = ["tls-rustls-ring"] }
+tokio = { version = "1", features = ["net", "time", "io-util"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }

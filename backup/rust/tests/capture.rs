@@ -76,3 +76,35 @@ fn observer_accepts_only_allowlisted_guest_ids_without_shell_arguments() {
         assert!(guest_request(request, &policy).is_err(), "{request}");
     }
 }
+
+#[test]
+fn validates_complete_tar_members_with_short_or_zero_padded_endings() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("config.tar.gz");
+    let mut plain = Vec::new();
+    let payload = vec![0x41; 200];
+    let mut archive = tar::Builder::new(&mut plain);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(payload.len() as u64);
+    header.set_mode(0o600);
+    archive
+        .append_data(&mut header, "config", &payload[..])
+        .unwrap();
+    archive.finish().unwrap();
+    drop(archive);
+
+    for size in [1024, 1536, plain.len()] {
+        let mut compressed = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::none());
+        compressed.write_all(&plain[..size]).unwrap();
+        let mut compressed = compressed.finish().unwrap();
+        compressed.extend_from_slice(&[0; 1024]);
+        std::fs::write(&file, compressed).unwrap();
+        lab_backup::verify_archive(&file).unwrap();
+    }
+
+    let mut compressed = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::none());
+    compressed.write_all(&plain[..650]).unwrap();
+    std::fs::write(&file, compressed.finish().unwrap()).unwrap();
+    assert!(lab_backup::verify_archive(&file).is_err());
+}

@@ -15,7 +15,7 @@ pub use operations::UpdateRequest;
 
 use std::{
     collections::HashSet,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -72,6 +72,7 @@ pub struct Dashboard {
     shared: Arc<Shared>,
     private: PathBuf,
     access_target: Option<String>,
+    reload_origins: bool,
     metrics: collector::LiveMetrics,
 }
 
@@ -119,6 +120,7 @@ impl Dashboard {
             metrics: collector::LiveMetrics::new(private.clone()),
             private,
             access_target: None,
+            reload_origins: false,
         }
     }
 
@@ -136,18 +138,13 @@ impl Dashboard {
         let mut auth = HeaderValue::from_str(&format!("Basic {credential}"))
             .map_err(|_| "Invalid dashboard credentials")?;
         auth.set_sensitive(true);
-        let origins: Vec<String> = upstream::read_json(&private.join("origins.json")).await?;
-        let headers = origins
-            .iter()
-            .map(|origin| HeaderValue::from_str(origin))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| "Invalid dashboard origin")?;
+        let headers = read_origins(&private).await?;
         let lease_review_enabled = private.join("lease-review.json").is_file();
         let initial = Snapshot {
             error: Some("Loading registry".into()),
             ..Snapshot::default()
         };
-        Ok(Self::new(
+        let mut dashboard = Self::new(
             assets,
             auth,
             headers,
@@ -155,7 +152,9 @@ impl Dashboard {
             initial,
             shutdown,
         )
-        .with_access(private, scope))
+        .with_access(private, scope);
+        dashboard.reload_origins = true;
+        Ok(dashboard)
     }
 
     pub fn with_access(mut self, private: PathBuf, target: Option<String>) -> Self {
@@ -163,6 +162,15 @@ impl Dashboard {
         self.private = private;
         self.access_target = target;
         self
+    }
+
+    async fn allows_origin(&self, origin: &HeaderValue) -> bool {
+        if self.reload_origins {
+            return read_origins(&self.private)
+                .await
+                .is_ok_and(|origins| origins.contains(origin));
+        }
+        self.shared.origins.contains(origin)
     }
 
     pub fn metrics(&self) -> &collector::LiveMetrics {
@@ -202,7 +210,7 @@ async fn handle(State(dashboard): State<Dashboard>, request: Request) -> Respons
     }
     match request.uri().path() {
         "/api/metrics/stream" => {
-            if !trusted_stream(headers, &dashboard.shared.origins) {
+            if !trusted_stream(headers, &dashboard).await {
                 return StatusCode::FORBIDDEN.into_response();
             }
             let Some(machine) =
@@ -219,7 +227,7 @@ async fn handle(State(dashboard): State<Dashboard>, request: Request) -> Respons
             metric_stream(viewer, dashboard.shared.shutdown.clone())
         }
         "/api/inventory/stream" => {
-            if !trusted_stream(headers, &dashboard.shared.origins) {
+            if !trusted_stream(headers, &dashboard).await {
                 return StatusCode::FORBIDDEN.into_response();
             }
             inventory_stream(&dashboard.shared)
@@ -253,7 +261,7 @@ async fn handle(State(dashboard): State<Dashboard>, request: Request) -> Respons
         | "/api/services"
         | "/api/backups" => snapshot_response(&dashboard.shared, request.uri().path()),
         path if path.starts_with("/terminal/") => {
-            if !trusted_stream(headers, &dashboard.shared.origins) {
+            if !trusted_stream(headers, &dashboard).await {
                 return StatusCode::FORBIDDEN.into_response();
             }
             let machine = path.trim_start_matches("/terminal/").trim_end_matches('/');
@@ -290,7 +298,15 @@ fn authorized(headers: &HeaderMap, expected: &HeaderValue) -> bool {
         && values.next().is_none()
 }
 
-fn trusted_stream(headers: &HeaderMap, origins: &HashSet<HeaderValue>) -> bool {
+async fn read_origins(private: &Path) -> Result<HashSet<HeaderValue>, &'static str> {
+    let origins: Vec<String> = upstream::read_json(&private.join("origins.json")).await?;
+    origins
+        .iter()
+        .map(|origin| HeaderValue::from_str(origin).map_err(|_| "Invalid dashboard origin"))
+        .collect()
+}
+
+async fn trusted_stream(headers: &HeaderMap, dashboard: &Dashboard) -> bool {
     if headers
         .get_all(SEC_FETCH_SITE)
         .iter()
@@ -299,7 +315,11 @@ fn trusted_stream(headers: &HeaderMap, origins: &HashSet<HeaderValue>) -> bool {
         return false;
     }
     let mut provided = headers.get_all(header::ORIGIN).iter();
-    provided.next().is_none_or(|value| origins.contains(value)) && provided.next().is_none()
+    match (provided.next(), provided.next()) {
+        (None, _) => true,
+        (Some(value), None) => dashboard.allows_origin(value).await,
+        _ => false,
+    }
 }
 
 fn one_header<'a>(headers: &'a HeaderMap, name: &HeaderName) -> Option<&'a HeaderValue> {
@@ -316,8 +336,10 @@ async fn perform_action(dashboard: Dashboard, request: Request) -> Response {
         _ => return StatusCode::FORBIDDEN.into_response(),
     };
     let headers = request.headers();
-    if !one_header(headers, &header::ORIGIN)
-        .is_some_and(|value| dashboard.shared.origins.contains(value))
+    let Some(origin) = one_header(headers, &header::ORIGIN) else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    if !dashboard.allows_origin(origin).await
         || !one_header(headers, &HeaderName::from_static("x-lab-action"))
             .is_some_and(|value| value == action)
         || !one_header(headers, &header::CONTENT_TYPE)

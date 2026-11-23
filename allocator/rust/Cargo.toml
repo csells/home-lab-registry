@@ -6,6 +6,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+lab-http-transport = { path = "../../crates/http-transport" }
 lab-workspace = { path = "workspace" }
 clap = { version = "4", features = ["derive"] }
 

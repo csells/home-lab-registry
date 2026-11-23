@@ -9,6 +9,8 @@
     "test": "node --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "esbuild main.tsx --bundle --minify --legal-comments=inline --outfile=../dashboard-react.js && cp node_modules/elkjs/lib/elk-worker.min.js ../vendor/",
+    "build:backup-review": "esbuild ../../backup/review/checks.ts --bundle --minify --outfile=../../backup/rust/target/release/backup-review.js",
+    "check:charts": "node validation/check-charts.ts",
     "test:browser": "node --test --test-concurrency=1 tests/browser/*.test.ts"
   },
   "dependencies": {

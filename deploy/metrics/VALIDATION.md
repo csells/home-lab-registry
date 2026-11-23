@@ -52,10 +52,16 @@ Disk capacity keeps its 0–100% scale: stable capacity must remain visually sta
 All scales are printed below the charts; current readings show one decimal, and
 the live caption includes the sample time. No synthetic variation is added.
 
-`dashboard/frontend/tests/browser/charts.test.ts` tests the actual rendered SVG at phone width against
-known changing and constant inputs, using an authenticated disposable preview.
-Provide credentials through `LAB_LOGIN_JSON`; never include credentials in URLs.
-This regression checks rendered pixel differences, not just sample arrival.
+The TypeScript browser suite renders phone and desktop chart fixtures and
+preserves redacted GPU screenshots in CI. Check an authenticated disposable
+preview separately with the installed Playwright test browser:
+
+```sh
+LAB_LOGIN_JSON=/private/login.json npm run check:charts --prefix dashboard/frontend -- https://preview.example
+```
+
+The preview check logs in, then renders known fixture inputs and checks all 30
+bars and their displayed scales. Actual fleet readings are qualified separately.
 
 A bounded real workload in the disposable VM then exercised the complete path:
 one CPU core busy for 30 seconds, 256 MiB allocated memory, and a temporary 2 GiB

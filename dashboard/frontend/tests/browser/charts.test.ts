@@ -1,33 +1,17 @@
+import { mkdir, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { expect } from "@playwright/test";
 import { browserView, fixturePage, seconds } from "./harness.ts";
 
-type Gpu = "available" | "not_applicable" | "unavailable" | null;
-type SeenStream = { url: string; closed: boolean };
+import { assertChartRanges, telemetryFixtures } from "../../validation/telemetry.ts";
 
-function sample(time: number, mode: Gpu, percent: number | null, index = 0) {
-  return {
-    status: "available",
-    checked: time,
-    expires: time + 180,
-    cpu_percent: index % 2 ? 2 : 4,
-    memory_used: index % 2 ? 79 : 81,
-    memory_total: 100,
-    disks: [{ name: "root", used: 22, total: 100 }],
-    ...(mode ? { gpu: { status: mode, percent } } : {}),
-  };
-}
+type SeenStream = { url: string; closed: boolean };
 
 test("telemetry draws useful trends and only streams while looking at machines", { timeout: 120_000 }, async () => {
   const now = seconds();
-  const history = Array.from({ length: 30 }, (_, i) => sample(now - 590 + i * 20, "available", i % 2 ? 80 : 5, i));
-  const cases: [Gpu, number | null][] = [["available", 0], ["available", 25], ["not_applicable", null], ["unavailable", null], [null, null]];
-  const machines = cases.map(([mode, percent], i) => ({
-    id: `fixture-${i}`, name: `Test host ${i}`, host: `test-${i}`,
-    kind: "machine", lifecycle: "active", capabilities: [],
-    metrics: { ...sample(now, mode, percent), history },
-  }));
+  const machines = telemetryFixtures(now);
   await browserView(async (browser, origin) => {
     for (const width of [393, 1440]) {
       const page = await fixturePage(browser, width);
@@ -76,14 +60,13 @@ test("telemetry draws useful trends and only streams while looking at machines",
       assert.equal(gpu[1]!.value, "25.0%");
       assert.ok(gpu[1]!.spread > 20);
       assert.deepEqual(gpu.slice(2).map(value => value.overlay), ["N/A", "Unavailable", "Unavailable"]);
-      const samplePanel = panels.nth(1);
-      for (const [name, range, varied] of [["cpu", "0–10%", true], ["ram", "75–85%", true], ["disk", "0–100%", false]] as const) {
-        const values = await samplePanel.locator(`.${name} .history-bar`).evaluateAll(bars => bars.map(bar => Number(bar.getAttribute("height"))));
-        assert.equal(values.length, 30);
-        const spread = Math.max(...values) - Math.min(...values);
-        if (varied) assert.ok(spread > 5, name);
-        else assert.equal(spread, 0, name);
-        await expect(samplePanel.locator(`.${name} [data-range]`)).toHaveAttribute("data-range", range);
+      await assertChartRanges(panels.nth(1));
+      const output = process.env.LAB_GPU_SCREENSHOTS;
+      if (output) {
+        const file = resolve(output, `gpu-review-${width}.png`);
+        await mkdir(output, { recursive: true });
+        await page.screenshot({ path: file, fullPage: true });
+        assert.ok((await stat(file)).size > 1024, "Rendered telemetry evidence must be captured");
       }
       await page.locator("#services-tab").click();
       await page.waitForFunction(() => {

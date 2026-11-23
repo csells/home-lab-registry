@@ -80,11 +80,13 @@ promote a build when refreshed.
 The review server can optionally take `--check /path/to/operator-owned-checks`
 and `--origin https://authenticated-review.example`. Its explicit POST action runs
 only that fixed command, admits one job at a time, enforces the configured browser
-origin, and returns bounded status without command output. Refresh remains read-only.
+origin, and returns bounded status without command output. For a readable,
+non-executable qualification script, pass an explicit interpreter with
+`--check-interpreter /absolute/path/to/interpreter`. Refresh remains read-only.
 Use a dedicated disposable staging runtime and the minimum permissions needed by
 those checks; qualification can collect real exports and write temporary staging.
 
-Build the review script with the dashboard's pinned TypeScript toolchain. Run
-npm ci in dashboard/frontend, then run esbuild on backup/review/checks.ts.
-Install the resulting backup-review.js beside lab-backup-review or set --script
-to its path.
+Run `npm ci --prefix dashboard/frontend` and `npm run build:backup-review --prefix
+dashboard/frontend` with the dashboard's pinned TypeScript toolchain. Install
+`backup/rust/target/release/backup-review.js` beside `lab-backup-review` or pass its
+path to `--script`. The review service requires the browser bundle at startup.

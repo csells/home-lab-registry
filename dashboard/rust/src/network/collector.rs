@@ -7,6 +7,7 @@ use std::{
     net::Ipv4Addr,
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
 };
 
 use serde_json::{Value, json};
@@ -18,7 +19,11 @@ type Entries = Vec<Value>;
 type Err = Box<dyn Error>;
 
 fn run(program: &str, args: &[&str]) -> io::Result<String> {
-    let result = child(Command::new(program).args(args), None, 20, 4 * 1024 * 1024)?;
+    run_with_input(program, args, None)
+}
+
+fn run_with_input(program: &str, args: &[&str], input: Option<&[u8]>) -> io::Result<String> {
+    let result = child(Command::new(program).args(args), input, 20, 4 * 1024 * 1024)?;
     if !result.status.success() {
         return Err(error("Read command failed."));
     }
@@ -425,7 +430,7 @@ pub fn saved_profiles(root: &Path, mac: &str, allow_empty: bool) -> Result<Entri
                     .to_ascii_lowercase()
                     .strip_prefix("address")
                     .is_some_and(numeric)
-                || section == "Network" && key.trim() == "Address"
+                || matches!(section, "Network" | "Address") && key.trim() == "Address"
             {
                 saved_row(&mut rows, mac, "static", value.split(',').next(), &source);
             }
@@ -673,9 +678,17 @@ fn offline(guest: &str, kind: &str) -> Result<Entries, Err> {
 }
 
 fn qga(id: &str, args: &[&str]) -> Result<String, Err> {
-    let mut command = vec!["guest", "exec", id, "--"];
+    qga_with_input(id, args, None)
+}
+
+fn qga_with_input(id: &str, args: &[&str], input: Option<&[u8]>) -> Result<String, Err> {
+    let mut command = vec!["guest", "exec", id];
+    if input.is_some() {
+        command.extend(["--pass-stdin", "1"]);
+    }
+    command.push("--");
     command.extend_from_slice(args);
-    let result = json_command("qm", &command)?;
+    let result: Value = serde_json::from_str(&run_with_input("qm", &command, input)?)?;
     if result["exitcode"] != 0 || result["out-truncated"] == true {
         return Err(error("Guest read failed or was truncated.").into());
     }
@@ -720,6 +733,44 @@ fn haos(id: &str) -> Result<Entries, Err> {
     Ok(rows)
 }
 
+#[derive(Debug)]
+struct GuestCollectorCleanup;
+
+impl std::fmt::Display for GuestCollectorCleanup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Could not remove the temporary guest collector.")
+    }
+}
+
+impl Error for GuestCollectorCleanup {}
+
+fn guest_collector<'a>(
+    invoke: impl Fn(&[&str], Option<&[u8]>) -> Result<String, Err>,
+    installed: &str,
+    binary: impl FnOnce() -> io::Result<&'a [u8]>,
+    path: &Path,
+    chunk: usize,
+) -> Result<Entries, Err> {
+    if let Ok(result) = invoke(&[installed, "--guest-only"], None) {
+        return Ok(serde_json::from_str(&result)?);
+    }
+    let binary = binary()?;
+    let path = path
+        .to_str()
+        .ok_or_else(|| error("Invalid temporary guest collector path."))?;
+    let script = |source, input| invoke(&["/bin/sh", "-ec", source, "audit", path], input);
+    script(r#"umask 077; mkdir -- "$1""#, None)?;
+    let read = (|| {
+        for bytes in binary.chunks(chunk) {
+            script(r#"cat >> "$1/collect""#, Some(bytes))?;
+        }
+        let report = script(r#"chmod 700 "$1/collect"; "$1/collect" --guest-only"#, None)?;
+        Ok::<Entries, Err>(serde_json::from_str(&report)?)
+    })();
+    script(r#"rm -f -- "$1/collect"; rmdir -- "$1""#, None).map_err(|_| GuestCollectorCleanup)?;
+    read
+}
+
 fn guests(guest_binary: &str) -> Result<Entries, Err> {
     let guests = json_command(
         "pvesh",
@@ -737,18 +788,41 @@ fn guests(guest_binary: &str) -> Result<Entries, Err> {
         .ok_or_else(|| error("Invalid guest inventory."))?;
     let local = run("hostname", &[])?;
     let mut rows = Vec::new();
+    let artifact = OnceLock::new();
+    let binary = || {
+        artifact
+            .get_or_init(|| std::env::current_exe().and_then(|path| super::read_collector(&path)))
+            .as_deref()
+            .map_err(|cause| io::Error::new(cause.kind(), "Local collector artifact unavailable."))
+    };
     for group in status.chunks(2) {
         std::thread::scope(|scope| -> io::Result<()> {
             let jobs: Vec<_>=group.iter().filter(|guest|guest["node"]==local.trim()).map(|guest|scope.spawn(|| {
                 let Some(id)=guest["vmid"].as_u64().filter(|id|*id>0).map(|id|id.to_string()) else { return Vec::new(); };
                 let Some(kind)=guest["type"].as_str().filter(|kind|matches!(*kind,"qemu"|"lxc")) else { return Vec::new(); };
                 let live = guest["status"]=="running";
-                let result = if !live { offline(&id,kind) } else if kind=="qemu" {
-                    qga(&id,&[guest_binary,"--guest-only"]).and_then(|body|serde_json::from_str(&body).map_err(Into::into))
-                        .or_else(|_|haos(&id))
+                let result = if !live {
+                    offline(&id,kind)
                 } else {
-                    json_command("pct",&["exec",&id,"--",guest_binary,"--guest-only"])
-                        .and_then(|result|serde_json::from_value(result).map_err(Into::into))
+                    let path = PathBuf::from(format!("/tmp/lab-network-{}", uuid::Uuid::new_v4().simple()));
+                    if kind == "qemu" {
+                        guest_collector(|args, input| qga_with_input(&id, args, input),
+                            guest_binary, binary, &path, 768 * 1024)
+                            .or_else(|cause| {
+                                // HAOS supplies native NetworkManager tooling on supported images.
+                                // A cleanup failure must remain visible even when that tooling works.
+                                if cause.is::<GuestCollectorCleanup>() {
+                                    return Err(cause);
+                                }
+                                haos(&id)
+                            })
+                    } else {
+                        guest_collector(|args, input| {
+                            let mut command = vec!["exec", &id, "--"];
+                            command.extend_from_slice(args);
+                            Ok(run_with_input("pct", &command, input)?)
+                        }, guest_binary, binary, &path, usize::MAX)
+                    }
                 };
                 let mut values=result.unwrap_or_else(|cause|vec![json!({"reason":format!("Guest check failed: {cause}"),"runtime":guest["status"]})]);
                 for row in &mut values { row["suffix"]=json!(format!("/{kind}/{id}")); }
@@ -941,4 +1015,25 @@ mod tests {
         assert_eq!(rows[0]["assignment"], "dhcp");
         assert_eq!(rows[1]["reason"], "Saved network profile could not be read");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn a_running_guest_can_be_read_without_an_installed_collector() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("guest");
+    let invoke = |args: &[&str], input: Option<&[u8]>| -> Result<String, Err> {
+        Ok(run_with_input(args[0], &args[1..], input)?)
+    };
+    let helper = b"#!/bin/sh\nprintf '[{\"assignment\":\"dhcp\"}]\\n'\n";
+    let collected = guest_collector(
+        invoke,
+        "/nonexistent/lab-network-collect",
+        || Ok(helper),
+        &path,
+        13,
+    )
+    .unwrap();
+    assert_eq!(collected[0]["assignment"], "dhcp");
+    assert!(!path.exists());
 }

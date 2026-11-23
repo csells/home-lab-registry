@@ -28,6 +28,8 @@ struct Options {
     port: u16,
     #[arg(long)]
     check: Option<PathBuf>,
+    #[arg(long, requires = "check")]
+    check_interpreter: Option<PathBuf>,
     #[arg(long, default_value = "")]
     origin: String,
     #[arg(long)]
@@ -37,7 +39,7 @@ struct Options {
 struct Review {
     options: Options,
     status: Mutex<Value>,
-    script: PathBuf,
+    script: axum::body::Bytes,
 }
 
 fn answer(content_type: &'static str, body: impl IntoResponse) -> Response {
@@ -126,11 +128,8 @@ async fn json_report(State(review): State<Arc<Review>>) -> Result<Response, Stat
     Ok(answer("application/json", Json(data(&review).await?)))
 }
 
-async fn javascript(State(review): State<Arc<Review>>) -> Result<Response, StatusCode> {
-    let bytes = tokio::fs::read(&review.script)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok(answer("text/javascript; charset=utf-8", bytes))
+async fn javascript(State(review): State<Arc<Review>>) -> Response {
+    answer("text/javascript; charset=utf-8", review.script.clone())
 }
 
 async fn trigger(State(review): State<Arc<Review>>, headers: HeaderMap) -> StatusCode {
@@ -156,7 +155,13 @@ async fn trigger(State(review): State<Arc<Review>>, headers: HeaderMap) -> Statu
         *state = json!({"state":"running"});
     }
     tokio::spawn(async move {
-        let mut job = tokio::process::Command::new(command);
+        let mut job = if let Some(interpreter) = &review.options.check_interpreter {
+            let mut program = tokio::process::Command::new(interpreter);
+            program.arg(&command);
+            program
+        } else {
+            tokio::process::Command::new(command)
+        };
         job.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -183,13 +188,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(Path::new("."))
             .join("backup-review.js"),
     );
+    let script = tokio::fs::read(script)
+        .await
+        .map_err(|_| "Backup review browser bundle is unavailable. Build and install backup-review.js or supply --script.")?;
+    if script.is_empty() {
+        return Err("Backup review browser bundle is empty.".into());
+    }
     let listener =
         tokio::net::TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), options.port))
             .await?;
     let review = Arc::new(Review {
         options,
         status: Mutex::new(json!({"state":"not-requested"})),
-        script,
+        script: script.into(),
     });
     let router = Router::new()
         .route("/", get(html))

@@ -11,5 +11,5 @@
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["*.ts", "*.tsx", "tests/**/*.ts"]
+  "include": ["*.ts", "*.tsx", "tests/**/*.ts", "validation/*.ts"]
 }

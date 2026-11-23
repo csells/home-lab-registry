@@ -219,3 +219,39 @@ async fn stream_delivers_health_only_batches_and_stops_with_the_registry() {
             .is_none()
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_incomplete_catalog_request_expires_without_writing_a_record() {
+    let tmp = tempfile::tempdir().unwrap();
+    let catalog = Catalog::open(&tmp.path().join("catalog.db")).unwrap();
+    let (_shutdown, stopped) = watch::channel(false);
+    let app = RegistryHttp::new(catalog, "reader-fixture", "writer-fixture", stopped)
+        .unwrap()
+        .router();
+    let never_finishes =
+        futures_util::stream::pending::<Result<axum::body::Bytes, std::io::Error>>();
+    let request = Request::put("/v1/services/no-write")
+        .header("Authorization", WRITER)
+        .header("If-Match", "0")
+        .header("Content-Length", "32")
+        .body(Body::from_stream(never_finishes))
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(11), app.clone().oneshot(request)).await;
+    assert_eq!(
+        outcome.expect("body read deadline").unwrap().status(),
+        StatusCode::REQUEST_TIMEOUT
+    );
+    assert_eq!(
+        send(
+            &app,
+            "GET",
+            "/v1/services/no-write",
+            Some(READER),
+            None,
+            None
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+}

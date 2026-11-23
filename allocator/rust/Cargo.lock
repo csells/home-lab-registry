@@ -801,6 +801,7 @@ dependencies = [
  "form_urlencoded",
  "http-body-util",
  "ipnet",
+ "lab-http-transport",
  "lab-workspace",
  "libc",
  "libloading",
@@ -822,6 +823,15 @@ dependencies = [
  "url",
  "uuid",
  "wait-timeout",
+]
+
+[[package]]
+name = "lab-http-transport"
+version = "0.1.0"
+dependencies = [
+ "axum-server",
+ "hyper-util",
+ "tokio",
 ]
 
 [[package]]

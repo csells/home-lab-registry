@@ -54,3 +54,10 @@ jobs:
       - run: cargo +1.98.0 build --locked --manifest-path dashboard/rust/Cargo.toml --example browser_fixture
       - run: npm run test:browser
         working-directory: dashboard/frontend
+        env:
+          LAB_GPU_SCREENSHOTS: ${{ runner.temp }}/lab-gpu-review
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-review
+          path: ${{ runner.temp }}/lab-gpu-review/*.png

@@ -400,3 +400,30 @@ async fn metrics_open_only_for_configured_targets_and_stop_when_last_viewer_goes
         "waiting"
     );
 }
+
+#[tokio::test]
+async fn the_private_allowlist_controls_new_requests_without_a_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let origins = root.path().join("origins.json");
+    let replacement = "https://replacement.example.invalid";
+    std::fs::write(
+        root.path().join("login.json"),
+        r#"{"username":"test","password":"test"}"#,
+    )
+    .unwrap();
+    std::fs::write(&origins, json!([ORIGIN]).to_string()).unwrap();
+    let (_shutdown, rx) = watch::channel(false);
+    let app = Dashboard::from_directory(root.path().into(), root.path().into(), None, rx)
+        .await
+        .unwrap()
+        .router();
+    let check =
+        async |origin: &str| get(&app, "/api/inventory/stream", &[("origin", origin)], true).await;
+    assert_eq!(check(ORIGIN).await.status(), StatusCode::OK);
+    assert_eq!(check(replacement).await.status(), StatusCode::FORBIDDEN);
+    std::fs::write(&origins, json!([replacement]).to_string()).unwrap();
+    assert_eq!(check(ORIGIN).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(check(replacement).await.status(), StatusCode::OK);
+    std::fs::write(&origins, "{").unwrap();
+    assert_eq!(check(replacement).await.status(), StatusCode::FORBIDDEN);
+}

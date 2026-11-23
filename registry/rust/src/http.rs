@@ -409,9 +409,13 @@ pub(crate) async fn body(request: Request) -> Result<Value, Problem> {
     if !(1..=LIMIT as i64).contains(&length) {
         return Err(Problem::new(413, "Body must be 1..65536 bytes"));
     }
-    let bytes = to_bytes(request.into_body(), LIMIT)
-        .await
-        .map_err(|_| Problem::new(400, "Invalid JSON"))?;
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(10),
+        to_bytes(request.into_body(), LIMIT),
+    )
+    .await
+    .map_err(|_| Problem::new(408, "Request body timed out"))?
+    .map_err(|_| Problem::new(400, "Invalid JSON"))?;
     if bytes.len() != length as usize {
         return Err(Problem::new(400, "Invalid JSON"));
     }

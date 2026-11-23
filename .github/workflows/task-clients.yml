@@ -1,0 +1,60 @@
+name: Native lease client bundles
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: linux-x86_64, suffix: '', helper: '--bin lab-restore-workspace' }
+          - { runner: macos-26, target: macos-arm64, suffix: '', helper: '--bin lab-restore-workspace' }
+          - { runner: windows-latest, target: windows-x86_64, suffix: '.exe', helper: '' }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.98.0 --profile minimal
+      - run: cargo +1.98.0 build --locked --release --manifest-path allocator/rust/Cargo.toml --bin lab-lease ${{ matrix.helper }}
+      - run: |
+          set -e
+          mkdir package
+          cp "allocator/rust/target/release/lab-lease${{ matrix.suffix }}" package/
+          if test -n '${{ matrix.helper }}'; then
+            cp allocator/rust/target/release/lab-restore-workspace package/
+          fi
+          "./package/lab-lease${{ matrix.suffix }}" --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: package/*
+          if-no-files-found: error
+  bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          path: native
+          pattern: native-*
+      - run: |
+          set -e
+          node --test allocator/tests/task-bundle.test.ts
+          for path in native/native-*; do mv "$path" "native/${path##*/native-}"; done
+          node allocator/package-task-clients.ts native bundles
+          for platform in bundles/*; do
+            name=${platform##*/}
+            (cd "$platform" && sha256sum --check SHA256SUMS)
+            tar -czf "lab-lease-${name}.tar.gz" -C "$platform" .
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lease-client-bundles
+          path: lab-lease-*.tar.gz
+          if-no-files-found: error

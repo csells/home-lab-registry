@@ -79,6 +79,9 @@ export function describeDiscrepancies(inventory: InventorySnapshot, now: number)
         message: count + ' unreserved static ' + (count === 1 ? 'address' : 'addresses') + ' in the audit from ' + date + '.',
       });
     }
+    if (['incomplete', 'partial', 'unknown', 'unverified'].includes(audit.status)) {
+      findings.push({ category: 'coverage', target, message: 'Audit coverage is ' + audit.status + ' as of ' + date + '.' });
+    }
     if (audit.warnings > 0) {
       findings.push({
         category: 'warning', target, count: audit.warnings,
@@ -134,6 +137,6 @@ export function describeDiscrepancies(inventory: InventorySnapshot, now: number)
     : 'Guest inventory unavailable'];
   if (stale && coverage) scope.push('Guest inventory needs a refresh');
   if (coverage?.unconfigured) scope.push(coverage.unconfigured + ' hosts have no configured guest collector');
-  if (audit) scope.push('Last IP audit ' + new Date(audit.at).toLocaleDateString());
+  if (audit) scope.push('Last IP audit ' + audit.status + ' · ' + new Date(audit.at).toLocaleString());
   return { problems, summary: summary.join(' · '), scope: scope.join(' · '), findings };
 }

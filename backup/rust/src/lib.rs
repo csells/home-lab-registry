@@ -9,9 +9,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use flate2::read::MultiGzDecoder;
 use ipnet::IpNet;
 use lab_registry::client::{RegistryClient, SshTarget};
+use lab_workspace::GzipMembers;
 use serde_json::{Value, json};
 use wait_timeout::ChildExt;
 
@@ -367,9 +367,24 @@ fn discover(
 fn validate_tar(input: impl Read) -> io::Result<()> {
     let mut archive = tar::Archive::new(input);
     for entry in archive.entries()? {
-        let _member = entry?;
+        let mut member = entry?;
+        if io::copy(&mut member, &mut io::sink())? != member.size() {
+            return Err(invalid("Incomplete archive member."));
+        }
     }
-    Ok(())
+    // Finish decoding to verify all compressed member trailers and accept
+    // common tar record padding without accepting trailing payload data.
+    let mut input = archive.into_inner();
+    let mut padding = [0; 8192];
+    loop {
+        let size = input.read(&mut padding)?;
+        if size == 0 {
+            return Ok(());
+        }
+        if padding[..size].iter().any(|byte| *byte != 0) {
+            return Err(invalid("Unexpected data after the tar archive."));
+        }
+    }
 }
 
 pub fn verify_archive(path: &Path) -> io::Result<()> {
@@ -381,8 +396,7 @@ pub fn verify_archive(path: &Path) -> io::Result<()> {
         return Err(invalid("Export unexpectedly small."));
     }
     if name.ends_with(".tar.gz") {
-        lab_workspace::decode_gzip(File::open(path)?, &mut io::sink(), u64::MAX)?;
-        validate_tar(MultiGzDecoder::new(File::open(path)?))?;
+        validate_tar(GzipMembers::new(File::open(path)?))?;
     } else if name.ends_with(".tar") {
         validate_tar(File::open(path)?)?;
     }

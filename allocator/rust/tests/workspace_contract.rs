@@ -148,3 +148,61 @@ fn reexport_regenerates_a_receipt_written_with_a_dot_prefix() {
         b""
     );
 }
+
+#[test]
+fn restoring_a_workspace_keeps_safe_modes_and_timestamps() {
+    use std::{
+        os::unix::fs::PermissionsExt,
+        time::{Duration, UNIX_EPOCH},
+    };
+    let mut tar = Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    let mut dir = Header::new_gnu();
+    dir.set_entry_type(EntryType::Directory);
+    dir.set_size(0);
+    dir.set_mode(0o777);
+    dir.set_mtime(1_700_000_000);
+    tar.append_data(&mut dir, "source", &[][..]).unwrap();
+    let mut file = Header::new_gnu();
+    file.set_size(3);
+    file.set_mode(0o6775);
+    file.set_mtime(1_700_000_010);
+    tar.append_data(&mut file, "source/run", &b"run"[..])
+        .unwrap();
+    let bytes = tar.into_inner().unwrap().finish().unwrap();
+
+    let destination = tempfile::tempdir().unwrap();
+    extract_workspace(bytes.as_slice(), destination.path()).unwrap();
+    let file = fs::metadata(destination.path().join("source/run")).unwrap();
+    assert_eq!(file.permissions().mode() & 0o7777, 0o755);
+    assert_eq!(
+        file.modified().unwrap(),
+        UNIX_EPOCH + Duration::from_secs(1_700_000_010)
+    );
+    let dir = fs::metadata(destination.path().join("source")).unwrap();
+    assert_eq!(dir.permissions().mode() & 0o7777, 0o700);
+    assert_eq!(
+        dir.modified().unwrap(),
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+    );
+}
+
+#[test]
+fn a_later_regular_archive_entry_supersedes_the_first_without_editing_its_hard_links() {
+    let mut tar = Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    let mut header = Header::new_gnu();
+    header.set_size(3);
+    header.set_mode(0o644);
+    tar.append_data(&mut header, "entry", &b"old"[..]).unwrap();
+    let mut link = Header::new_gnu();
+    link.set_size(0);
+    link.set_mode(0o644);
+    link.set_entry_type(EntryType::Link);
+    tar.append_link(&mut link, "copy", "entry").unwrap();
+    tar.append_data(&mut header, "entry", &b"new"[..]).unwrap();
+    let bytes = tar.into_inner().unwrap().finish().unwrap();
+
+    let destination = tempfile::tempdir().unwrap();
+    extract_workspace(bytes.as_slice(), destination.path()).unwrap();
+    assert_eq!(fs::read(destination.path().join("entry")).unwrap(), b"new");
+    assert_eq!(fs::read(destination.path().join("copy")).unwrap(), b"old");
+}

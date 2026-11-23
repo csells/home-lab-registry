@@ -52,10 +52,21 @@ Provision pins through a trusted access path; do not automatically trust a newly
 observed certificate. HTTP-only appliance APIs must remain on the trusted LAN.
 
 Home Assistant OS uses guest-agent execution of `ip` and NetworkManager tools,
-through its supported CLI. Install lab-network-collect on each authorized host
-and on ordinary Linux guests that require live configuration coverage. Host
-targets can set collector_bin to an absolute installed path and use the existing
-pinned SSH credentials. Stopped
+through its supported CLI. With the same pinned SSH credentials, the audit can
+use an installed `lab-network-collect` or send the matching native collector
+over SSH for one run. Put the artifact beside `lab-network-audit` under
+`network-collectors/PLATFORM/lab-network-collect` or configure a private relative
+`collector_artifact` for that host. Supported distribution directory names are
+`linux-x86_64`, `linux-aarch64`, `macos-arm64`, and `macos-x86_64`.
+The installed collector path can be specified with an absolute `collector_bin`.
+
+Running Linux guests can use a compatible host collector temporarily through
+the QEMU guest agent or Proxmox container execution. The collector is removed
+after the run. The guest's CPU architecture and Linux runtime must support the
+artifact, and the guest must permit execution from its temporary directory.
+Collection and cleanup failures are reported. AMT relay operations with
+credentials on stdin use the installed collector.
+Stopped
 single-NIC Proxmox guests are inspected with read-only loop devices and ext4
 `ro,noload` mounts; temporary mounts and volume activation are cleaned up.
 Saved pending interface profiles are included. Cloud-init templates with no

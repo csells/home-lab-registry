@@ -5,10 +5,7 @@ use std::{
     time::Duration,
 };
 
-use axum_server::{
-    Handle,
-    tls_rustls::{RustlsConfig, bind_rustls},
-};
+use axum_server::{Handle, tls_rustls::RustlsConfig};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{signal, sync::watch};
@@ -28,7 +25,7 @@ struct Settings {
     cert: PathBuf,
     key: PathBuf,
     #[serde(default = "bind_default")]
-    bind: std::net::IpAddr,
+    bind: String,
     #[serde(default = "port_default")]
     port: u16,
     #[serde(default = "empty")]
@@ -44,8 +41,8 @@ struct Settings {
     local_checks: BTreeSet<String>,
 }
 
-fn bind_default() -> std::net::IpAddr {
-    std::net::Ipv4Addr::UNSPECIFIED.into()
+fn bind_default() -> String {
+    std::net::Ipv4Addr::UNSPECIFIED.to_string()
 }
 fn port_default() -> u16 {
     8443
@@ -89,16 +86,27 @@ pub async fn serve(config: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     )?
     .with_enrollment(enrolled);
     let tls = RustlsConfig::from_pem_file(&settings.cert, &settings.key).await?;
-    let address = SocketAddr::from((settings.bind, settings.port));
+    let address = if let Ok(ip) = settings.bind.parse::<std::net::IpAddr>() {
+        SocketAddr::new(ip, settings.port)
+    } else {
+        tokio::net::lookup_host((settings.bind.as_str(), settings.port))
+            .await?
+            .find(SocketAddr::is_ipv4)
+            .ok_or("Registry bind hostname has no IPv4 address")?
+    };
     let handle = Handle::new();
     let app = state.router();
     let probing = settings
         .health_probes_enabled
         .then(|| tokio::spawn(monitor(state, catalog, settings.probe_credentials, stopped)));
     let mut server = std::pin::pin!(
-        bind_rustls(address, tls)
-            .handle(handle.clone())
-            .serve(app.into_make_service())
+        lab_http_transport::tls_with_deadlines(
+            axum_server::bind(address),
+            tls,
+            Duration::from_secs(10)
+        )
+        .handle(handle.clone())
+        .serve(app.into_make_service())
     );
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())?;
     let signal = async {

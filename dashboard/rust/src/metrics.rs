@@ -221,6 +221,11 @@ mod target_tests {
             assert!(Target::parse(invalid, None).is_err(), "{invalid}");
         }
         assert!(Target::parse("https://192.0.2.12:9911/stream", Some("a/b")).is_err());
-        assert!(Target::parse("https://192.0.2.12:9911/stream", Some("192.0.2.13")).is_err());
+        for certificate_ip in ["192.0.2.13", "2001:db8::1"] {
+            let target =
+                Target::parse("https://192.0.2.12:9911/stream", Some(certificate_ip)).unwrap();
+            assert_eq!(target.dial_host, "192.0.2.12");
+        }
+        assert!(Target::parse("https://192.0.2.12:9911/stream", Some("0x7f000001")).is_err());
     }
 }

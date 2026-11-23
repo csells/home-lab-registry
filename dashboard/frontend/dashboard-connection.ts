@@ -19,6 +19,10 @@ export async function refreshCatalog(store: DashboardInventory) {
       body: '{}',
       signal: AbortSignal.timeout(16000),
     });
+    if (response.status === 403) {
+      await readInventory(store);
+      return;
+    }
     if (!response.ok) throw new Error('HTTP ' + response.status);
     store.apply(await response.json());
   } catch (error) {

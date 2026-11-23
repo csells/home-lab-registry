@@ -209,6 +209,16 @@ pub(crate) fn child(
     })
 }
 
+fn read_collector(path: &Path) -> io::Result<Vec<u8>> {
+    const LIMIT: u64 = 64 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    File::open(path)?.take(LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.is_empty() || bytes.len() as u64 > LIMIT {
+        return Err(error("Invalid size for native collector artifact."));
+    }
+    Ok(bytes)
+}
+
 fn source_path(base: &Path, file: &Path) -> io::Result<PathBuf> {
     if file.is_absolute()
         || !file
@@ -231,6 +241,7 @@ struct Target {
     sudo: bool,
     jump: Option<Box<Target>>,
     collector_bin: Option<PathBuf>,
+    collector_artifact: Option<PathBuf>,
     #[serde(skip)]
     tart_names: Vec<String>,
 }
@@ -323,7 +334,80 @@ impl Target {
             command.push(' ');
             command.push_str(&shell_argument(arg));
         }
-        let result = child(
+        let result = self.remote(private, &command, data, seconds)?;
+        if result.status.success() {
+            return Ok(result.stdout);
+        }
+        if data.is_some() || result.status.code() == Some(255) {
+            return Err(error("Pinned audit SSH command failed."));
+        }
+        // Retain errors from a deployed collector. Transient delivery is for
+        // actually absent executables and does not broaden appliance authority.
+        let probe = self.remote(
+            private,
+            &format!(
+                "if test -e {}; then exit 1; fi; uname -sm",
+                shell_argument(binary)
+            ),
+            None,
+            12,
+        )?;
+        if !probe.status.success() {
+            return Err(error("Pinned audit SSH command failed."));
+        }
+        let platform = match String::from_utf8_lossy(&probe.stdout).trim() {
+            "Linux x86_64" => "linux-x86_64",
+            "Linux aarch64" => "linux-aarch64",
+            "Darwin arm64" => "macos-arm64",
+            "Darwin x86_64" => "macos-x86_64",
+            _ => return Err(error("Unknown native collector platform.")),
+        };
+        let artifact = match &self.collector_artifact {
+            Some(file) => source_path(private, file)?,
+            None => std::env::current_exe()?
+                .parent()
+                .ok_or_else(|| error("Native collector directory is unavailable."))?
+                .join("network-collectors")
+                .join(platform)
+                .join("lab-network-collect"),
+        };
+        let payload = read_collector(&artifact)?;
+        let launcher = r#"
+umask 077
+work=$(mktemp -d /tmp/lab-network.XXXXXXXX)
+trap 'rm -f -- "$work/collect"; rmdir -- "$work"' EXIT
+trap 'exit 1' HUP INT TERM
+cat > "$work/collect"
+chmod 700 "$work/collect"
+"$work/collect" "$@"
+"#;
+        let mut command = if self.sudo {
+            "sudo -n ".to_owned()
+        } else {
+            String::new()
+        };
+        command.push_str("/bin/sh -ec ");
+        command.push_str(&shell_argument(launcher));
+        command.push_str(" audit");
+        for arg in args {
+            command.push(' ');
+            command.push_str(&shell_argument(arg));
+        }
+        let result = self.remote(private, &command, Some(&payload), seconds)?;
+        if !result.status.success() {
+            return Err(error("Transient native audit collector failed."));
+        }
+        Ok(result.stdout)
+    }
+
+    fn remote(
+        &self,
+        private: &Path,
+        command: &str,
+        data: Option<&[u8]>,
+        seconds: u64,
+    ) -> io::Result<Output> {
+        child(
             Command::new("ssh")
                 .args(self.args(private)?)
                 .arg(&self.destination)
@@ -331,11 +415,7 @@ impl Target {
             data,
             seconds,
             4 * 1024 * 1024,
-        )?;
-        if !result.status.success() {
-            return Err(error("Pinned audit SSH command failed."));
-        }
-        Ok(result.stdout)
+        )
     }
 
     fn collect(&self, private: &Path) -> Vec<Value> {

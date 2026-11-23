@@ -356,8 +356,12 @@ pub async fn run(config: &Path) -> Result<(), Box<dyn Error>> {
     });
     let app = Router::new().fallback(any(route)).with_state(worker);
     println!("Checkpoint recovery listening with TLS");
-    axum_server::from_tcp_rustls(listener, certificate)?
-        .serve(app.into_make_service())
-        .await?;
+    lab_http_transport::tls_with_deadlines(
+        axum_server::from_tcp(listener)?,
+        certificate,
+        Duration::from_secs(8),
+    )
+    .serve(app.into_make_service())
+    .await?;
     Ok(())
 }
