@@ -918,7 +918,25 @@ impl Controller {
     pub fn release(&mut self, id: &str, owner: &str, data: &Value) -> Result<Value, Rejected> {
         let row = lease(self.database(), id, Some(owner))?;
         let checkpoint = stored(&row["checkpoint"])?;
-        let action = life(&row, &checkpoint)?.release(data)?;
+        let lifecycle = life(&row, &checkpoint)?;
+        if lifecycle.phase == LeasePhase::Starting
+            && lifecycle.reclaim_on_expiry
+            && self.slot(&row)?.kind == ProviderKind::Tart
+            && row["upstream"].is_string()
+            && self.call(&row, "task-state")? == true
+        {
+            let mut query = provider_shape(&row, "guest-observation")?;
+            query["include_address"] = json!(false);
+            if self.provider.call(query)?["status"] == "stopped" {
+                // A proven terminal start may exit before the task ever receives SSH.
+                // Keep the usual hold and export policy while reclaiming that exact clone.
+                let policy = Lifecycle { phase: LeasePhase::Ready, ..lifecycle };
+                policy.release(data)?;
+                let updated = self.request_export(&row)?;
+                return self.public(&updated, None);
+            }
+        }
+        let action = lifecycle.release(data)?;
         if action == ReclaimAction::Inspect {
             return self.inspect(id, owner);
         }

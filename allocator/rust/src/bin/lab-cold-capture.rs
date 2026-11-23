@@ -360,6 +360,8 @@ fn capture(settings: &Settings, lease: &str, image: &Path) -> io::Result<()> {
         "-",
         "compress:gzip",
         "numericowner:true",
+        // GNU tar uses PAX headers with xattrs enabled, preserving fractional mtimes.
+        "xattrs:true",
     ]);
     lab_allocator::collect_capture(
         &mut command,
