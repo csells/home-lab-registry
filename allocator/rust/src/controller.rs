@@ -1152,6 +1152,14 @@ mod tests {
 }
 
 pub fn enroll(config: &Path) -> Result<(), Rejected> {
+    administer_ledger(config, None)
+}
+
+pub fn handoff(config: &Path, authorization: &Path) -> Result<(), Rejected> {
+    administer_ledger(config, Some(authorization))
+}
+
+fn administer_ledger(config: &Path, authorization: Option<&Path>) -> Result<(), Rejected> {
     let invalid = || {
         Rejected::new(
             "configuration_invalid",
@@ -1175,13 +1183,23 @@ pub fn enroll(config: &Path) -> Result<(), Rejected> {
         .ok_or_else(invalid)?;
     let provider = Provider::native(&settings)?;
     let slots = provider.slots()?;
-    for id in slots.keys() {
-        provider.call(json!({"action":"enrollment-check","slot_id":id}))?;
-    }
     let bindings = slots
         .iter()
         .map(|(id, slot)| (id.as_str(), slot.identity.as_str()))
         .collect::<Vec<_>>();
-    Ledger::enroll(database, witness, || provider.generation(), &bindings)?;
+    if let Some(path) = authorization {
+        let proof = std::fs::read(path)
+            .ok()
+            .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+            .ok_or_else(invalid)?;
+        Ledger::handoff(database, witness, || provider.generation(), &bindings, &proof)?;
+    } else {
+        let key = settings.get("ledger_handoff_public_key")
+            .map(|value| value.as_str().ok_or_else(invalid)).transpose()?;
+        for id in slots.keys() {
+            provider.call(json!({"action":"enrollment-check","slot_id":id}))?;
+        }
+        Ledger::enroll_for_handoff(database, witness, || provider.generation(), &bindings, key)?;
+    }
     Ok(())
 }

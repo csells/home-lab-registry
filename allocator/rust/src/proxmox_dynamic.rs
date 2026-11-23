@@ -338,7 +338,7 @@ impl DynamicScope {
 
     pub fn identity(&self, api: &Proxmox) -> Vec<Value> {
         let mut binding = vec![
-            json!(api.base),
+            json!(api.base()),
             json!(api.node),
             json!(api.guest_id),
             json!(api.identity),

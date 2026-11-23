@@ -6,8 +6,11 @@ use std::{
     time::Duration,
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD};
+use ring::signature::{ED25519, UnparsedPublicKey};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{Rejected, ledger_schema};
 
@@ -30,6 +33,52 @@ impl<G> Drop for Ledger<G> {
 struct Witness {
     revision: String,
     controller_generation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handoff_public_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HandoffAuthorization {
+    revision: String,
+    previous_controller_generation: String,
+    replacement_controller_generation: String,
+    signature: String,
+}
+
+fn handoff_denied() -> Rejected {
+    hold("Controller handoff does not match the enrolled authority, ledger and replacement VM.")
+}
+
+fn handoff_key(text: &str) -> Result<[u8; 32], Rejected> {
+    STANDARD
+        .decode(text)
+        .ok()
+        .and_then(|key| key.try_into().ok())
+        .ok_or_else(handoff_denied)
+}
+
+impl HandoffAuthorization {
+    fn verify(&self, seal: &Witness, generation: &str) -> Result<(), Rejected> {
+        if self.revision != seal.revision
+            || self.previous_controller_generation != seal.controller_generation
+            || self.replacement_controller_generation != generation
+            || self.previous_controller_generation == generation
+            || !crate::tokens::hex(&self.revision, 32)
+            || [&self.previous_controller_generation, &self.replacement_controller_generation]
+                .iter().any(|value| uuid::Uuid::parse_str(value).is_err() || value.contains('\n'))
+        {
+            return Err(handoff_denied());
+        }
+        let key = handoff_key(seal.handoff_public_key.as_deref().ok_or_else(handoff_denied)?)?;
+        let signature = STANDARD.decode(&self.signature).map_err(|_| handoff_denied())?;
+        let statement = format!(
+            "home-lab-allocator-ledger-handoff-v1\n{}\n{}\n{}\n",
+            self.revision, self.previous_controller_generation, self.replacement_controller_generation,
+        );
+        UnparsedPublicKey::new(&ED25519, key)
+            .verify(statement.as_bytes(), &signature)
+            .map_err(|_| handoff_denied())
+    }
 }
 
 fn hold(reason: &str) -> Rejected {
@@ -38,33 +87,48 @@ fn hold(reason: &str) -> Rejected {
 
 impl<G: FnMut() -> Result<String, Rejected>> Ledger<G> {
     pub fn open(database: &Path, witness: &Path, generation: G) -> Result<Self, Rejected> {
+        let mut ledger = Self::lock_existing(database, witness, generation)?;
+        ledger.verify()?;
+        ledger.db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
+        Ok(ledger)
+    }
+
+    fn lock_existing(database: &Path, witness: &Path, generation: G) -> Result<Self, Rejected> {
         let lock = lock_ledger(witness)?;
         let db = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|_| hold("Allocator ledger is missing or unavailable. Reconcile offline."))?;
         db.busy_timeout(Duration::from_secs(5))?;
-        let mut ledger = Self {
+        Ok(Self {
             db,
             generation,
             witness: witness.to_owned(),
             lock,
-        };
-        ledger.verify()?;
-        ledger
-            .db
-            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")?;
-        Ok(ledger)
+        })
     }
 
     pub fn enroll(
         database: &Path,
         witness: &Path,
+        generation: G,
+        slots: &[(&str, &str)],
+    ) -> Result<Self, Rejected> {
+        Self::enroll_for_handoff(database, witness, generation, slots, None)
+    }
+
+    pub fn enroll_for_handoff(
+        database: &Path,
+        witness: &Path,
         mut generation: G,
         slots: &[(&str, &str)],
+        public_key: Option<&str>,
     ) -> Result<Self, Rejected> {
         if database == witness || database == Path::new(":memory:") || slots.is_empty() {
             return Err(hold(
                 "Enrollment requires a durable database and an independent witness.",
             ));
+        }
+        if let Some(key) = public_key {
+            handoff_key(key)?;
         }
         let lock = lock_ledger(witness)?;
         if witness.symlink_metadata().is_ok() {
@@ -111,6 +175,7 @@ impl<G: FnMut() -> Result<String, Rejected>> Ledger<G> {
             Witness {
                 revision,
                 controller_generation,
+                handoff_public_key: public_key.map(str::to_owned),
             },
         )?;
         tx.commit()?;
@@ -134,7 +199,37 @@ impl<G: FnMut() -> Result<String, Rejected>> Ledger<G> {
     }
 
     pub fn verify(&mut self) -> Result<String, Rejected> {
-        validate(&self.db, &self.witness, &mut self.generation)
+        Ok(validate(&self.db, &self.witness, &mut self.generation)?.controller_generation)
+    }
+
+    pub fn handoff(
+        database: &Path,
+        witness: &Path,
+        generation: G,
+        slots: &[(&str, &str)],
+        authorization: &Value,
+    ) -> Result<Self, Rejected> {
+        let authorization: HandoffAuthorization = serde_json::from_value(authorization.clone())
+            .map_err(|_| handoff_denied())?;
+        let mut ledger = Self::lock_existing(database, witness, generation)?;
+        ledger.db.execute_batch("PRAGMA synchronous=FULL;")?;
+        let tx = ledger.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut seal = read_seal(&tx, witness)?;
+        let enrolled = {
+            let mut select = tx.prepare("SELECT id,identity FROM slot_binding ORDER BY id")?;
+            select.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut expected = slots.to_vec();
+        expected.sort_unstable();
+        if !enrolled.iter().map(|(id, identity)| (id.as_str(), identity.as_str())).eq(expected) {
+            return Err(handoff_denied());
+        }
+        let replacement = (ledger.generation)()?;
+        authorization.verify(&seal, &replacement)?;
+        seal.controller_generation = replacement;
+        commit_revision(tx, witness, seal)?;
+        Ok(ledger)
     }
 
     pub fn mutate<T>(
@@ -147,24 +242,10 @@ impl<G: FnMut() -> Result<String, Rejected>> Ledger<G> {
         let started = validate(&tx, &self.witness, &mut self.generation)?;
         let result = write(&tx)?;
         let latest = validate(&tx, &self.witness, &mut self.generation)?;
-        if latest != started {
+        if latest.controller_generation != started.controller_generation {
             return Err(hold("Controller VM generation changed. Reconcile offline."));
         }
-        let revision = uuid::Uuid::new_v4().simple().to_string();
-        tx.execute(
-            "UPDATE ledger_revision SET revision=? WHERE id=1",
-            [&revision],
-        )?;
-        // A crash after the witness is durable and before SQLite commits leaves a
-        // mismatch. Both implementations hold the ledger for reconciliation.
-        write_witness(
-            &self.witness,
-            Witness {
-                revision,
-                controller_generation: latest,
-            },
-        )?;
-        tx.commit()?;
+        commit_revision(tx, &self.witness, latest)?;
         Ok(result)
     }
 }
@@ -189,7 +270,15 @@ fn validate(
     db: &Connection,
     witness: &Path,
     generation: &mut impl FnMut() -> Result<String, Rejected>,
-) -> Result<String, Rejected> {
+) -> Result<Witness, Rejected> {
+    let seal = read_seal(db, witness)?;
+    if generation()? != seal.controller_generation {
+        return Err(hold("Controller VM generation differs. Reconcile offline."));
+    }
+    Ok(seal)
+}
+
+fn read_seal(db: &Connection, witness: &Path) -> Result<Witness, Rejected> {
     let seal: Witness = fs::read(witness)
         .ok()
         .and_then(|value| serde_json::from_slice(&value).ok())
@@ -202,14 +291,20 @@ fn validate(
         )
         .optional()
         .map_err(|_| hold("Ledger revision could not be verified. Reconcile offline."))?;
-    if stored.as_deref() != Some(seal.revision.as_str())
-        || generation()? != seal.controller_generation
-    {
-        return Err(hold(
-            "Ledger revision or controller VM generation differs. Reconcile offline.",
-        ));
+    if stored.as_deref() != Some(seal.revision.as_str()) {
+        return Err(hold("Ledger revision differs. Reconcile offline."));
     }
-    Ok(seal.controller_generation)
+    Ok(seal)
+}
+
+fn commit_revision(tx: Transaction<'_>, witness: &Path, mut seal: Witness) -> Result<(), Rejected> {
+    seal.revision = uuid::Uuid::new_v4().simple().to_string();
+    tx.execute("UPDATE ledger_revision SET revision=? WHERE id=1", [&seal.revision])?;
+    // An interruption between the witness write and SQLite commit holds the
+    // ledger for reconciliation.
+    write_witness(witness, seal)?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn write_witness(location: &Path, witness: Witness) -> Result<(), Rejected> {

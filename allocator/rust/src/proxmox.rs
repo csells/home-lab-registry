@@ -192,18 +192,13 @@ fn credential(path: &str) -> Result<(String, header::HeaderValue), Rejected> {
 }
 
 #[derive(Clone)]
-pub(crate) struct Proxmox {
+struct PinnedApi {
     client: Client,
-    pub base: String,
-    pub node: String,
-    pub guest_id: String,
-    pub identity: String,
-    write_token: header::HeaderValue,
-    audit_token: header::HeaderValue,
+    base: String,
 }
 
-impl Proxmox {
-    pub fn open(config: &Value, capacity: &Value) -> Result<Self, Rejected> {
+impl PinnedApi {
+    fn open(config: &Value) -> Result<Self, Rejected> {
         let url = Url::parse(config_text(config, "url")?).map_err(|_| invalid_config())?;
         if url.scheme() != "https"
             || url.host().is_none()
@@ -213,16 +208,6 @@ impl Proxmox {
             || url.query().is_some()
             || url.fragment().is_some()
         {
-            return Err(invalid_config());
-        }
-        let node = config_text(config, "node")?;
-        if !identifier(node) {
-            return Err(invalid_config());
-        }
-        let guest_id = api_id(&config["guest_id"]).ok_or_else(invalid_config)?;
-        let (identity, write_token) = credential(config_text(config, "token_file")?)?;
-        let (audit_identity, audit_token) = credential(config_text(capacity, "token_file")?)?;
-        if identity == audit_identity {
             return Err(invalid_config());
         }
         let pem = fs::read(config_text(config, "ca_file")?).map_err(|_| invalid_config())?;
@@ -243,11 +228,6 @@ impl Proxmox {
         Ok(Self {
             client,
             base: format!("{}api2/json", url.as_str()),
-            node: node.to_owned(),
-            guest_id,
-            identity,
-            write_token,
-            audit_token,
         })
     }
 
@@ -256,13 +236,8 @@ impl Proxmox {
         method: Method,
         route: &str,
         form: Option<&[(&str, &str)]>,
-        audit: bool,
+        token: &header::HeaderValue,
     ) -> Result<Result<Value, u16>, Rejected> {
-        let token = if audit {
-            &self.audit_token
-        } else {
-            &self.write_token
-        };
         let mut pending = self
             .client
             .request(method, format!("{}{route}", self.base))
@@ -301,13 +276,77 @@ impl Proxmox {
             unavailable()
         })
     }
+}
+
+fn node(config: &Value) -> Result<String, Rejected> {
+    config_text(config, "node")
+        .ok()
+        .filter(|value| identifier(value))
+        .map(str::to_owned)
+        .ok_or_else(invalid_config)
+}
+
+pub(crate) struct ControllerVm {
+    api: PinnedApi,
+    config_route: String,
+    token: header::HeaderValue,
+}
+
+impl ControllerVm {
+    pub fn open(config: &Value) -> Result<Self, Rejected> {
+        let node = node(config)?;
+        let guest = api_id(&config["guest_id"]).ok_or_else(invalid_config)?;
+        let (_, token) = credential(config_text(config, "audit_token_file")?)?;
+        Ok(Self {api: PinnedApi::open(config)?, config_route: format!("/nodes/{node}/qemu/{guest}/config"), token})
+    }
+
+    pub fn config(&self) -> Result<Value, Rejected> {
+        PinnedApi::accepted(self.api.request(Method::GET, &self.config_route, None, &self.token)?)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Proxmox {
+    api: PinnedApi,
+    pub node: String,
+    pub guest_id: String,
+    pub identity: String,
+    write_token: header::HeaderValue,
+    audit_token: header::HeaderValue,
+}
+
+impl Proxmox {
+    pub fn open(config: &Value, capacity: &Value) -> Result<Self, Rejected> {
+        let node = node(config)?;
+        let guest_id = api_id(&config["guest_id"]).ok_or_else(invalid_config)?;
+        let (identity, write_token) = credential(config_text(config, "token_file")?)?;
+        let (audit_identity, audit_token) = credential(config_text(capacity, "token_file")?)?;
+        if identity == audit_identity {
+            return Err(invalid_config());
+        }
+        Ok(Self {api: PinnedApi::open(config)?, node, guest_id, identity, write_token, audit_token})
+    }
+
+    pub fn base(&self) -> &str {
+        &self.api.base
+    }
+
+    fn request(
+        &self,
+        method: Method,
+        route: &str,
+        form: Option<&[(&str, &str)]>,
+        audit: bool,
+    ) -> Result<Result<Value, u16>, Rejected> {
+        self.api.request(method, route, form, if audit { &self.audit_token } else { &self.write_token })
+    }
 
     pub fn get(&self, route: &str) -> Result<Value, Rejected> {
-        Self::accepted(self.request(Method::GET, route, None, false)?)
+        PinnedApi::accepted(self.request(Method::GET, route, None, false)?)
     }
 
     pub fn audit(&self, route: &str) -> Result<Value, Rejected> {
-        Self::accepted(self.request(Method::GET, route, None, true)?)
+        PinnedApi::accepted(self.request(Method::GET, route, None, true)?)
     }
 
     pub fn modify(
@@ -316,7 +355,7 @@ impl Proxmox {
         route: &str,
         form: Option<&[(&str, &str)]>,
     ) -> Result<Value, Rejected> {
-        Self::accepted(self.request(method, route, form, false)?)
+        PinnedApi::accepted(self.request(method, route, form, false)?)
     }
 
     pub fn guest_route(&self) -> String {
@@ -454,7 +493,7 @@ impl Proxmox {
         let route = format!("{}/agent/network-get-interfaces", self.guest_route());
         let response = match self.request(Method::GET, &route, None, false)? {
             Err(500) => return Ok(None),
-            value => Self::accepted(value)?,
+            value => PinnedApi::accepted(value)?,
         };
         let interfaces = response["result"].as_array().ok_or_else(unavailable)?;
         let ipv4 = interfaces
@@ -481,7 +520,7 @@ impl Proxmox {
                 false,
             )? {
                 Err(500) => return Ok(None),
-                value => Self::accepted(value)?,
+                value => PinnedApi::accepted(value)?,
             };
             if path.ends_with(".pub") {
                 let key = result["content"]

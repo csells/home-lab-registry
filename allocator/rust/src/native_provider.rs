@@ -10,7 +10,7 @@ use crate::{
     ProviderKind, Rejected, Slot,
     capacity::{Capacity, Observation, Pool},
     provider::unavailable,
-    proxmox::{GuestPin, Proxmox, TaskKind, api_id, config_text, escape, task_matches, uuid_field},
+    proxmox::{ControllerVm, GuestPin, Proxmox, TaskKind, api_id, config_text, escape, task_matches, uuid_field},
     proxmox_dynamic::{DynamicScope, Shape, legacy_json},
     protocol::{APPLE, LINUX, public_key},
     request::canonical_requirements,
@@ -20,8 +20,13 @@ use crate::{
 
 pub(crate) struct NativeProvider {
     slots: BTreeMap<String, ProviderSlot>,
-    controller_guest: String,
+    controller: ControllerBinding,
     dependencies: Value,
+}
+
+enum ControllerBinding {
+    Primary(String),
+    Independent(ControllerVm),
 }
 
 struct ProviderSlot {
@@ -189,9 +194,14 @@ impl NativeProvider {
         if !matches!(slots["primary"].worker, Worker::Linux(_)) {
             return Err(invalid());
         }
+        let controller = match (config.get("controller_vm"), config.get("controller_guest_id")) {
+            (Some(vm), None) => ControllerBinding::Independent(ControllerVm::open(vm)?),
+            (None, Some(id)) => ControllerBinding::Primary(api_id(id).ok_or_else(invalid)?),
+            _ => return Err(invalid()),
+        };
         Ok(Self {
             slots,
-            controller_guest: api_id(&config["controller_guest_id"]).ok_or_else(invalid)?,
+            controller,
             dependencies: config
                 .get("dependency_bindings")
                 .cloned()
@@ -203,13 +213,15 @@ impl NativeProvider {
         let action = request["action"].as_str().ok_or_else(unknown_action)?;
         match action {
             "controller-generation" => {
-                let Worker::Linux(host) = &self.slots["primary"].worker else {
-                    return Err(invalid());
+                let config = match &self.controller {
+                    ControllerBinding::Independent(vm) => vm.config()?,
+                    ControllerBinding::Primary(guest) => {
+                        let Worker::Linux(host) = &self.slots["primary"].worker else {
+                            return Err(invalid());
+                        };
+                        host.api.audit(&format!("/nodes/{}/qemu/{guest}/config", host.api.node))?
+                    }
                 };
-                let config = host.api.audit(&format!(
-                    "/nodes/{}/qemu/{}/config",
-                    host.api.node, self.controller_guest
-                ))?;
                 Ok(json!(
                     uuid_field(&config["vmgenid"]).ok_or_else(different_generation)?
                 ))
@@ -280,7 +292,7 @@ impl ProviderSlot {
                     let initial_rollback = config["initial_rollback"].as_str().map(str::to_owned);
                     let key = public_key(&definition["guest_host_key"])?;
                     let identity = vec![
-                        json!(api.base),
+                        json!(api.base()),
                         json!(api.node),
                         json!(api.guest_id),
                         json!(pin.uuid),
