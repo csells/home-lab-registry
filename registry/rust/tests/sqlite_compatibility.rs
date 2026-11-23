@@ -18,6 +18,9 @@ fn python_catalog_remains_readable_and_rust_revisions_are_visible_to_legacy_clie
     legacy
         .execute_batch(include_str!("fixtures/catalog-0230fe1.sql"))
         .unwrap();
+    legacy.execute_batch(
+        "UPDATE health SET expires=4102444800; UPDATE runtime_observation SET expires=4102444800;"
+    ).unwrap();
     drop(legacy);
     let catalog = Catalog::open(&path).unwrap();
     let before = catalog.get("service-test").unwrap();
