@@ -41,9 +41,11 @@ fn an_existing_controller_can_enroll_handoff_authority_once_without_resetting_it
     let key = STANDARD.encode(signing_key.public_key().as_ref());
     let old = || Ok(OLD.to_owned());
     let new = || Ok(NEW.to_owned());
-    let mut original = Ledger::enroll(&database, &witness, old, SLOTS).unwrap();
+    let historical = ("historical", "former-provider");
+    let mut original = Ledger::enroll(&database, &witness, old, &[SLOTS[0], historical]).unwrap();
     original.mutate(|tx| {
         tx.execute("INSERT INTO lease(id,request_key,task,initial_seconds,phase,deadline,slot_id) VALUES('work','request','unfinished',60,'ready',9000,'primary')", [])?;
+        tx.execute("INSERT INTO lease(id,request_key,task,initial_seconds,phase,deadline,slot_id) VALUES('past','other','historical work',60,'ready',9000,'historical')", [])?;
         Ok(())
     }).unwrap();
     let first: Value = serde_json::from_reader(std::fs::File::open(&witness).unwrap()).unwrap();
@@ -55,6 +57,13 @@ fn an_existing_controller_can_enroll_handoff_authority_once_without_resetting_it
             .code(),
         "ledger_reconciliation_required"
     );
+    assert!(original.enroll_handoff_authority(&key, SLOTS).is_err());
+    original
+        .mutate(|tx| {
+            tx.execute("UPDATE lease SET phase='released' WHERE id='past'", [])?;
+            Ok(())
+        })
+        .unwrap();
     original.enroll_handoff_authority(&key, SLOTS).unwrap();
     let enrolled = std::fs::read(&witness).unwrap();
     original.enroll_handoff_authority(&key, SLOTS).unwrap();
@@ -79,6 +88,17 @@ fn an_existing_controller_can_enroll_handoff_authority_once_without_resetting_it
         )
         .unwrap();
     assert_eq!(task, "unfinished");
+    assert_eq!(
+        replacement
+            .connection()
+            .query_row(
+                "SELECT identity FROM slot_binding WHERE id='historical'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        historical.1
+    );
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::Write,
     os::unix::fs::OpenOptionsExt,
@@ -312,17 +313,29 @@ fn read_seal(db: &Connection, witness: &Path) -> Result<Witness, Rejected> {
 }
 
 fn verify_slots(db: &Connection, slots: &[(&str, &str)]) -> Result<(), Rejected> {
-    let mut select = db.prepare("SELECT id,identity FROM slot_binding ORDER BY id")?;
+    let mut select = db.prepare("SELECT id,identity FROM slot_binding")?;
     let enrolled = select.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?.collect::<Result<Vec<_>, _>>()?;
-    let mut expected = slots.to_vec();
-    expected.sort_unstable();
-    if enrolled.iter().map(|(id, identity)| (id.as_str(), identity.as_str())).eq(expected) {
-        Ok(())
-    } else {
-        Err(handoff_denied())
+    })?.collect::<Result<BTreeMap<_, _>, _>>()?;
+    let expected: BTreeMap<_, _> = slots.iter().copied().collect();
+    if slots.is_empty()
+        || expected.len() != slots.len()
+        || expected.iter().any(|(&id, &identity)| enrolled.get(id).map(String::as_str) != Some(identity))
+    {
+        return Err(handoff_denied());
     }
+    // A retired slot's binding remains as history. Every unresolved lease
+    // or reservation still needs its exact provider.
+    let mut active = db.prepare(
+        "SELECT slot_id FROM lease WHERE phase!='released' UNION
+         SELECT slot_id FROM capacity_reservation WHERE released_at IS NULL",
+    )?;
+    for id in active.query_map([], |row| row.get::<_, String>(0))? {
+        if !expected.contains_key(id?.as_str()) {
+            return Err(handoff_denied());
+        }
+    }
+    Ok(())
 }
 
 fn commit_revision(tx: Transaction<'_>, witness: &Path, mut seal: Witness) -> Result<(), Rejected> {
