@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
+tempfile = "3"
+clap = { version = "4", features = ["derive", "env"] }
+
 async-stream = "0.3"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 axum-server = { version = "0.9", features = ["tls-rustls-ring"] }
@@ -27,4 +30,3 @@ url = "2"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio-stream = "0.1"
-tempfile = "3"

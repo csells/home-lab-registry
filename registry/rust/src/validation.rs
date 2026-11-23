@@ -23,7 +23,7 @@ const FIELDS: &[&str] = &[
     "probe",
 ];
 
-pub(crate) fn valid_id(value: &str) -> bool {
+pub fn valid_id(value: &str) -> bool {
     value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && value.len() <= 64
         && value

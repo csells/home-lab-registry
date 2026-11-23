@@ -1,3 +1,7 @@
+mod restore;
+pub use restore::restore_export;
+pub mod client;
+
 mod service;
 pub use service::serve;
 mod enrollment;
