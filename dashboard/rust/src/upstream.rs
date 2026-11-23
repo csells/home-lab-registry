@@ -80,7 +80,6 @@ impl SecureClient {
         read_timeout: Duration,
         allow_proxy: bool,
     ) -> Result<Self, &'static str> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let origin = parse_origin(origin)?;
         let certificate = tokio::fs::read(ca)
             .await
@@ -90,7 +89,11 @@ impl SecureClient {
         if token.is_empty() || roots.is_empty() {
             return Err("Incomplete upstream credentials");
         }
+        // Existing private registry and allocator installations can present a
+        // self-signed CA certificate as their endpoint certificate. Use the
+        // platform verifier with only these configured roots and normal name checks.
         let mut builder = Client::builder()
+            .tls_backend_native()
             .https_only(true)
             .redirect(Policy::none())
             .referer(false)
@@ -238,4 +241,92 @@ mod tests {
             assert!(lease_query(bad).is_err(), "{bad}");
         }
     }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[tokio::test]
+async fn trusted_legacy_self_signed_registry_certificate_is_supported_without_skipping_identity() {
+    use std::{
+        net::{TcpListener, TcpStream},
+        process::{Command, Stdio},
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let ca = temporary.path().join("registry.pem");
+    let key = temporary.path().join("registry.key");
+    let config = temporary.path().join("openssl.cnf");
+    std::fs::write(&config, "[req]\ndistinguished_name=dn\nx509_extensions=extensions\n[dn]\n[extensions]\nbasicConstraints=critical,CA:TRUE\nsubjectAltName=IP:127.0.0.1\n").unwrap();
+    let generated = Command::new("openssl")
+        .args([
+            "req",
+            "-new",
+            "-newkey",
+            "rsa:2048",
+            "-x509",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-config",
+        ])
+        .arg(&config)
+        .arg("-keyout")
+        .arg(&key)
+        .arg("-out")
+        .arg(&ca)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(generated.success());
+    let port = {
+        let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+        reservation.local_addr().unwrap().port()
+    };
+    let mut child = Command::new("openssl")
+        .args(["s_server", "-accept", &port.to_string(), "-cert"])
+        .arg(&ca)
+        .arg("-key")
+        .arg(&key)
+        .args(["-www", "-quiet"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let result = async {
+        for _ in 0..100 {
+            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let address = format!("https://127.0.0.1:{port}");
+        let trusted = SecureClient::new(
+            &address,
+            &ca,
+            "fixture".into(),
+            Duration::from_secs(2),
+            false,
+        )
+        .await
+        .unwrap();
+        let success = trusted.open("/", &[], "text/plain", None).await.is_ok();
+        let address = format!("https://localhost:{port}");
+        let other_name = SecureClient::new(
+            &address,
+            &ca,
+            "fixture".into(),
+            Duration::from_secs(2),
+            false,
+        )
+        .await
+        .unwrap();
+        let rejected_name = other_name.open("/", &[], "text/plain", None).await.is_err();
+        (success, rejected_name)
+    }
+    .await;
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(result, (true, true));
 }

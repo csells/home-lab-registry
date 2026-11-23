@@ -104,6 +104,7 @@ impl Target {
         let identity =
             Identity::from_pem(&identity_pem).map_err(|_| "Invalid collector client identity")?;
         let mut builder = Client::builder()
+            .tls_backend_rustls()
             .no_proxy()
             .https_only(true)
             .redirect(Policy::none())
