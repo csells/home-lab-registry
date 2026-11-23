@@ -12,7 +12,7 @@ Private operations planning stays outside the public index.
 | [0004 Platform source consolidation](0004-platform-source-consolidation.md) | Scoped backup collector shipped. Reusable Apple tooling, device tooling and remaining exporters still need source review. |
 | [0005 Inventory coverage and change delivery](0005-inventory-coverage-and-change-delivery.md) | Catalog changes, scoped presence and one clone registration passed bounded staging checks. Broader coverage, recovery and rollout remain open. |
 | [0006 Dashboard health review](0006-dashboard-health-review.md) | Eight corrections implemented and verified in disposable staging. Production promotion is pending. |
-| [0007 React, TypeScript and Rust port](0007-react-typescript-and-rust-port.md) | Dashboard front end first, followed by the dashboard server, registry and allocator. |
+| [0007 React, TypeScript and Rust port](0007-react-typescript-and-rust-port.md) | Typed dashboard state and the first React views in progress. Rust services follow front-end parity. |
 
 ## Archived
 

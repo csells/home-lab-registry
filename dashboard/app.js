@@ -1,5 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
+const inventoryStore=window.labDashboardInventory;
 const views = ['machines','discrepancies','services','backups','map','leases'];
 if (location.pathname === '/leases') history.replaceState(null, '', '/' + location.search + '#leases');
 const initialView = location.hash.slice(1);
@@ -146,18 +147,21 @@ function render(){
  const q=$('search').value.toLowerCase(),host=$('host').value,rows=items.filter(r=>(filter==='all'||health(r)===filter)&&(!host||r.host===host)&&[r.name,r.host,r.id,...r.capabilities].join(' ').toLowerCase().includes(q));const rank={unhealthy:0,stale:1,unknown:2,healthy:3,running:3,stopped:4};rows.sort((a,b)=>rank[health(a)]-rank[health(b)]||a.name.localeCompare(b.name));$('summary').textContent=rows.length+' of '+items.length+' '+(map?'resources':view);
  const cards=$('cards');cards.className=map?'':machine?'machines':'services';cards.setAttribute('aria-label',map?'Resources':machine?'Machines':isBackup?'Backups':'Services');const root=document.createDocumentFragment();if(!map)for(const r of rows)root.append(machine?machineCard(r):serviceCard(r));if(!rows.length)root.append(el('p','empty-results','No '+(map?'resources':view)+' match these filters.'));cards.replaceChildren(root);if(map&&rows.length)disposeGraph=ResourceGraph.mount(cards,items.map(r=>({...r,name:r.display_name||r.name,kind:r.kind==='machine'?r.machine_type:'service',status:health(r)})),{matching:new Set(rows.map(r=>r.id))});queueMicrotask(refreshVisible);
 }
-function applyInventory(snapshot){
- data=snapshot;
+inventoryStore.subscribe(()=>{
+ const {inventory,streamWarning,requestWarning,clockOffset}=inventoryStore.read();
+ const message=streamWarning||requestWarning||inventory.error||'';
+ $('error').hidden=!message;
+ $('error').textContent=message;
+ if(data===inventory)return;
+ data=inventory;
+ offset=clockOffset;
  if(Object.hasOwn(data,'lease_review_enabled')){
   $('leases-tab').hidden=!data.lease_review_enabled;
   if(view==='leases'&&!data.lease_review_enabled){view='machines';history.replaceState(null,'','#machines')}
  }
- if(data.server_time)offset=data.server_time-Date.now()/1000;
- $('error').hidden=!data.error;
- $('error').textContent=data.error||'';
- showDiscrepancies();
+ if(data.lease_issues?.status==='verified')LeaseHistory.showCounts(data.lease_issues);
  if(!copying&&!$('cards').contains(document.activeElement))render();
-}
+});
 
 async function refresh(){
  if(busy||document.hidden)return;
@@ -166,10 +170,9 @@ async function refresh(){
  try{
   const response=await fetch('api/inventory',{signal:AbortSignal.timeout(12000),cache:'no-store'});
   if(!response.ok)throw Error('failed');
-  applyInventory(await response.json());
+  inventoryStore.apply(await response.json());
  }catch{
-  $('error').hidden=false;
-  $('error').textContent='Unable to refresh. Displayed readings may be stale.';
+  inventoryStore.requestFailed('Unable to refresh. Displayed readings may be stale.');
  }finally{
   busy=false;
   $('refresh').disabled=false;
@@ -181,10 +184,9 @@ async function refreshCatalog(){
  try{
   const r=await fetch('api/refresh',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'refresh-catalog'},body:'{}',signal:AbortSignal.timeout(16000)});
   if(!r.ok)throw Error('HTTP '+r.status);
-  applyInventory(await r.json());
+  inventoryStore.apply(await r.json());
  }catch(e){
-  $('error').hidden=false;
-  $('error').textContent='Catalog refresh failed: '+e.message;
+  inventoryStore.requestFailed('Catalog refresh failed: '+e.message);
  }finally{button.disabled=false;}
 }
 for (const name of views) $(name+'-tab').onclick = () => switchView(name);
@@ -194,18 +196,6 @@ addEventListener('popstate', () => {
 });
 $('search').oninput=render;$('host').onchange=render;$('refresh').onclick=()=>view==='leases'?LeaseHistory.load():refreshCatalog();document.querySelector('.brand').onclick=e=>{e.preventDefault();switchView('machines')};$('search').value=new URLSearchParams(location.search).get('q')||'';
 
-let reconcileRequested=0;
-const findingGroups=[
- ['guest-mismatch','Confirmed guest mismatches'],
- ['record-review','Deployment records to review'],
- ['machine-health','Machine health'],
- ['service-health','Service health'],
- ['backup-health','Backup jobs'],
- ['network','IP reservation audit'],
- ['lease','Environment leases'],
- ['warning','Warnings'],
- ['coverage','Checks we could not verify']
-];
 function findingItem(f){
  return el('li','',f.target+(f.guest_id?' / '+f.guest_id:'')+' — '+f.message+(f.name?' ('+f.name+')':''));
 }
@@ -237,159 +227,6 @@ function hostInventory(machine){
  }
  return panel;
 }
-function healthFindings() {
- const findings=[];
- for(const [collection,category] of [['machines','machine-health'],['services','service-health'],['backups','backup-health']]){
-  for(const record of data[collection]){
-   if(record.lifecycle!=='active')continue;
-   const state=record.health||{};
-   if(category==='machine-health'&&health(record)==='stopped')continue;
-   const target=record.display_name||record.name;
-   if(!data.error&&state.status==='unhealthy'&&state.expires>now()){
-    findings.push({category,target,message:state.evidence||'Health check failed.'});
-   }else if(state.status==='stale'||(state.expires&&state.expires<=now())){
-    findings.push({category:'coverage',target,message:'The last health check expired.'});
-   }else if(state.status==='unknown'&&(state.checked||category==='backup-health')){
-    findings.push({category:'coverage',target,message:category==='backup-health'?'No verified backup result.':'Health check inconclusive.'});
-   }
-  }
- }
- return findings;
-}
-
-function addressFindings(a) {
- const target='IP reservation audit';
- if(!a)return [{category:'coverage',target,message:'No audit result has been published.'}];
- const date=new Date(a.at).toLocaleString();
- const findings=[];
- if(a.status==='error'||a.status==='failed'){
-  findings.push({category:'network',target,message:'The audit failed on '+date+'.'});
- }else if(a.unreserved_static>0){
-  findings.push({category:'network',target,count:a.unreserved_static,
-   message:a.unreserved_static+' unreserved static '+(a.unreserved_static===1?'address':'addresses')+' in the audit from '+date+'.'});
- }
- if(a.warnings>0){
-  findings.push({category:'warning',target,count:a.warnings,
-   message:a.warnings+' '+(a.warnings===1?'warning':'warnings')+' in the audit from '+date+'.'});
- }
- return findings;
-}
-
-function leaseFindings(report){
- if(!report)return [];
- if(report.status!=='verified')return [{category:'coverage',target:'Leases',message:
-  report.status==='checking'?'Checking current leases.':'Could not check current leases.'}];
- LeaseHistory.showCounts(report);
- const messages={'export-failed':'Workspace export failed. See Leases for details.','overdue':'The lease is overdue.'};
- return report.issues.map(issue=>({category:'lease',target:issue.task,message:messages[issue.code]}));
-}
-
-function showDiscrepancies(){
- const a=data.inventory_accuracy;
- const visibleFindings=[...healthFindings(),...leaseFindings(data.lease_issues)];
- if(data.fetched_at)visibleFindings.push(...addressFindings(data.address_audit));
- if(data.error&&data.fetched_at)visibleFindings.push({category:'coverage',target:'Registry',message:data.error});
- if(data.catalog&&data.catalog.feed!=='connected'){
-  visibleFindings.push({category:'coverage',target:'Registry catalog',message:'Live catalog updates unavailable. Cached records were last read '+(data.catalog.checked?age(data.catalog.checked).toLowerCase():'at startup')+'.'});
- }
- const count=$('discrepancy-count');
- const summary=$('accuracy-summary');
- const scope=$('accuracy-scope');
- const findings=$('accuracy-findings');
- const detailPanel=$('accuracy-details');
- const catalogUnverified=data.catalog&&(data.catalog.feed!=='connected'&&
-  (!data.catalog.checked||now()-data.catalog.checked>90));
- const stale=Boolean(!a||data.error||now()-a.checked>90);
- const expiredHosts=new Set((a?.hosts||[]).filter(h=>h.status==='verified'&&h.expires<=now()).map(h=>h.machine_id));
- const c=a?.coverage;
- const coverage=c?(c.verified-expiredHosts.size)+' of '+c.expected+' configured hosts verified':'Guest inventory unavailable';
- if(a){
-  const expiredDeployments=new Set((a.deployments||[]).filter(d=>d.state==='missing'&&
-   (data.error||d.expires<=now())).map(d=>d.record_id));
-  visibleFindings.push(...a.findings.filter(f=>
-   (f.category!=='guest-mismatch'||(!stale&&!catalogUnverified&&!expiredHosts.has(f.machine_id||f.target)))&&
-   (f.code!=='deployment-missing'||!expiredDeployments.has(f.target))));
-  for(const target of expiredDeployments){
-   visibleFindings.push({category:'coverage',target,message:'The deployment state could not be verified.'});
-  }
- }
- const tally=items=>items.reduce((sum,item)=>sum+(item.count??1),0);
- const unverified=tally(visibleFindings.filter(f=>f.category==='coverage'));
- const warnings=tally(visibleFindings.filter(f=>f.category==='warning'));
- const discrepancies=tally(visibleFindings)-unverified-warnings;
- const badge=data.fetched_at?String(discrepancies):'—';
- if(count.textContent!==badge)count.textContent=badge;
- count.classList.toggle('has-errors',discrepancies>0);
- const result=!data.fetched_at?'Waiting for lab reports…':discrepancies?
-  discrepancies+' '+(discrepancies===1?'problem':'problems'):'No confirmed problems';
- const status=[result];
- if(warnings)status.push(warnings+' '+(warnings===1?'warning':'warnings'));
- if(unverified)status.push(unverified+' unverified '+(unverified===1?'check':'checks'));
- const summaryText=status.join(' · ');
- if(summary.textContent!==summaryText)summary.textContent=summaryText;
- const audit=data.address_audit;
- scope.textContent=coverage+(stale&&c?' · Guest inventory needs a refresh':'')+
-  (c?.unconfigured?' · '+c.unconfigured+' hosts have no configured guest collector':'')+
-  (audit?' · Last IP audit '+new Date(audit.at).toLocaleDateString():'');
- detailPanel.hidden=visibleFindings.length===0;
- const next=JSON.stringify(visibleFindings);
- if(findings.dataset.items!==next){
-  const groups=document.createDocumentFragment();
-  for(const [category,title] of findingGroups){
-   const items=visibleFindings.filter(f=>f.category===category);
-   if(!items.length)continue;
-   const label=title+' ('+tally(items)+')';
-   const group=category==='coverage'?
-    details('discrepancies:coverage','accuracy-group',label):el('section','accuracy-group');
-   if(category!=='coverage')group.append(el('h3','',label));
-   const list=el('ul');for(const f of items)list.append(findingItem(f));
-   group.append(list);groups.append(group);
-  }
-  findings.replaceChildren(groups);
-  findings.dataset.items=next;
- }
- finishComparison(data);
-}
-function finishComparison(report){
- const receipt=report.comparison;
- if(!reconcileRequested||receipt?.id!==reconcileRequested||receipt.state==='pending')return;
- reconcileRequested=0;
- const accuracy=report.inventory_accuracy;
- if(receipt.state==='failed'||!accuracy){
-  $('reconcile-status').textContent='Could not complete reconciliation. Check registry connectivity and retry.';
- }else{
-  const checks=accuracy.hosts.filter(host=>host.status==='verified').map(host=>host.checked);
-  const oldest=checks.length?' · Oldest verified report: '+age(Math.min(...checks)):'';
-  const {verified,expected}=accuracy.coverage;
-  $('reconcile-status').textContent='Comparison finished · '+verified+' of '+expected+' configured hosts verified'+oldest;
- }
- $('reconcile').disabled=false;
-}
-
-$('reconcile').onclick=async()=>{
- const button=$('reconcile');button.disabled=true;$('reconcile-status').textContent='Checking registered deployments against current host inventories…';
- try{const r=await fetch('api/reconcile',{method:'POST',headers:{'Content-Type':'application/json','X-Lab-Action':'reconcile'},body:'{}',signal:AbortSignal.timeout(12000)});if(!r.ok)throw Error('HTTP '+r.status);
-  reconcileRequested=(await r.json()).id;
-  if(!reconcileRequested)throw Error('Server returned no comparison ID');
-  finishComparison(data);
-  const deadline=Date.now()+90000;
-  while(reconcileRequested && Date.now()<deadline){
-   await new Promise(resolve=>setTimeout(resolve,4000));
-   if(!reconcileRequested)break;
-   // A manual comparison can finish while this browser's event stream is disconnected.
-   const result=await fetch('api/reconciliation',{cache:'no-store',signal:AbortSignal.timeout(8000)});
-   if(!result.ok)throw Error('HTTP '+result.status+' reading comparison');
-   const report=await result.json();
-   if(report.comparison?.id===reconcileRequested&&report.comparison.state==='complete'){
-    data.inventory_accuracy=report.inventory_accuracy;
-    finishComparison(report);
-    showDiscrepancies();
-   }else finishComparison(report);
-  }
-  if(reconcileRequested)throw Error('Timed out waiting for a completed reconciliation');
- }catch(e){$('reconcile-status').textContent='Could not complete reconciliation: '+e.message;reconcileRequested=0}finally{button.disabled=false}
-};
-
 var inventoryStream, inventoryRetry, inventoryRetryDelay;
 function connectInventory(){
  clearTimeout(inventoryRetry);
@@ -398,12 +235,12 @@ function connectInventory(){
  inventoryStream=new EventSource('api/inventory/stream');
  inventoryStream.addEventListener('inventory',event=>{
   try{
-   applyInventory(JSON.parse(event.data));
+   inventoryStore.apply(JSON.parse(event.data), 'stream');
    inventoryRetryDelay=1000;
-  }catch{$('error').hidden=false;$('error').textContent='Invalid inventory event; waiting for a valid update.'}
+  }catch{inventoryStore.streamUnavailable('Invalid inventory event; waiting for a valid update.')}
  });
  inventoryStream.onerror=()=>{
-  $('error').hidden=false;$('error').textContent='Inventory stream disconnected; reconnecting. Cached observations may be stale.';
+  inventoryStore.streamUnavailable('Inventory stream disconnected; reconnecting. Cached observations may be stale.');
   // EventSource retries transport errors, but closes permanently on some HTTP errors.
   if(inventoryStream.readyState===EventSource.CLOSED){
    clearTimeout(inventoryRetry);
@@ -420,6 +257,6 @@ refresh();
 connectInventory();
 setInterval(()=>{
  if(document.hidden)return;
- showDiscrepancies();
+ inventoryStore.tick();
  if(!copying&&!$('cards').contains(document.activeElement))render();
 },15000);

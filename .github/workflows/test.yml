@@ -18,7 +18,13 @@ jobs:
       - run: node --check dashboard/app.js
       - run: node --check dashboard/resource-graph.js
       - run: node tests/test_resource_graph.cjs
-      - run: node tests/test_manual_comparison.cjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix dashboard/frontend
+      - run: npm run typecheck --prefix dashboard/frontend
+      - run: npm test --prefix dashboard/frontend
+      - run: npm run build --prefix dashboard/frontend
   collector:
     runs-on: ubuntu-latest
     steps:
@@ -37,9 +43,15 @@ jobs:
         with:
           python-version: '3.13'
       - run: pip install playwright -r requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix dashboard/frontend
+      - run: npm run build --prefix dashboard/frontend
       - run: playwright install --with-deps chromium
       - run: python tests/check_gpu_browser.py
       - run: python tests/check_map_browser.py
+      - run: python tests/check_discrepancies_browser.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
