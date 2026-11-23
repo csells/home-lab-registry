@@ -15,3 +15,5 @@ ssh_known_hosts
 
 /dashboard/frontend/node_modules/
 /dashboard/dashboard-react.js
+
+/dashboard/rust/target/

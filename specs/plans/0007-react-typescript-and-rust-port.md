@@ -42,3 +42,27 @@ disposable preview verified six live collectors, a real health failure and
 recovery, reconciliation through the matching receipt with browser SSE blocked,
 stream recovery, and navigation through all dashboard tabs. The built bundle
 was verified over authenticated HTTP with the same content security policy.
+
+## Full React dashboard
+
+Revision `2be020c` serves all dashboard views from React and TypeScript. The
+last browser script was removed. ELK still handles graph layout within the
+Resources view. Metrics streams follow card visibility and close when the
+Machines view or the browser page is hidden. The shared inventory state keeps
+explicit lease availability even if the initial HTTP response arrives after an
+inventory stream event.
+
+The disposable preview verified all tabs, six live collectors, a real service
+health failure and recovery, the receipt for a comparison with browser SSE
+blocked, a live metrics chart, and the staging-only terminal and password
+controls. Browser fixtures covered phone and desktop layout, history paging,
+the graph, GPU reading states, and closing and reopening chart streams.
+
+## Rust dashboard work in progress
+
+The first Rust contracts cover authenticated reads and static assets, the
+inventory stream, scoped password copy, and the refresh and reconciliation
+request boundary. Axum serves HTTP and SSE. Tokio watch channels retain the
+latest observation so a slow client does not accumulate an unbounded queue.
+Keep Python as the staged server until Rust is connected to the live registry,
+collectors, leases and terminal backend, and the full workflow passes.

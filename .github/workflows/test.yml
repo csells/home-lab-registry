@@ -24,6 +24,13 @@ jobs:
       - run: npm run typecheck --prefix dashboard/frontend
       - run: npm test --prefix dashboard/frontend
       - run: npm run build --prefix dashboard/frontend
+  rust-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+      - run: cargo +1.98.0 fmt --manifest-path dashboard/rust/Cargo.toml --check
+      - run: cargo +1.98.0 test --locked --manifest-path dashboard/rust/Cargo.toml
   collector:
     runs-on: ubuntu-latest
     steps:
