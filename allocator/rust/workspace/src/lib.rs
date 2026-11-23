@@ -187,7 +187,7 @@ fn extract_tar(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {
             return Err(budget());
         }
         let path = entry.path()?.into_owned();
-        if path == Path::new(RECEIPT) {
+        if path.strip_prefix(".").unwrap_or(&path) == Path::new(RECEIPT) {
             continue;
         }
         let leaf = contained(&root, &path, false)?;

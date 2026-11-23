@@ -119,3 +119,32 @@ fn macos_tar_padding_is_accepted_but_nonzero_garbage_is_rejected() {
     let invalid = tempfile::tempdir().unwrap();
     assert!(lab_allocator::workspace::extract_workspace(input.as_slice(), invalid.path()).is_err());
 }
+
+#[test]
+fn reexport_regenerates_a_receipt_written_with_a_dot_prefix() {
+    let source = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("workspace.txt"), b"restored data").unwrap();
+    fs::write(
+        source.path().join(".lease-restore-receipt"),
+        b"receipt from the original lease",
+    )
+    .unwrap();
+    let archive = Command::new("tar")
+        .args(["-czf", "-", "-C"])
+        .arg(source.path())
+        .arg(".")
+        .output()
+        .unwrap();
+    assert!(archive.status.success());
+
+    let restored = tempfile::tempdir().unwrap();
+    extract_workspace(archive.stdout.as_slice(), restored.path()).unwrap();
+    assert_eq!(
+        fs::read(restored.path().join("workspace.txt")).unwrap(),
+        b"restored data"
+    );
+    assert_eq!(
+        fs::read(restored.path().join(".lease-restore-receipt")).unwrap(),
+        b""
+    );
+}
