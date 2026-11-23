@@ -1,10 +1,14 @@
+#[cfg(unix)]
 pub mod deployment;
 
 mod restore;
 pub use restore::restore_export;
 pub mod client;
+mod client_permissions;
 
+#[cfg(unix)]
 mod service;
+#[cfg(unix)]
 pub use service::serve;
 mod enrollment;
 mod http;

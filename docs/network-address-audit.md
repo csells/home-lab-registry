@@ -64,8 +64,8 @@ Running Linux guests can use a compatible host collector temporarily through
 the QEMU guest agent or Proxmox container execution. The collector is removed
 after the run. The guest's CPU architecture and Linux runtime must support the
 artifact, and the guest must permit execution from its temporary directory.
-Collection and cleanup failures are reported. AMT relay operations with
-credentials on stdin use the installed collector.
+Collection and cleanup failures are reported. For AMT relay operations, the
+transient collector reads credentials over its inherited stdin.
 Stopped
 single-NIC Proxmox guests are inspected with read-only loop devices and ext4
 `ro,noload` mounts; temporary mounts and volume activation are cleaned up.

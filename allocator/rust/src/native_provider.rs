@@ -12,7 +12,8 @@ use crate::{
     provider::unavailable,
     proxmox::{GuestPin, Proxmox, TaskKind, api_id, config_text, escape, task_matches, uuid_field},
     proxmox_dynamic::{DynamicScope, Shape, legacy_json},
-    request::{APPLE, LINUX, canonical_requirements, public_key},
+    protocol::{APPLE, LINUX, public_key},
+    request::canonical_requirements,
     tart::{Tart, operation as tart_operation},
     tokens::hex,
 };

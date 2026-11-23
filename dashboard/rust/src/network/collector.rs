@@ -189,7 +189,51 @@ fn read_linux_profiles(root: &Path, links: &Value, rows: &mut Entries) {
             );
             continue;
         };
-        if filename.contains("/netplan/") || filename.contains("/cloud/") {
+        if filename.contains("/netplan/") {
+            let profiles = YamlLoader::load_from_str(&profile);
+            match profiles {
+                Ok(profiles) => {
+                    for profile in profiles {
+                        for kind in ["ethernets", "bridges", "vlans", "bonds", "wifis"] {
+                            let Some(adapters) = profile["network"][kind].as_hash() else {
+                                continue;
+                            };
+                            for (id, adapter) in adapters {
+                                for address in adapter["addresses"].as_vec().into_iter().flatten() {
+                                    let address = address.as_str().and_then(ip_literal);
+                                    let name = adapter["set-name"].as_str().or_else(|| {
+                                        adapter["match"]
+                                            .is_badvalue()
+                                            .then(|| id.as_str())
+                                            .flatten()
+                                    });
+                                    let matching = rows.iter().find(|row| {
+                                        address.is_some_and(|ip| row["address"] == ip.to_string())
+                                            && name.is_none_or(|name| row["interface"] == name)
+                                    });
+                                    if let (Some(address), Some(interface)) = (address, matching) {
+                                        saved.push(json!({"address":address,"mac":interface["mac"],
+                                            "interface":interface["interface"],"assignment":"static","source":filename}));
+                                    } else {
+                                        saved.push(json!({"reason":"Saved netplan address cannot be bound to an observed interface","source":filename}));
+                                    }
+                                }
+                                if adapter["dhcp4"].as_bool() == Some(false)
+                                    && adapter["addresses"].as_vec().is_none()
+                                {
+                                    saved.push(json!({"reason":"Saved netplan profile disables DHCP without a verified address","source":filename}));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(_) => saved.push(
+                    json!({"reason":"Saved netplan profile could not be parsed","source":filename}),
+                ),
+            }
+            continue;
+        }
+        if filename.contains("/cloud/") {
             if profile.lines().any(|line| {
                 let line = line.trim();
                 line.starts_with("addresses:")
@@ -197,7 +241,7 @@ fn read_linux_profiles(root: &Path, links: &Value, rows: &mut Entries) {
                         .strip_prefix("dhcp4:")
                         .is_some_and(|value| matches!(value.trim(), "false" | "no"))
             }) {
-                saved.push(json!({"reason":"Saved YAML network profile needs structured validation","source":filename}));
+                saved.push(json!({"reason":"Saved cloud-init profile needs structured validation","source":filename}));
             }
             continue;
         }
@@ -1036,4 +1080,26 @@ fn a_running_guest_can_be_read_without_an_installed_collector() {
     .unwrap();
     assert_eq!(collected[0]["assignment"], "dhcp");
     assert!(!path.exists());
+}
+
+#[cfg(test)]
+#[test]
+fn an_inline_netplan_static_address_is_bound_to_the_observed_interface() {
+    let root = tempfile::tempdir().unwrap();
+    let saved = root.path().join("etc/netplan");
+    fs::create_dir_all(&saved).unwrap();
+    fs::write(
+        saved.join("static.yaml"),
+        "network:\n  ethernets:\n    eth0:\n      addresses: [192.0.2.10/24]\n",
+    )
+    .unwrap();
+    let links = json!([{"ifname":"eth0","address":"02:00:00:00:00:01"}]);
+    let mut rows = vec![
+        json!({"interface":"eth0","address":"192.0.2.10","mac":"02:00:00:00:00:01","assignment":"unknown"}),
+    ];
+    read_linux_profiles(root.path(), &links, &mut rows);
+    assert!(
+        rows.iter()
+            .any(|row| row["assignment"] == "static" && row["mac"] == "02:00:00:00:00:01")
+    );
 }

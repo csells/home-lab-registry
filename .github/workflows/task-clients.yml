@@ -17,15 +17,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.98.0 --profile minimal
-      - run: cargo +1.98.0 build --locked --release --manifest-path allocator/rust/Cargo.toml --bin lab-lease ${{ matrix.helper }}
+      - run: cargo +1.98.0 test --locked --no-default-features --manifest-path allocator/rust/Cargo.toml --lib task_client::transport_tests
+      - run: cargo +1.98.0 build --locked --no-default-features --release --manifest-path allocator/rust/Cargo.toml --bin lab-lease ${{ matrix.helper }}
+      - run: cargo +1.98.0 build --locked --release --manifest-path registry/rust/Cargo.toml --bin lab-registry-client
       - run: |
           set -e
           mkdir package
+          cp "registry/rust/target/release/lab-registry-client${{ matrix.suffix }}" package/
           cp "allocator/rust/target/release/lab-lease${{ matrix.suffix }}" package/
           if test -n '${{ matrix.helper }}'; then
             cp allocator/rust/target/release/lab-restore-workspace package/
           fi
           "./package/lab-lease${{ matrix.suffix }}" --help
+          "./package/lab-registry-client${{ matrix.suffix }}" --help
+          if test '${{ matrix.target }}' = macos-arm64; then
+            if otool -L package/lab-lease | tail -n +2 | grep -vE '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
+              exit 1
+            fi
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.target }}

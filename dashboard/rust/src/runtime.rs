@@ -15,7 +15,7 @@ use crate::{
     Dashboard, Registry,
     catalog::Change,
     collector::Target,
-    guests::{GuestInventory, overlay},
+    guests::{GuestInventory, Report, overlay},
     inventory::{address_audit, project},
     reconcile::{LeaseOwnership, comparison},
     unix_time,
@@ -108,35 +108,48 @@ fn declared_targets(records: &[Value]) -> HashMap<String, Target> {
         .collect()
 }
 
-async fn overrides(
-    path: &Path,
-    endpoints: &HashMap<String, Target>,
-) -> Result<HashMap<String, Target>, &'static str> {
-    let mut result = endpoints.clone();
-    if path.is_file() {
-        let values: HashMap<String, Value> = match read_json(path).await {
-            Ok(values) => values,
-            Err(reason) => {
-                tracing::warn!(reason, "Guest endpoint overrides could not be read");
-                return Ok(result);
+struct GuestEndpoints {
+    targets: HashMap<String, Target>,
+    unavailable: HashMap<String, &'static str>,
+}
+
+async fn overrides(path: &Path, endpoints: &HashMap<String, Target>) -> GuestEndpoints {
+    let mut configured = GuestEndpoints {
+        targets: endpoints.clone(),
+        unavailable: HashMap::new(),
+    };
+    if !path.exists() {
+        return configured;
+    }
+    let values: HashMap<String, Value> = match read_json(path).await {
+        Ok(values) => values,
+        Err(reason) => {
+            tracing::warn!(reason, "Guest endpoint overrides could not be read");
+            configured.unavailable.extend(
+                configured
+                    .targets
+                    .drain()
+                    .map(|(id, _)| (id, "Private guest endpoint configuration is unavailable")),
+            );
+            return configured;
+        }
+    };
+    for (id, value) in values {
+        let target = serde_json::from_value::<Endpoint>(value)
+            .map_err(|_| "Invalid guest endpoint entry")
+            .and_then(|endpoint| Target::guest(&endpoint.url, &endpoint.server_name));
+        match target {
+            Ok(target) => {
+                configured.targets.insert(id, target);
             }
-        };
-        for (id, value) in values {
-            let target = serde_json::from_value::<Endpoint>(value)
-                .map_err(|_| "Invalid guest endpoint entry")
-                .and_then(|endpoint| Target::guest(&endpoint.url, &endpoint.server_name));
-            match target {
-                Ok(target) => {
-                    result.insert(id, target);
-                }
-                Err(reason) => {
-                    tracing::warn!(reason, "Guest endpoint override is unavailable");
-                    result.remove(&id);
-                }
+            Err(reason) => {
+                tracing::warn!(reason, "Guest endpoint override is unavailable");
+                configured.targets.remove(&id);
+                configured.unavailable.insert(id, reason);
             }
         }
     }
-    Ok(result)
+    configured
 }
 
 async fn refresh_health(
@@ -182,6 +195,7 @@ impl Dashboard {
             ..CatalogState::default()
         };
         let mut registered_collectors = HashSet::new();
+        let mut unavailable = HashMap::new();
         let mut applied_generation = 0;
         let mut lease_checked_generation = 0;
         let mut compared = None;
@@ -204,7 +218,7 @@ impl Dashboard {
                 let fetched = async {
                     let records = registry.records().await?;
                     let metrics = declared_targets(&records);
-                    let guests = overrides(&override_file, &metrics).await?;
+                    let guests = overrides(&override_file, &metrics).await;
                     Ok::<_, &'static str>((records, metrics, guests))
                 }
                 .await;
@@ -220,7 +234,8 @@ impl Dashboard {
                             comparison_deadline = Instant::now() + Duration::from_secs(40);
                             lease_due = Instant::now();
                         }
-                        fleet.configure(&guests, new_comparison);
+                        unavailable = guests.unavailable;
+                        fleet.configure(&guests.targets, new_comparison);
                     }
                     Err(reason) => catalog.failed(reason),
                 }
@@ -264,7 +279,17 @@ impl Dashboard {
                 }
             }
             let now = unix_time();
-            let reports = fleet.snapshot();
+            let mut reports = fleet.snapshot();
+            reports.extend(unavailable.iter().map(|(id, reason)| {
+                (
+                    id.clone(),
+                    Report {
+                        checked: Some(now),
+                        error: Some((*reason).into()),
+                        ..Report::default()
+                    },
+                )
+            }));
             ownership
                 .update(
                     &reports,
@@ -410,11 +435,17 @@ mod tests {
             "machine-existing".into(),
             Target::parse("https://existing.example.invalid:9911/stream", None).unwrap(),
         );
-        let configured = overrides(&path, &declared).await.unwrap();
-        assert_eq!(configured["machine-test"].port, 443);
-        assert_eq!(configured["machine-other"].port, 443);
-        assert!(configured.contains_key("machine-existing"));
-        assert!(!configured.contains_key("machine-invalid"));
-        assert!(!configured.contains_key("machine-malformed"));
+        let configured = overrides(&path, &declared).await;
+        assert_eq!(configured.targets["machine-test"].port, 443);
+        assert_eq!(configured.targets["machine-other"].port, 443);
+        assert!(configured.targets.contains_key("machine-existing"));
+        assert!(!configured.targets.contains_key("machine-invalid"));
+        assert!(!configured.targets.contains_key("machine-malformed"));
+        assert!(configured.unavailable.contains_key("machine-invalid"));
+        assert!(configured.unavailable.contains_key("machine-malformed"));
+        tokio::fs::write(&path, "{").await.unwrap();
+        let invalid = overrides(&path, &declared).await;
+        assert!(invalid.targets.is_empty());
+        assert!(invalid.unavailable.contains_key("machine-existing"));
     }
 }

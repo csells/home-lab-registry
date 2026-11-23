@@ -27,6 +27,8 @@ jobs:
       - run: rustup toolchain install 1.98.0 --profile minimal --component rustfmt
       - run: cargo +1.98.0 fmt --all --manifest-path "$CRATE/rust/Cargo.toml" --check
       - run: cargo +1.98.0 test --locked --manifest-path "$CRATE/rust/Cargo.toml"
+      - if: matrix.crate == 'registry'
+        run: cargo +1.98.0 test --locked --manifest-path crates/http-transport/Cargo.toml
   collector:
     runs-on: ubuntu-latest
     steps:

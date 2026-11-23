@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use url::Url;
 use uuid::Uuid;
 
-use crate::{Rejected, provider::unavailable, request::public_key};
+use crate::{Rejected, provider::unavailable, protocol::public_key};
 
 #[derive(Clone, Copy)]
 pub enum TaskKind {

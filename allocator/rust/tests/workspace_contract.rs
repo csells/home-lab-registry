@@ -206,3 +206,34 @@ fn a_later_regular_archive_entry_supersedes_the_first_without_editing_its_hard_l
     assert_eq!(fs::read(destination.path().join("entry")).unwrap(), b"new");
     assert_eq!(fs::read(destination.path().join("copy")).unwrap(), b"old");
 }
+
+#[test]
+fn restore_preserves_fractional_pax_and_negative_gnu_timestamps() {
+    use std::time::{Duration, UNIX_EPOCH};
+    let mut tar = Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    let mut file = Header::new_gnu();
+    file.set_size(2);
+    file.set_mode(0o644);
+    file.set_mtime(1_700_000_000);
+    tar.append_pax_extensions([("mtime", &b"1700000000.125"[..])])
+        .unwrap();
+    tar.append_data(&mut file, "pax", &b"ok"[..]).unwrap();
+    file.as_old_mut().mtime.fill(0xff);
+    file.as_old_mut().mtime[11] = 0xf4;
+    tar.append_data(&mut file, "gnu", &b"ok"[..]).unwrap();
+
+    let bytes = tar.into_inner().unwrap().finish().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    extract_workspace(bytes.as_slice(), destination.path()).unwrap();
+    let modified = |file| {
+        fs::metadata(destination.path().join(file))
+            .unwrap()
+            .modified()
+            .unwrap()
+    };
+    assert_eq!(
+        modified("pax"),
+        UNIX_EPOCH + Duration::new(1_700_000_000, 125_000_000)
+    );
+    assert_eq!(modified("gnu"), UNIX_EPOCH - Duration::from_secs(12));
+}

@@ -139,24 +139,25 @@ impl TaskSession {
 
 struct Response {
     status: u16,
-    headers: Vec<u8>,
+    headers: reqwest::header::HeaderMap,
 }
 
-struct Outgoing<'a> {
+struct Outgoing {
     mime: &'static str,
-    size: u64,
-    body: &'a mut dyn Read,
+    body: reqwest::blocking::Body,
 }
 
 fn request_to(
     address: (&str, &str),
     ca: &Path,
     token: &str,
-    mut input: Option<Outgoing<'_>>,
+    input: Option<Outgoing>,
     budget: (u64, u64),
     output: &mut impl Write,
 ) -> Result<Response, TaskError> {
-    use curl::easy::{Easy, List, ReadError, SslVersion};
+    use reqwest::{Certificate, blocking::Client, header, redirect, retry, tls::Version};
+    use std::time::Duration;
+
     let (origin, path) = address;
     let (seconds, limit) = budget;
     if !path.starts_with("/v1/") || path.contains(['#', '\r', '\n', '\0']) {
@@ -165,99 +166,53 @@ fn request_to(
     if !valid_token(token, 32, 128) {
         return Err(TaskError::client("Invalid task credential file"));
     }
-    let transport = |error: curl::Error| {
-        TaskError::client(format!(
-            "Allocator HTTPS transport failed (curl {})",
-            error.code()
-        ))
+    let transport = |_: reqwest::Error| TaskError::client("Allocator HTTPS transport failed");
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let roots = Certificate::from_pem_bundle(&fs::read(ca)?)
+        .map_err(|_| TaskError::client("Invalid allocator CA file"))?;
+    let client = Client::builder()
+        .http1_only()
+        .no_proxy()
+        .https_only(true)
+        .redirect(redirect::Policy::none())
+        .retry(retry::never())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(seconds))
+        .tls_backend_rustls()
+        .tls_version_min(Version::TLS_1_3)
+        .tls_certs_only(roots)
+        .build()
+        .map_err(transport)?;
+    let target = format!("{origin}{path}");
+    let request = match input {
+        Some(request) => client
+            .post(target)
+            .header(header::CONTENT_TYPE, request.mime)
+            .body(request.body),
+        None => client.get(target),
     };
-    let mut headers = List::new();
-    headers
-        .append(&format!("Authorization: Bearer {token}"))
-        .map_err(transport)?;
-    let mut client = Easy::new();
-    client.url(&format!("{origin}{path}")).map_err(transport)?;
-    client.follow_location(false).map_err(transport)?;
-    client.noproxy("*").map_err(transport)?;
-    client
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .map_err(transport)?;
-    client
-        .timeout(std::time::Duration::from_secs(seconds))
-        .map_err(transport)?;
-    client.ssl_version(SslVersion::Tlsv13).map_err(transport)?;
-    client.ssl_verify_peer(true).map_err(transport)?;
-    client.ssl_verify_host(true).map_err(transport)?;
-    client.ssl_cainfo_blob(&fs::read(ca)?).map_err(transport)?;
-    // Only the independently supplied CA is trusted, including on builds with
-    // a default system CA directory.
-    let empty_ca_path = tempfile::tempdir()?;
-    client.capath(empty_ca_path.path()).map_err(transport)?;
-    client.max_filesize(limit).map_err(transport)?;
-    if let Some(request) = &input {
-        client.post(true).map_err(transport)?;
-        client.post_field_size(request.size).map_err(transport)?;
-        headers
-            .append(&format!("Content-Type: {}", request.mime))
-            .map_err(transport)?;
-        headers.append("Expect:").map_err(transport)?;
+    let response = request.bearer_auth(token).send().map_err(transport)?;
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let header_size = headers
+        .iter()
+        .map(|(name, value)| name.as_str().len() + value.as_bytes().len() + 4)
+        .sum::<usize>();
+    if header_size > 65_536
+        || response
+            .content_length()
+            .is_some_and(|length| length > limit)
+    {
+        return Err(TaskError::client(
+            "Allocator response exceeded its size limit",
+        ));
     }
-    client.http_headers(headers).map_err(transport)?;
-
-    let mut response_headers = Vec::new();
-    let mut remaining = limit;
-    let mut failed_write = None;
-    let mut failed_read = None;
-    let status = {
-        let mut transfer = client.transfer();
-        if let Some(request) = input.as_mut() {
-            transfer
-                .read_function(|output| match request.body.read(output) {
-                    Ok(size) => Ok(size),
-                    Err(error) => {
-                        failed_read = Some(error);
-                        Err(ReadError::Abort)
-                    }
-                })
-                .map_err(transport)?;
-        }
-        transfer
-            .header_function(|line| {
-                if response_headers.len() + line.len() > 65_536 {
-                    return false;
-                }
-                response_headers.extend_from_slice(line);
-                true
-            })
-            .map_err(transport)?;
-        transfer
-            .write_function(|chunk| {
-                let Some(left) = remaining.checked_sub(chunk.len() as u64) else {
-                    failed_write = Some(io::Error::other(
-                        "Allocator response exceeded its size limit",
-                    ));
-                    return Ok(0);
-                };
-                remaining = left;
-                if let Err(error) = output.write_all(chunk) {
-                    failed_write = Some(error);
-                    return Ok(0);
-                }
-                Ok(chunk.len())
-            })
-            .map_err(transport)?;
-        transfer.perform()
-    };
-    if let Some(error) = failed_write.or(failed_read) {
-        return Err(error.into());
+    if io::copy(&mut response.take(limit + 1), output)? > limit {
+        return Err(TaskError::client(
+            "Allocator response exceeded its size limit",
+        ));
     }
-    status.map_err(transport)?;
-    let status = u16::try_from(client.response_code().map_err(transport)?)
-        .map_err(|_| TaskError::client("Allocator response has an invalid HTTP status"))?;
-    Ok(Response {
-        status,
-        headers: response_headers,
-    })
+    Ok(Response { status, headers })
 }
 
 fn problem(body: &[u8], status: u16) -> TaskError {
@@ -326,12 +281,9 @@ impl TaskClient {
 
     pub fn request(&self, path: &str, payload: Option<&Value>) -> Result<Value, TaskError> {
         let token = fs::read_to_string(&self.token_file)?;
-        let serialized = payload.map(|payload| payload.to_string());
-        let mut source = serialized.as_deref().unwrap_or_default().as_bytes();
-        let request = serialized.as_ref().map(|body| Outgoing {
+        let request = payload.map(|payload| Outgoing {
             mime: "application/json",
-            size: body.len() as u64,
-            body: &mut source,
+            body: payload.to_string().into(),
         });
         let mut response = Vec::new();
         let result = request_to(
@@ -359,15 +311,13 @@ impl TaskClient {
         }
         let (origin, ticket) = transfer(&grant)?;
         let mut response = Vec::new();
-        archive.as_file_mut().rewind()?;
         let result = request_to(
             (&origin, "/v1/checkpoint"),
             &self.ca,
             ticket,
             Some(Outgoing {
                 mime: "application/gzip",
-                size: bytes,
-                body: archive.as_file_mut(),
+                body: reqwest::blocking::Body::sized(archive.reopen()?, bytes),
             }),
             (290, 8 * 1024 * 1024),
             &mut response,
@@ -398,7 +348,7 @@ impl TaskClient {
             partial.as_file_mut().take(4096).read_to_end(&mut result)?;
             return Err(problem(&result, response.status));
         }
-        let declared = content_length(&String::from_utf8_lossy(&response.headers))?;
+        let declared = content_length(&response.headers)?;
         let actual = partial.as_file().metadata()?.len();
         if declared != actual {
             return Err(TaskError::client("Checkpoint download ended early"));
@@ -415,20 +365,13 @@ impl TaskClient {
     }
 }
 
-fn content_length(headers: &str) -> Result<u64, TaskError> {
+fn content_length(headers: &reqwest::header::HeaderMap) -> Result<u64, TaskError> {
     let invalid = || TaskError::client("Invalid archive size");
-    let block = headers
-        .trim_end()
-        .rsplit("\r\n\r\n")
-        .next()
-        .ok_or_else(invalid)?;
-    let mut values = block
-        .lines()
-        .filter_map(|line| line.split_once(':'))
-        .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+    let mut values = headers.get_all(reqwest::header::CONTENT_LENGTH).iter();
     let length = values
         .next()
-        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| (1..=1_073_741_824).contains(value))
         .ok_or_else(invalid)?;
     if values.next().is_some() {
@@ -452,4 +395,94 @@ pub fn check_lease_id(value: &str) -> Result<&str, TaskError> {
     hex(value, 32)
         .then_some(value)
         .ok_or_else(|| TaskError::client("Invalid lease ID"))
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    use rustls::{
+        ServerConfig, ServerConnection, StreamOwned,
+        pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+    };
+    use std::{
+        io::{BufRead, BufReader},
+        net::TcpListener,
+        process::Command,
+        sync::Arc,
+        time::Duration,
+    };
+
+    #[test]
+    fn private_ca_tls_and_bearer_auth_work_in_the_portable_client() {
+        let root = tempfile::tempdir().unwrap();
+        let certificate = root.path().join("tls.pem");
+        let key = root.path().join("key.pem");
+        let out = Command::new("openssl")
+            .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout"])
+            .arg(&key)
+            .arg("-out")
+            .arg(&certificate)
+            .args([
+                "-days",
+                "1",
+                "-subj",
+                "/CN=fixture",
+                "-addext",
+                "subjectAltName=IP:127.0.0.1",
+                "-addext",
+                "basicConstraints=critical,CA:FALSE",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let tls = Arc::new(
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from_pem_file(&certificate).unwrap()],
+                    PrivateKeyDer::from_pem_file(key).unwrap(),
+                )
+                .unwrap(),
+        );
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let endpoint = format!("https://{}", listener.local_addr().unwrap());
+        let token = "task-fixture-token-0123456789abcdef";
+        let task_token = root.path().join("token");
+        fs::write(&task_token, token).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut channel = BufReader::new(StreamOwned::new(
+                ServerConnection::new(tls).unwrap(),
+                stream,
+            ));
+            let mut lines = String::new();
+            loop {
+                let mut line = String::new();
+                if channel.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                lines.push_str(&line);
+            }
+            let request = lines.to_ascii_lowercase();
+            assert!(request.starts_with("get /v1/capabilities http/1.1\r\n"));
+            assert!(request.contains(&format!("authorization: bearer {token}\r\n")));
+            let io = channel.get_mut();
+            io.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\n\r\n{\"ok\":true}").unwrap();
+            io.conn.send_close_notify();
+            io.flush().unwrap();
+        });
+        let client = TaskClient::new(&endpoint, certificate, task_token).unwrap();
+        let result = client.request("/v1/capabilities", None).unwrap();
+        assert_eq!(result, json!({"ok":true}));
+        server.join().unwrap();
+    }
 }

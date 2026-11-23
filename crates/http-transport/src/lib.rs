@@ -25,7 +25,7 @@ pub fn tls_with_deadlines(
 ) -> Server<std::net::SocketAddr, RustlsAcceptor<WriteDeadline>> {
     let mut server = server
         .acceptor(RustlsAcceptor::new(tls).acceptor(WriteDeadline(deadline)))
-        .http1_only();
+        .first_request_timeout(deadline);
     server
         .http_builder()
         .http1()

@@ -143,7 +143,7 @@ fn extract_tar(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {
                 return Err(invalid("Archive directory is redirected."));
             }
             private_directory(&leaf)?;
-            directory_times.insert(leaf, archive_mtime(entry.header())?);
+            directory_times.insert(leaf, archive_mtime(&mut entry)?);
             continue;
         }
         if leaf == root {
@@ -155,7 +155,7 @@ fn extract_tar(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {
             let mode = entry.header().mode()?;
             let safe = if mode & 0o100 != 0 { 0o755 } else { 0o644 };
             let permissions = fs::Permissions::from_mode(0o600 | (mode & safe));
-            let modified = FileTimes::new().set_modified(archive_mtime(entry.header())?);
+            let modified = FileTimes::new().set_modified(archive_mtime(&mut entry)?);
             // A duplicate regular member replaces its directory entry, preserving
             // any earlier hard links to the original inode.
             let mut file = tempfile::NamedTempFile::new_in(parent)?;
@@ -198,10 +198,52 @@ fn extract_tar(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn archive_mtime(header: &tar::Header) -> io::Result<SystemTime> {
-    UNIX_EPOCH
-        .checked_add(Duration::from_secs(header.mtime()?))
-        .ok_or_else(|| invalid("Unsupported checkpoint timestamp."))
+fn archive_mtime<R: Read>(entry: &mut tar::Entry<'_, R>) -> io::Result<SystemTime> {
+    let bad_timestamp = || invalid("Unsupported checkpoint timestamp.");
+    let from_epoch = |negative, duration| {
+        if negative {
+            UNIX_EPOCH.checked_sub(duration)
+        } else {
+            UNIX_EPOCH.checked_add(duration)
+        }
+        .ok_or_else(bad_timestamp)
+    };
+    if let Some(extensions) = entry.pax_extensions()? {
+        let mut mtime = None;
+        for extension in extensions {
+            let extension = extension?;
+            if extension.key_bytes() == b"mtime" {
+                let text = extension.value().map_err(|_| bad_timestamp())?;
+                let (negative, value) = text
+                    .strip_prefix('-')
+                    .map_or((false, text), |value| (true, value));
+                let (whole, decimal) = value.split_once('.').unwrap_or((value, ""));
+                let seconds = whole.parse().map_err(|_| bad_timestamp())?;
+                if !decimal.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(bad_timestamp());
+                }
+                let nanos = decimal
+                    .bytes()
+                    .map(|byte| byte - b'0')
+                    .chain(std::iter::repeat(0))
+                    .take(9)
+                    .fold(0_u32, |value, digit| value * 10 + u32::from(digit));
+                mtime = Some(from_epoch(negative, Duration::new(seconds, nanos))?);
+            }
+        }
+        if let Some(time) = mtime {
+            return Ok(time);
+        }
+    }
+    let raw = entry.header().as_old().mtime;
+    if raw[0] == 0xff {
+        let mut signed = [0xff; 16];
+        signed[4..].copy_from_slice(&raw);
+        let seconds = u64::try_from(i128::from_be_bytes(signed).unsigned_abs())
+            .map_err(|_| bad_timestamp())?;
+        return from_epoch(true, Duration::from_secs(seconds));
+    }
+    from_epoch(false, Duration::from_secs(entry.header().mtime()?))
 }
 
 pub fn restore(

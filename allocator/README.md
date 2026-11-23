@@ -24,8 +24,10 @@ lab-restore-workspace at restore-helpers/RECIPE/lab-restore-workspace beside
 lab-lease or provide its parent directory with --restore-helpers.
 The helper needs no OpenSSL installation inside the guest. The Native lease
 client bundles workflow builds Linux x86-64, macOS arm64, and Windows x86-64
-clients, then packages both guest restore helpers beside each executable.
-Extract the matching bundle and keep its `restore-helpers/` directory beside
+clients, then packages native registry discovery and both guest restore helpers
+beside each executable.
+A Windows registry credential file must grant access only to its owner, SYSTEM,
+and Administrators. Extract the matching bundle and keep its `restore-helpers/` directory beside
 the client. Task commands require no Node or Python runtime.
 
 During a staged switch, first verify the provider's pinned identities and

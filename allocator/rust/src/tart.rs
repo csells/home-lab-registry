@@ -9,7 +9,7 @@ use crate::{
     capacity::{MIB, Observation},
     proxmox::config_text,
     proxmox_dynamic::Shape,
-    request::public_key,
+    protocol::public_key,
     tokens::{hex, valid_token},
 };
 

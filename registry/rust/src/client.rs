@@ -1,7 +1,6 @@
 use std::{
     fs::File,
     io::{self, Write},
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -58,7 +57,10 @@ pub struct RegistryClient {
 }
 
 pub fn expand_home(path: &Path) -> PathBuf {
-    if let (Ok(rest), Some(home)) = (path.strip_prefix("~"), std::env::var_os("HOME")) {
+    if let (Ok(rest), Some(home)) = (
+        path.strip_prefix("~"),
+        std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")),
+    ) {
         return PathBuf::from(home).join(rest);
     }
     path.to_owned()
@@ -88,8 +90,14 @@ impl RegistryClient {
         let attributes = file
             .metadata()
             .map_err(|_| failure("Could not read registry credential file permissions"))?;
-        if !attributes.is_file() || attributes.permissions().mode() & 0o077 != 0 {
-            return Err(failure("Credential config must have mode 0600"));
+        let private = crate::client_permissions::private(&file)
+            .map_err(|_| failure("Could not read registry credential file permissions"))?;
+        if !attributes.is_file() || !private {
+            return Err(failure(if cfg!(windows) {
+                "Credential config must have a private Windows ACL"
+            } else {
+                "Credential config must have mode 0600"
+            }));
         }
         let value = serde_json::from_reader(file)
             .map_err(|_| failure("Registry credential config is not valid JSON"))?;

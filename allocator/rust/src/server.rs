@@ -1,3 +1,5 @@
+mod lifecycle;
+mod request;
 mod native_provider;
 pub mod operators;
 pub mod restic_scope;

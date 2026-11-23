@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 struct Args {
     #[arg(long)]
     endpoint: Option<String>,
-    #[arg(long, requires = "registry_client")]
+    #[arg(long)]
     record: Option<String>,
     #[arg(long, conflicts_with_all=["ca","token_file","registry_client","registry_config"])]
     session: Option<PathBuf>,
@@ -272,15 +272,22 @@ fn resolve(args: &Args) -> Result<(TaskClient, Option<PathBuf>), TaskError> {
         .ok_or_else(|| error("Supply --ca and --token-file, or a task --session"))?;
     let endpoint = match &args.endpoint {
         Some(url) => url.clone(),
-        None => discover(
-            args.registry_client
-                .as_deref()
-                .ok_or_else(|| error("--record requires --registry-client"))?,
-            args.registry_config.as_deref(),
-            args.record
-                .as_deref()
-                .ok_or_else(|| error("Provide a lease discovery record"))?,
-        )?,
+        None => {
+            let registry_client = match &args.registry_client {
+                Some(client) => client.clone(),
+                None => std::env::current_exe()?.with_file_name(format!(
+                    "lab-registry-client{}",
+                    std::env::consts::EXE_SUFFIX,
+                )),
+            };
+            discover(
+                &registry_client,
+                args.registry_config.as_deref(),
+                args.record
+                    .as_deref()
+                    .ok_or_else(|| error("Provide a lease discovery record"))?,
+            )?
+        }
     };
     Ok((TaskClient::new(&endpoint, ca, token)?, None))
 }

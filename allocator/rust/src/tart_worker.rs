@@ -33,7 +33,7 @@ use crate::{
     capacity::MIB,
     process::bounded,
     proxmox_dynamic::Shape,
-    request::public_key,
+    protocol::public_key,
     tokens::{hash, hex, valid_token},
     workspace::{MAX_ARCHIVE, archive_workspace, digest_to},
 };

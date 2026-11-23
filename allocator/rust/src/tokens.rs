@@ -1,13 +1,18 @@
+#[cfg(all(unix, feature = "server"))]
 use std::fmt::Write;
 
+#[cfg(all(unix, feature = "server"))]
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+#[cfg(all(unix, feature = "server"))]
 use ring::{
     digest,
     rand::{SecureRandom, SystemRandom},
 };
 
+#[cfg(all(unix, feature = "server"))]
 use crate::Rejected;
 
+#[cfg(all(unix, feature = "server"))]
 pub(crate) fn token() -> Result<String, Rejected> {
     let mut entropy = [0u8; 32];
     SystemRandom::new().fill(&mut entropy).map_err(|_| {
@@ -27,6 +32,7 @@ pub(crate) fn valid_token(token: &str, minimum: usize, maximum: usize) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+#[cfg(all(unix, feature = "server"))]
 pub(crate) fn hash(text: &str) -> String {
     let value = digest::digest(&digest::SHA256, text.as_bytes());
     let mut buffer = String::with_capacity(64);
@@ -36,6 +42,7 @@ pub(crate) fn hash(text: &str) -> String {
     buffer
 }
 
+#[cfg(all(unix, feature = "server"))]
 pub(crate) fn valid_hash(text: &str) -> bool {
     hex(text, 64)
 }

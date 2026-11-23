@@ -4,12 +4,10 @@ pub mod task_resume;
 
 pub use lab_workspace as workspace;
 
-mod lifecycle;
-
-mod request;
+mod protocol;
 mod tokens;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "server"))]
 include!("server.rs");
 
 #[derive(Debug)]

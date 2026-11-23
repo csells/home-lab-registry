@@ -5,6 +5,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = ["server"]
+server = ["reqwest/native-tls"]
+
 [dependencies]
 lab-http-transport = { path = "../../crates/http-transport" }
 lab-workspace = { path = "workspace" }
@@ -16,13 +20,12 @@ libc = "0.2"
 libloading = "0.9"
 http-body-util = "0.1"
 shlex = "2"
-curl = { version = "0.4", features = ["static-curl"] }
 ipnet = { version = "2", features = ["serde"] }
 tokio-util = { version = "0.7", features = ["io"] }
 
 wait-timeout = "0.2"
 
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
 
 rusqlite = { version = "0.43", features = ["backup", "bundled"] }
 base64 = "0.22"

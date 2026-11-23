@@ -12,7 +12,7 @@ use crate::{
     AcquireRequest, CheckpointStore, GuestScope, LeasePhase, Ledger, Lifecycle, Provider,
     ProviderKind, ReclaimAction, Rejected, Slot, TaskCredentials, lease_inventory,
     provider::unavailable,
-    request::LINUX,
+    protocol::LINUX,
     rows::{
         available_receipt, invalid_data, lease, no_checkpoint, phase, sqlite_json, stored, text,
     },
@@ -1098,7 +1098,7 @@ fn validate_dependencies(value: &Value) -> Result<(), Rejected> {
 #[cfg(test)]
 mod tests {
     use super::replay_matches;
-    use crate::{AcquireRequest, request::LINUX};
+    use crate::{AcquireRequest, protocol::LINUX};
     use serde_json::json;
 
     #[test]

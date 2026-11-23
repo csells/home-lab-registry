@@ -209,6 +209,23 @@ pub(crate) fn child(
     })
 }
 
+const TRANSIENT_COLLECTOR: &str = r#"
+umask 077
+work=$(mktemp -d /tmp/lab-network.XXXXXXXX)
+trap 'rm -f -- "$work/collect"; rmdir -- "$work"' EXIT
+trap 'exit 1' HUP INT TERM
+blocks=$(( $1 / 65536 ))
+tail_bytes=$(( $1 % 65536 ))
+dd bs=65536 count="$blocks" iflag=fullblock status=none > "$work/collect"
+if test "$tail_bytes" -ne 0; then
+    dd bs="$tail_bytes" count=1 iflag=fullblock status=none >> "$work/collect"
+fi
+test "$(wc -c < "$work/collect")" -eq "$1"
+shift
+chmod 700 "$work/collect"
+"$work/collect" "$@"
+"#;
+
 fn read_collector(path: &Path) -> io::Result<Vec<u8>> {
     const LIMIT: u64 = 64 * 1024 * 1024;
     let mut bytes = Vec::new();
@@ -338,7 +355,7 @@ impl Target {
         if result.status.success() {
             return Ok(result.stdout);
         }
-        if data.is_some() || result.status.code() == Some(255) {
+        if result.status.code() == Some(255) {
             return Err(error("Pinned audit SSH command failed."));
         }
         // Retain errors from a deployed collector. Transient delivery is for
@@ -371,24 +388,17 @@ impl Target {
                 .join(platform)
                 .join("lab-network-collect"),
         };
-        let payload = read_collector(&artifact)?;
-        let launcher = r#"
-umask 077
-work=$(mktemp -d /tmp/lab-network.XXXXXXXX)
-trap 'rm -f -- "$work/collect"; rmdir -- "$work"' EXIT
-trap 'exit 1' HUP INT TERM
-cat > "$work/collect"
-chmod 700 "$work/collect"
-"$work/collect" "$@"
-"#;
+        let mut payload = read_collector(&artifact)?;
+        let bytes = payload.len();
+        payload.extend_from_slice(data.unwrap_or_default());
         let mut command = if self.sudo {
             "sudo -n ".to_owned()
         } else {
             String::new()
         };
         command.push_str("/bin/sh -ec ");
-        command.push_str(&shell_argument(launcher));
-        command.push_str(" audit");
+        command.push_str(&shell_argument(TRANSIENT_COLLECTOR));
+        command.push_str(&format!(" audit {bytes}"));
         for arg in args {
             command.push(' ');
             command.push_str(&shell_argument(arg));
@@ -709,4 +719,29 @@ mod tests {
             assert!(router_cookie(invalid).is_err());
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn the_transient_collector_consumes_only_its_artifact_before_forwarding_private_input() {
+    let binary = b"#!/bin/sh\ncat\n";
+    let private = b"private-stdin\n\0\xef";
+    let combined = [binary.as_slice(), private.as_slice()].concat();
+    let command = &mut Command::new("/bin/sh");
+    command.args([
+        "-ec",
+        TRANSIENT_COLLECTOR,
+        "audit",
+        &binary.len().to_string(),
+        "--appliance",
+    ]);
+    let mut process = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    process.stdin.take().unwrap().write_all(&combined).unwrap();
+    let actual = process.wait_with_output().unwrap();
+    assert!(actual.status.success());
+    assert_eq!(actual.stdout, private);
 }

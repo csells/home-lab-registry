@@ -1,6 +1,6 @@
 use std::{
     fs,
-    net::TcpListener,
+    io::{BufRead, BufReader},
     process::{Child, Command, Stdio},
     time::Duration,
 };
@@ -44,12 +44,6 @@ fn the_browser_can_run_a_readable_qualification_with_an_explicit_interpreter() {
     fs::write(&check, "exit 0\n").unwrap();
     fs::write(&report, "{}").unwrap();
     fs::write(&script, "document.title = 'qualified';").unwrap();
-    let port = TcpListener::bind(("127.0.0.1", 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let origin = format!("http://127.0.0.1:{port}");
     let mut review = Running(
         Command::new(env!("CARGO_BIN_EXE_lab-backup-review"))
             .arg("--report")
@@ -58,15 +52,19 @@ fn the_browser_can_run_a_readable_qualification_with_an_explicit_interpreter() {
             .arg(script)
             .arg("--check")
             .arg(check)
-            .args([
-                "--check-interpreter",
-                "/bin/sh",
-                "--port",
-                &port.to_string(),
-            ])
+            .args(["--check-interpreter", "/bin/sh", "--port", "0"])
+            .stdout(Stdio::piped())
             .spawn()
             .unwrap(),
     );
+    let mut announced = String::new();
+    BufReader::new(review.0.stdout.take().unwrap())
+        .read_line(&mut announced)
+        .unwrap();
+    let origin = announced
+        .trim()
+        .strip_prefix("Backup review listening at ")
+        .expect("bound review address");
     let request = |method, path| {
         Command::new("curl")
             .args([

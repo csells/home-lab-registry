@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::{
     process::{bounded, shell_arg},
-    request::{APPLE, LINUX, public_key},
+    protocol::{APPLE, LINUX, public_key},
     task_client::{TaskClient, TaskError, check_lease_id, endpoint_from_record},
     tokens::hex,
     workspace::APPLE_WORKSPACE,

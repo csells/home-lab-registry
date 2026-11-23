@@ -40,6 +40,7 @@ struct Review {
     options: Options,
     status: Mutex<Value>,
     script: axum::body::Bytes,
+    loopback_origin: String,
 }
 
 fn answer(content_type: &'static str, body: impl IntoResponse) -> Response {
@@ -136,7 +137,7 @@ async fn trigger(State(review): State<Arc<Review>>, headers: HeaderMap) -> Statu
     let Some(command) = review.options.check.clone() else {
         return StatusCode::NOT_FOUND;
     };
-    let allowed = format!("http://127.0.0.1:{}", review.options.port);
+    let allowed = &review.loopback_origin;
     if headers
         .get(header::ORIGIN)
         .and_then(|origin| origin.to_str().ok())
@@ -197,10 +198,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener =
         tokio::net::TcpListener::bind(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), options.port))
             .await?;
+    let loopback_origin = format!("http://{}", listener.local_addr()?);
+    println!("Backup review listening at {loopback_origin}");
     let review = Arc::new(Review {
         options,
         status: Mutex::new(json!({"state":"not-requested"})),
         script: script.into(),
+        loopback_origin,
     });
     let router = Router::new()
         .route("/", get(html))

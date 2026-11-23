@@ -328,7 +328,36 @@ fn server_accepts_hostname_bind_and_standard_cli_options() {
         std::thread::sleep(std::time::Duration::from_millis(20));
         false
     });
+    let version = Command::new("curl").arg("--version").output().unwrap();
+    let http2 = String::from_utf8_lossy(&version.stdout).contains("HTTP2");
+    let probe = Command::new("curl")
+        .args(["--silent", "--show-error", "--fail", "--max-time", "5"])
+        .arg(if http2 { "--http2" } else { "--http1.1" })
+        .arg("--cacert")
+        .arg(root.path().join("cert.pem"))
+        .args([
+            "--output",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+            "--write-out",
+            "%{http_version}",
+        ])
+        .arg(format!("https://localhost:{port}/healthz"))
+        .output()
+        .unwrap();
     let _ = registry.kill();
     registry.wait().unwrap();
     assert!(connected, "registry did not listen on localhost");
+    assert!(
+        probe.status.success(),
+        "{}",
+        String::from_utf8_lossy(&probe.stderr)
+    );
+    assert_eq!(
+        probe.stdout,
+        if http2 {
+            b"2".as_slice()
+        } else {
+            b"1.1".as_slice()
+        }
+    );
 }

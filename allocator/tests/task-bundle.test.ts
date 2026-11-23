@@ -18,6 +18,7 @@ test("the native task bundle includes both recovery helpers beside every client"
       const client = join(path, platform.startsWith("windows") ? "lab-lease.exe" : "lab-lease");
       await writeFile(client, platform);
       await chmod(client, 0o700);
+      await writeFile(join(path, platform.startsWith("windows") ? "lab-registry-client.exe" : "lab-registry-client"), "registry", { mode: 0o700 });
     }
     await writeFile(join(root, "linux-x86_64/lab-restore-workspace"), "linux", { mode: 0o700 });
     const args = [pack.pathname, root, dest];

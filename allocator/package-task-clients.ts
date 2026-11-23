@@ -8,9 +8,10 @@ if (!source || !output || extra) {
 }
 
 const platforms = ["linux-x86_64", "macos-arm64", "windows-x86_64"] as const;
-const client = (platform: string) => platform.startsWith("windows") ? "lab-lease.exe" : "lab-lease";
+const executable = (name: string, platform: string) => platform.startsWith("windows") ? name + ".exe" : name;
+const programs = ["lab-lease", "lab-registry-client"];
 const inputs = [
-  ...platforms.map(platform => [platform, client(platform)] as const),
+  ...platforms.flatMap(platform => programs.map(name => [platform, executable(name, platform)] as const)),
   ["linux-x86_64", "lab-restore-workspace"],
   ["macos-arm64", "lab-restore-workspace"],
 ] as const;
@@ -28,7 +29,10 @@ await mkdir(output, { mode: 0o700 });
 for (const platform of platforms) {
   const target = join(output, platform);
   const executables = new Map([
-    [client(platform), `${platform}/${client(platform)}`],
+    ...programs.map(name => {
+      const file = executable(name, platform);
+      return [file, `${platform}/${file}`] as const;
+    }),
     ["restore-helpers/debian13-amd64/lab-restore-workspace", "linux-x86_64/lab-restore-workspace"],
     ["restore-helpers/macos-xcode-arm64/lab-restore-workspace", "macos-arm64/lab-restore-workspace"],
   ]);
