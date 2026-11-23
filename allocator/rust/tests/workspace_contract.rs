@@ -91,6 +91,23 @@ fn links_and_archive_metadata_cannot_escape_the_workspace_or_budget() {
 }
 
 #[test]
+fn a_first_regular_entry_cannot_replace_an_existing_symlink() {
+    let target = tempfile::tempdir().unwrap();
+    let original = target.path().join("existing");
+    let link = target.path().join("café-東京-🐍.bin");
+    fs::write(&original, b"existing data").unwrap();
+    symlink("existing", &link).unwrap();
+
+    let bytes = archive(b"checkpoint data", None);
+    assert!(extract_workspace(bytes.as_slice(), target.path()).is_err());
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        std::path::Path::new("existing")
+    );
+    assert_eq!(fs::read(&original).unwrap(), b"existing data");
+}
+
+#[test]
 fn workspace_round_trip_preserves_exact_filenames_data_and_internal_symlinks() {
     let source = tempfile::tempdir().unwrap();
     let root = source.path().canonicalize().unwrap();

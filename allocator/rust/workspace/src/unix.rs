@@ -163,7 +163,15 @@ fn extract_tar(source: impl Read, target: &Path, limit: u64) -> io::Result<()> {
             file.as_file().set_permissions(permissions)?;
             file.as_file().set_times(modified)?;
             if regular_paths.insert(leaf.clone()) {
-                file.persist_noclobber(&leaf)?;
+                if let Err(error) = file.persist_noclobber(&leaf) {
+                    if error.error.kind() != io::ErrorKind::Unsupported {
+                        return Err(error.into());
+                    }
+                    // Tart's VirtioFS share supports hard links but cannot
+                    // rename with RENAME_EXCL. Linking still refuses existing
+                    // entries, and dropping the temporary file unlinks it.
+                    fs::hard_link(error.file.path(), &leaf)?;
+                }
             } else {
                 file.persist(&leaf)?;
             }
