@@ -22,7 +22,7 @@ pub mod http;
 mod export;
 mod owners;
 mod recovery;
-pub use controller::{Controller, enroll, handoff};
+pub use controller::{Controller, enroll, enroll_handoff_authority, handoff};
 mod controller;
 mod rows;
 pub use request::{AcquireRequest, canonical_requirements};

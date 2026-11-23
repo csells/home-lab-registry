@@ -1152,14 +1152,24 @@ mod tests {
 }
 
 pub fn enroll(config: &Path) -> Result<(), Rejected> {
-    administer_ledger(config, None)
+    administer_ledger(config, LedgerAdministration::Enroll)
 }
 
 pub fn handoff(config: &Path, authorization: &Path) -> Result<(), Rejected> {
-    administer_ledger(config, Some(authorization))
+    administer_ledger(config, LedgerAdministration::Handoff(authorization))
 }
 
-fn administer_ledger(config: &Path, authorization: Option<&Path>) -> Result<(), Rejected> {
+pub fn enroll_handoff_authority(config: &Path) -> Result<(), Rejected> {
+    administer_ledger(config, LedgerAdministration::EnrollAuthority)
+}
+
+enum LedgerAdministration<'a> {
+    Enroll,
+    EnrollAuthority,
+    Handoff(&'a Path),
+}
+
+fn administer_ledger(config: &Path, operation: LedgerAdministration<'_>) -> Result<(), Rejected> {
     let invalid = || {
         Rejected::new(
             "configuration_invalid",
@@ -1187,19 +1197,28 @@ fn administer_ledger(config: &Path, authorization: Option<&Path>) -> Result<(), 
         .iter()
         .map(|(id, slot)| (id.as_str(), slot.identity.as_str()))
         .collect::<Vec<_>>();
-    if let Some(path) = authorization {
-        let proof = std::fs::read(path)
-            .ok()
-            .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
-            .ok_or_else(invalid)?;
-        Ledger::handoff(database, witness, || provider.generation(), &bindings, &proof)?;
-    } else {
-        let key = settings.get("ledger_handoff_public_key")
-            .map(|value| value.as_str().ok_or_else(invalid)).transpose()?;
-        for id in slots.keys() {
-            provider.call(json!({"action":"enrollment-check","slot_id":id}))?;
+    let key = || settings.get("ledger_handoff_public_key")
+        .map(|value| value.as_str().ok_or_else(invalid)).transpose();
+    match operation {
+        LedgerAdministration::Handoff(path) => {
+            let proof = std::fs::read(path)
+                .ok()
+                .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+                .ok_or_else(invalid)?;
+            Ledger::handoff(database, witness, || provider.generation(), &bindings, &proof)?;
         }
-        Ledger::enroll_for_handoff(database, witness, || provider.generation(), &bindings, key)?;
+        LedgerAdministration::EnrollAuthority => {
+            let key = key()?.ok_or_else(invalid)?;
+            let mut ledger = Ledger::open(database, witness, || provider.generation())?;
+            ledger.enroll_handoff_authority(key, &bindings)?;
+        }
+        LedgerAdministration::Enroll => {
+            let key = key()?;
+            for id in slots.keys() {
+                provider.call(json!({"action":"enrollment-check","slot_id":id}))?;
+            }
+            Ledger::enroll_for_handoff(database, witness, || provider.generation(), &bindings, key)?;
+        }
     }
     Ok(())
 }

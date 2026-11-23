@@ -202,6 +202,29 @@ impl<G: FnMut() -> Result<String, Rejected>> Ledger<G> {
         Ok(validate(&self.db, &self.witness, &mut self.generation)?.controller_generation)
     }
 
+    pub fn enroll_handoff_authority(
+        &mut self,
+        public_key: &str,
+        slots: &[(&str, &str)],
+    ) -> Result<(), Rejected> {
+        let key = handoff_key(public_key)?;
+        let tx = self.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut seal = validate(&tx, &self.witness, &mut self.generation)?;
+        verify_slots(&tx, slots)?;
+        if let Some(existing) = seal.handoff_public_key.as_deref() {
+            return if handoff_key(existing)? == key {
+                Ok(())
+            } else {
+                Err(hold("The ledger already has an enrolled handoff authority."))
+            };
+        }
+        if (self.generation)()? != seal.controller_generation {
+            return Err(handoff_denied());
+        }
+        seal.handoff_public_key = Some(STANDARD.encode(key));
+        commit_revision(tx, &self.witness, seal)
+    }
+
     pub fn handoff(
         database: &Path,
         witness: &Path,
@@ -215,16 +238,7 @@ impl<G: FnMut() -> Result<String, Rejected>> Ledger<G> {
         ledger.db.execute_batch("PRAGMA synchronous=FULL;")?;
         let tx = ledger.db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut seal = read_seal(&tx, witness)?;
-        let enrolled = {
-            let mut select = tx.prepare("SELECT id,identity FROM slot_binding ORDER BY id")?;
-            select.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
-                .collect::<Result<Vec<_>, _>>()?
-        };
-        let mut expected = slots.to_vec();
-        expected.sort_unstable();
-        if !enrolled.iter().map(|(id, identity)| (id.as_str(), identity.as_str())).eq(expected) {
-            return Err(handoff_denied());
-        }
+        verify_slots(&tx, slots)?;
         let replacement = (ledger.generation)()?;
         authorization.verify(&seal, &replacement)?;
         seal.controller_generation = replacement;
@@ -295,6 +309,20 @@ fn read_seal(db: &Connection, witness: &Path) -> Result<Witness, Rejected> {
         return Err(hold("Ledger revision differs. Reconcile offline."));
     }
     Ok(seal)
+}
+
+fn verify_slots(db: &Connection, slots: &[(&str, &str)]) -> Result<(), Rejected> {
+    let mut select = db.prepare("SELECT id,identity FROM slot_binding ORDER BY id")?;
+    let enrolled = select.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?.collect::<Result<Vec<_>, _>>()?;
+    let mut expected = slots.to_vec();
+    expected.sort_unstable();
+    if enrolled.iter().map(|(id, identity)| (id.as_str(), identity.as_str())).eq(expected) {
+        Ok(())
+    } else {
+        Err(handoff_denied())
+    }
 }
 
 fn commit_revision(tx: Transaction<'_>, witness: &Path, mut seal: Witness) -> Result<(), Rejected> {

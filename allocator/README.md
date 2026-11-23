@@ -92,6 +92,50 @@ Never overwrite the witness with an old copy to make a restored ledger start.
 Reserve mutation of the slot to this controller. Enrollment requires all-owner
 task history via the node's read-only `Sys.Audit` permission.
 
+### Fenced replacement controller
+
+When the controller VM and primary slot run on different hosts, set
+`controller_vm` with `url`, `ca_file`, `node`, `guest_id` and `audit_token_file`
+in place of `controller_guest_id`. Use a pinned HTTPS endpoint and an audit
+credential scoped to reading the specified controller VM configuration. This
+setting leaves the provider slot identity intact.
+
+To enable offline handoff, give `--enroll-ledger` the
+`ledger_handoff_public_key` configuration field. It contains the standard
+base64 encoding of the authority's raw 32-byte Ed25519 public key. For an
+existing ledger, stop the allocator on its current verified VM and run
+`lab-allocator CONFIG.json --enroll-handoff-authority` with the same field.
+The command preserves the enrolled slots and existing leases. Repeating it
+with the same key is safe. Keep the private signing key and current sealed
+witness under independent operator custody.
+
+Before signing, isolate the former controller, attest the current ledger and
+independent witness, and revoke its provider mutation authority for every bound
+slot. Verify the revocation through the provider. Preserve operation attribution
+when issuing the replacement credentials. For a Proxmox API token, rotate its
+secret under the existing token ID and verify the old secret is rejected. Keep
+the existing slot identities, unresolved lease ownership and recovery evidence.
+
+The authority signs four UTF-8 lines, each ending in a newline:
+
+```text
+home-lab-allocator-ledger-handoff-v1
+<witness revision>
+<former controller generation>
+<replacement controller generation>
+```
+
+Store the values in `revision`, `previous_controller_generation` and
+`replacement_controller_generation` in the JSON authorization. Store the
+standard base64 encoding of the Ed25519 signature in `signature`. With the
+replacement allocator stopped, run
+`lab-allocator CONFIG.json --handoff-ledger AUTHORIZATION.json` using the
+current intact database and witness. A successful handoff advances both records
+and binds the existing slots and leases to the observed replacement generation.
+Start the allocator normally, verify existing ownership and a provider
+operation, and retain the resulting witness independently. A mismatch or an
+interrupted handoff holds the ledger for offline reconciliation.
+
 The capacity reader needs audit access to the node, its VM/LXC inventory,
 and the selected datastore. It has no provider mutation rights. The controller
 uses the smaller of physical available memory and total memory less running

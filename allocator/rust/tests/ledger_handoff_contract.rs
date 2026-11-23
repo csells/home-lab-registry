@@ -28,6 +28,60 @@ fn refused<G>(result: Result<Ledger<G>, lab_allocator::Rejected>) {
 }
 
 #[test]
+fn an_existing_controller_can_enroll_handoff_authority_once_without_resetting_its_ledger() {
+    let dir = tempfile::tempdir().unwrap();
+    let database = dir.path().join("state.db");
+    let witness = dir.path().join("witness.json");
+    let signing_key = Ed25519KeyPair::from_pkcs8(
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
+            .unwrap()
+            .as_ref(),
+    )
+    .unwrap();
+    let key = STANDARD.encode(signing_key.public_key().as_ref());
+    let old = || Ok(OLD.to_owned());
+    let new = || Ok(NEW.to_owned());
+    let mut original = Ledger::enroll(&database, &witness, old, SLOTS).unwrap();
+    original.mutate(|tx| {
+        tx.execute("INSERT INTO lease(id,request_key,task,initial_seconds,phase,deadline,slot_id) VALUES('work','request','unfinished',60,'ready',9000,'primary')", [])?;
+        Ok(())
+    }).unwrap();
+    let first: Value = serde_json::from_reader(std::fs::File::open(&witness).unwrap()).unwrap();
+    assert!(first.get("handoff_public_key").is_none());
+    assert_eq!(
+        original
+            .enroll_handoff_authority("invalid", SLOTS)
+            .unwrap_err()
+            .code(),
+        "ledger_reconciliation_required"
+    );
+    original.enroll_handoff_authority(&key, SLOTS).unwrap();
+    let enrolled = std::fs::read(&witness).unwrap();
+    original.enroll_handoff_authority(&key, SLOTS).unwrap();
+    assert_eq!(std::fs::read(&witness).unwrap(), enrolled);
+    assert!(
+        original
+            .enroll_handoff_authority(&STANDARD.encode([5; 32]), SLOTS)
+            .is_err()
+    );
+    drop(original);
+    let seal: Value = serde_json::from_reader(std::fs::File::open(&witness).unwrap()).unwrap();
+    assert_ne!(first["revision"], seal["revision"]);
+    assert_eq!(seal["handoff_public_key"], key);
+    let approved = authorization(&signing_key, seal["revision"].as_str().unwrap(), NEW);
+    let replacement = Ledger::handoff(&database, &witness, new, SLOTS, &approved).unwrap();
+    let task: String = replacement
+        .connection()
+        .query_row(
+            "SELECT task FROM lease WHERE id='work' AND phase='ready'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(task, "unfinished");
+}
+
+#[test]
 fn fenced_replacement_preserves_the_current_ledger_and_rejects_stale_authority() {
     let dir = tempfile::tempdir().unwrap();
     let database = dir.path().join("state.db");

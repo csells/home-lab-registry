@@ -8,8 +8,10 @@ struct Options {
     configuration: PathBuf,
     #[arg(long)]
     enroll_ledger: bool,
-    #[arg(long, conflicts_with = "enroll_ledger")]
+    #[arg(long, conflicts_with_all = ["enroll_ledger", "enroll_handoff_authority"])]
     handoff_ledger: Option<PathBuf>,
+    #[arg(long, conflicts_with = "enroll_ledger")]
+    enroll_handoff_authority: bool,
 }
 
 #[tokio::main(worker_threads = 2)]
@@ -31,6 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::task::spawn_blocking(move || lab_allocator::enroll(&options.configuration))
             .await??;
         println!("Idle slot and independent ledger witness enrolled.");
+        return Ok(());
+    }
+    if options.enroll_handoff_authority {
+        tokio::task::spawn_blocking(move || {
+            lab_allocator::enroll_handoff_authority(&options.configuration)
+        })
+        .await??;
+        println!("The current ledger has an enrolled handoff authority.");
         return Ok(());
     }
     lab_allocator::http::serve(options.configuration).await
