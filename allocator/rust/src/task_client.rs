@@ -4,7 +4,6 @@ use std::{
     fs::{self, File},
     io::{self, Read, Seek, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 use serde::Deserialize;
@@ -138,113 +137,127 @@ impl TaskSession {
     }
 }
 
-fn quote(config: &mut String, key: &str, value: &str) {
-    config.push_str(key);
-    config.push_str(" = \"");
-    for ch in value.chars() {
-        match ch {
-            '"' => config.push_str("\\\""),
-            '\\' => config.push_str("\\\\"),
-            '\n' => config.push_str("\\n"),
-            '\r' => config.push_str("\\r"),
-            '\t' => config.push_str("\\t"),
-            _ => config.push(ch),
-        }
-    }
-    config.push_str("\"\n");
+struct Response {
+    status: u16,
+    headers: Vec<u8>,
 }
 
-fn path_text(path: &Path) -> Result<&str, TaskError> {
-    path.to_str()
-        .ok_or_else(|| TaskError::client("Credential or output path is not valid text"))
+struct Outgoing<'a> {
+    mime: &'static str,
+    size: u64,
+    body: &'a mut dyn Read,
 }
 
-fn curl(
-    origin: &str,
+fn request_to(
+    address: (&str, &str),
     ca: &Path,
     token: &str,
-    path: &str,
-    mut command: Command,
-    options: &[(&str, &str)],
-) -> Result<(Vec<u8>, u16), TaskError> {
+    mut input: Option<Outgoing<'_>>,
+    budget: (u64, u64),
+    output: &mut impl Write,
+) -> Result<Response, TaskError> {
+    use curl::easy::{Easy, List, ReadError, SslVersion};
+    let (origin, path) = address;
+    let (seconds, limit) = budget;
     if !path.starts_with("/v1/") || path.contains(['#', '\r', '\n', '\0']) {
         return Err(TaskError::client("Invalid allocator route"));
     }
     if !valid_token(token, 32, 128) {
         return Err(TaskError::client("Invalid task credential file"));
     }
-    let mut configuration = String::new();
-    quote(&mut configuration, "url", &format!("{origin}{path}"));
-    quote(&mut configuration, "cacert", path_text(ca)?);
-    quote(
-        &mut configuration,
-        "header",
-        &format!("Authorization: Bearer {token}"),
-    );
-    for (field, value) in options {
-        quote(&mut configuration, field, value);
+    let transport = |error: curl::Error| {
+        TaskError::client(format!(
+            "Allocator HTTPS transport failed (curl {})",
+            error.code()
+        ))
+    };
+    let mut headers = List::new();
+    headers
+        .append(&format!("Authorization: Bearer {token}"))
+        .map_err(transport)?;
+    let mut client = Easy::new();
+    client.url(&format!("{origin}{path}")).map_err(transport)?;
+    client.follow_location(false).map_err(transport)?;
+    client.noproxy("*").map_err(transport)?;
+    client
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .map_err(transport)?;
+    client
+        .timeout(std::time::Duration::from_secs(seconds))
+        .map_err(transport)?;
+    client.ssl_version(SslVersion::Tlsv13).map_err(transport)?;
+    client.ssl_verify_peer(true).map_err(transport)?;
+    client.ssl_verify_host(true).map_err(transport)?;
+    client.ssl_cainfo_blob(&fs::read(ca)?).map_err(transport)?;
+    // Only the independently supplied CA is trusted, including on builds with
+    // a default system CA directory.
+    let empty_ca_path = tempfile::tempdir()?;
+    client.capath(empty_ca_path.path()).map_err(transport)?;
+    client.max_filesize(limit).map_err(transport)?;
+    if let Some(request) = &input {
+        client.post(true).map_err(transport)?;
+        client.post_field_size(request.size).map_err(transport)?;
+        headers
+            .append(&format!("Content-Type: {}", request.mime))
+            .map_err(transport)?;
+        headers.append("Expect:").map_err(transport)?;
     }
-    let mut child = command
-        .args([
-            "--silent",
-            "--show-error",
-            "--proto",
-            "=https",
-            "--noproxy",
-            "*",
-            "--tlsv1.3",
-            "--config",
-            "-",
-            "--write-out",
-            "\n%{http_code}",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let written = child
-        .stdin
-        .take()
-        .expect("piped stdin available")
-        .write_all(configuration.as_bytes());
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).replace(token, "[REDACTED]");
-        return Err(TaskError::client(format!(
-            "Allocator transport failed (curl {}): {}",
-            output
-                .status
-                .code()
-                .map_or_else(|| "signal".into(), |code| code.to_string()),
-            detail.trim()
-        )));
-    }
-    written?;
-    let mut response = output.stdout;
-    let split = response
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .ok_or_else(|| TaskError::client("Allocator response has no HTTP status"))?;
-    let status = std::str::from_utf8(&response[split + 1..])
-        .ok()
-        .and_then(|text| text.parse::<u16>().ok())
-        .ok_or_else(|| TaskError::client("Allocator response has an invalid HTTP status"))?;
-    response.truncate(split);
-    Ok((response, status))
-}
+    client.http_headers(headers).map_err(transport)?;
 
-fn options(seconds: &str, max_bytes: &str) -> Command {
-    let mut command = Command::new("curl");
-    command.args([
-        "--disable",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        seconds,
-        "--max-filesize",
-        max_bytes,
-    ]);
-    command
+    let mut response_headers = Vec::new();
+    let mut remaining = limit;
+    let mut failed_write = None;
+    let mut failed_read = None;
+    let status = {
+        let mut transfer = client.transfer();
+        if let Some(request) = input.as_mut() {
+            transfer
+                .read_function(|output| match request.body.read(output) {
+                    Ok(size) => Ok(size),
+                    Err(error) => {
+                        failed_read = Some(error);
+                        Err(ReadError::Abort)
+                    }
+                })
+                .map_err(transport)?;
+        }
+        transfer
+            .header_function(|line| {
+                if response_headers.len() + line.len() > 65_536 {
+                    return false;
+                }
+                response_headers.extend_from_slice(line);
+                true
+            })
+            .map_err(transport)?;
+        transfer
+            .write_function(|chunk| {
+                let Some(left) = remaining.checked_sub(chunk.len() as u64) else {
+                    failed_write = Some(io::Error::other(
+                        "Allocator response exceeded its size limit",
+                    ));
+                    return Ok(0);
+                };
+                remaining = left;
+                if let Err(error) = output.write_all(chunk) {
+                    failed_write = Some(error);
+                    return Ok(0);
+                }
+                Ok(chunk.len())
+            })
+            .map_err(transport)?;
+        transfer.perform()
+    };
+    if let Some(error) = failed_write.or(failed_read) {
+        return Err(error.into());
+    }
+    status.map_err(transport)?;
+    let status = u16::try_from(client.response_code().map_err(transport)?)
+        .map_err(|_| TaskError::client("Allocator response has an invalid HTTP status"))?;
+    Ok(Response {
+        status,
+        headers: response_headers,
+    })
 }
 
 fn problem(body: &[u8], status: u16) -> TaskError {
@@ -313,21 +326,23 @@ impl TaskClient {
 
     pub fn request(&self, path: &str, payload: Option<&Value>) -> Result<Value, TaskError> {
         let token = fs::read_to_string(&self.token_file)?;
-        let mut fields = vec![("header", "Content-Type: application/json")];
-        let serialized;
-        if let Some(payload) = payload {
-            serialized = payload.to_string();
-            fields.push(("data-binary", &serialized));
-        }
-        let (body, status) = curl(
-            &self.endpoint,
+        let serialized = payload.map(|payload| payload.to_string());
+        let mut source = serialized.as_deref().unwrap_or_default().as_bytes();
+        let request = serialized.as_ref().map(|body| Outgoing {
+            mime: "application/json",
+            size: body.len() as u64,
+            body: &mut source,
+        });
+        let mut response = Vec::new();
+        let result = request_to(
+            (&self.endpoint, path),
             &self.ca,
             token.trim(),
-            path,
-            options("20", "8388608"),
-            &fields,
+            request,
+            (20, 8 * 1024 * 1024),
+            &mut response,
         )?;
-        json_response(body, status)
+        json_response(response, result.status)
     }
 
     pub fn upload(&self, route: &str, path: &Path, key: Option<&str>) -> Result<Value, TaskError> {
@@ -343,18 +358,21 @@ impl TaskClient {
             return Ok(existing.clone());
         }
         let (origin, ticket) = transfer(&grant)?;
-        let (body, status) = curl(
-            &origin,
+        let mut response = Vec::new();
+        archive.as_file_mut().rewind()?;
+        let result = request_to(
+            (&origin, "/v1/checkpoint"),
             &self.ca,
             ticket,
-            "/v1/checkpoint",
-            options("290", "8388608"),
-            &[
-                ("header", "Content-Type: application/gzip"),
-                ("data-binary", &format!("@{}", path_text(archive.path())?)),
-            ],
+            Some(Outgoing {
+                mime: "application/gzip",
+                size: bytes,
+                body: archive.as_file_mut(),
+            }),
+            (290, 8 * 1024 * 1024),
+            &mut response,
         )?;
-        json_response(body, status)
+        json_response(response, result.status)
     }
 
     pub fn download(&self, grant: &Value, destination: &Path) -> Result<Value, TaskError> {
@@ -365,27 +383,22 @@ impl TaskClient {
             .filter(|value| hex(value, 64))
             .ok_or_else(|| TaskError::client("Invalid checkpoint digest"))?;
         let directory = output_directory(destination);
-        let headers = tempfile::NamedTempFile::new_in(directory)?;
         let mut partial = tempfile::NamedTempFile::new_in(directory)?;
-        let (_, status) = curl(
-            &origin,
+        let response = request_to(
+            (&origin, "/v1/checkpoint"),
             &self.ca,
             ticket,
-            "/v1/checkpoint",
-            options("150", "1073741824"),
-            &[
-                ("dump-header", path_text(headers.path())?),
-                ("output", path_text(partial.path())?),
-            ],
+            None,
+            (150, 1024 * 1024 * 1024),
+            partial.as_file_mut(),
         )?;
-        if !(200..300).contains(&status) {
+        if !(200..300).contains(&response.status) {
             let mut result = Vec::new();
-            File::open(partial.path())?
-                .take(4096)
-                .read_to_end(&mut result)?;
-            return Err(problem(&result, status));
+            partial.as_file_mut().rewind()?;
+            partial.as_file_mut().take(4096).read_to_end(&mut result)?;
+            return Err(problem(&result, response.status));
         }
-        let declared = content_length(&fs::read_to_string(headers.path())?)?;
+        let declared = content_length(&String::from_utf8_lossy(&response.headers))?;
         let actual = partial.as_file().metadata()?.len();
         if declared != actual {
             return Err(TaskError::client("Checkpoint download ended early"));

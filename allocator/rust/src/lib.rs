@@ -7,6 +7,7 @@ pub mod workspace;
 mod native_provider;
 mod tart;
 pub mod tart_worker;
+pub mod restic_scope;
 
 mod capacity;
 
