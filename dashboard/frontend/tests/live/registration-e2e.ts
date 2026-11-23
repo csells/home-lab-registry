@@ -182,7 +182,7 @@ async function main(): Promise<void> {
       endpoints: { health: "http://192.0.2.10:9911/health", public: "https://example.test" },
       resources: { address_bindings: [{ machine_id: "machine-test", endpoint_keys: ["health"], probe: true }] },
     }, writer, 0);
-    write("agent.json", { listen: streamPort, disks: [{ name: "root", path: "/" }], cert: path("node.pem"),
+    write("agent.json", { listen: ":" + streamPort, disks: [{ name: "root", path: "/" }], cert: path("node.pem"),
       key: path("node.key"), client_ca: ca, registration: {
         url: "https://127.0.0.1:9443/v1/machines/machine-test/presence", token_file: path("token"), ca_file: ca, interface: link,
       },
