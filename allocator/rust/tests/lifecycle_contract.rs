@@ -73,3 +73,28 @@ fn release_requires_explicit_data_disposition_or_verified_export_and_renewal_nev
         "lease_not_renewable"
     );
 }
+
+#[test]
+fn a_non_boolean_discard_request_cannot_start_reclamation() {
+    let lease = Lifecycle {
+        phase: LeasePhase::Ready,
+        reclaim_on_expiry: true,
+        deadline: 200.0,
+        owner_hold: None,
+        reviewer_hold: None,
+        checkpoint: None,
+    };
+    assert_eq!(
+        lease
+            .release(&json!({"discard_disposable_data":"true"}))
+            .unwrap_err()
+            .code(),
+        "final_export_required"
+    );
+    assert_eq!(
+        lease
+            .release(&json!({"discard_disposable_data":false}))
+            .unwrap(),
+        ReclaimAction::StopForExport
+    );
+}

@@ -120,7 +120,9 @@ impl Lifecycle<'_> {
             if request
                 .get("preserve_checkpoint")
                 .is_some_and(|value| value != true)
-                || request["discard_disposable_data"] == true
+                || request
+                    .get("discard_disposable_data")
+                    .is_some_and(|value| !matches!(value, Value::Null | Value::Bool(false)))
             {
                 return Err(Rejected::new(
                     "final_export_required",

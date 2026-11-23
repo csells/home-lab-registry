@@ -5,6 +5,29 @@ qualified Tart macOS/Xcode recipe. A single journal holds admission and release
 intents for all enrolled slots. The fixed Proxmox setup below remains supported.
 See [Apple worker enrollment](#apple-worker-enrollment) for the second provider.
 
+## Rust controller candidate
+
+Build the reviewed candidate from the repository root.
+
+```sh
+cargo build --locked --release --manifest-path allocator/rust/Cargo.toml
+allocator/rust/target/release/lab-allocator /path/to/config.json \
+  --provider-adapter /path/to/checkout/allocator/provider_adapter.py
+```
+
+The native service uses the existing HTTPS routes, private configuration, SQLite
+schema and independent ledger witness. Keep the provider adapter beside its
+Python modules. Existing clients, provider tooling, storage workers and the
+operator's offline ledger enrollment command still apply.
+
+During a staged switch, first verify the provider's pinned identities and
+capacity reads. Stop the old controller and exporter timer at an idle point.
+Preserve a consistent copy of the database and witness with the old service
+definition, then start the candidate as the sole controller and resume the
+exporter. For a binary rollback, keep the current database and witness together
+and start the old controller against them after stopping the candidate. Reconcile
+offline if their revision or the provider generation differs.
+
 ### Fixed Proxmox slot
 
 The original slot uses one pre-provisioned Proxmox VM. The operator prepares

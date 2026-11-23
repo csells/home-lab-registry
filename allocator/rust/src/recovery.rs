@@ -5,7 +5,7 @@ use crate::{
     CheckpointStore, Controller, LeasePhase, Rejected,
     controller::{RETENTION, now},
     rows::{available_receipt, lease, phase, selected_receipt, sqlite_json, stored, text},
-    tokens::{hash, token, valid_token},
+    tokens::{hash, hex, token, valid_token},
 };
 
 const TICKET_LIFETIME: f64 = 300.0;
@@ -15,6 +15,23 @@ pub(crate) fn short_reason(value: &Value) -> Option<&str> {
         .as_str()
         .map(str::trim)
         .filter(|value| (1..=240).contains(&value.chars().count()))
+}
+
+fn checkpoint_selection(value: &Value) -> Result<Option<&str>, Rejected> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .filter(|id| hex(id, 32))
+        .map(Some)
+        .ok_or_else(|| {
+            Rejected::new(
+                "invalid_checkpoint",
+                "A checkpoint ID must be 32 lowercase hex characters.",
+                400,
+            )
+        })
 }
 
 fn expiry_mismatch() -> Rejected {
@@ -102,7 +119,7 @@ impl Controller {
 
     pub fn pin(&mut self, id: &str, owner: &str, request: &Value) -> Result<Value, Rejected> {
         let row = lease(self.database(), id, Some(owner))?;
-        let key = request["checkpoint_id"].as_str();
+        let key = checkpoint_selection(&request["checkpoint_id"])?;
         let mut receipt = selected_receipt(self.database(), &row, key)?;
         if receipt["storage_managed"] != true
             || (key.is_none() && phase(&row)? != LeasePhase::Released)
@@ -184,7 +201,7 @@ impl Controller {
                 503,
             )
         })?;
-        let selected = request["checkpoint_id"].as_str();
+        let selected = checkpoint_selection(&request["checkpoint_id"])?;
         let stamp = now();
         let secret = token()?;
         self.ledger().mutate(|tx|{
@@ -289,7 +306,7 @@ impl Controller {
     pub fn confirm_expiry(&mut self, response: &Value) -> Result<Value, Rejected> {
         let id = text(response, "lease_id")?;
         let row = lease(self.database(), id, None)?;
-        let key = response["checkpoint_id"].as_str();
+        let key = checkpoint_selection(&response["checkpoint_id"])?;
         if response["unacknowledged"] == true {
             if let Some(key) = key {
                 selected_receipt(self.database(), &row, Some(key))?;
@@ -327,6 +344,19 @@ impl Controller {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn explicit_invalid_checkpoint_ids_cannot_select_the_final_checkpoint() {
+        for invalid in [json!(42), json!({}), json!(true), json!("not-an-id")] {
+            assert_eq!(
+                checkpoint_selection(&invalid).unwrap_err().code(),
+                "invalid_checkpoint"
+            );
+        }
+        assert_eq!(checkpoint_selection(&Value::Null).unwrap(), None);
+        let id = json!("b".repeat(32));
+        assert_eq!(checkpoint_selection(&id).unwrap(), id.as_str());
+    }
 
     #[test]
     fn expiry_acknowledgment_cannot_mark_a_different_snapshot_or_unverified_removal() {
