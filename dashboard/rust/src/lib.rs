@@ -520,10 +520,9 @@ async fn asset_response(state: &Shared, path: &str) -> Response {
         "/app.css" | "/leases.css" | "/resource-graph.css" => {
             (&path[1..], "text/css; charset=utf-8")
         }
-        "/dashboard-react.js"
-        | "/resource-graph.js"
-        | "/vendor/elk-api.js"
-        | "/vendor/elk-worker.min.js" => (&path[1..], "text/javascript; charset=utf-8"),
+        "/dashboard-react.js" | "/vendor/elk-worker.min.js" => {
+            (&path[1..], "text/javascript; charset=utf-8")
+        }
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     let Ok(bytes) = tokio::fs::read(state.assets.join(file)).await else {

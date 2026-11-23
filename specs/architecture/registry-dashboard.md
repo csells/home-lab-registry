@@ -74,17 +74,17 @@ items also expose declared dependency IDs as `dependencies`. Physical machines h
 a null parent. Guests use explicit `resources.machine_id`; hostname coincidence never
 places a guest. No new registry schema, collector or discovery source is introduced.
 
-[`resource-graph.js`](../../dashboard/resource-graph.js) builds a compound graph and
-lays it out with locally vendored ELK.js 0.12.1 Layered in a Web Worker, rendering
+[`resource-graph.ts`](../../dashboard/frontend/resource-graph.ts) builds a compound graph and
+lays it out with ELK.js 0.12.1 Layered in a Web Worker, rendering
 ELK's orthogonal edge sections. Stable input and a fixed seed make layout repeatable;
 cached geometry avoids relayout on status-only refreshes. The graph renders at actual
 size with no internal pan, zoom or click actions. Filters keep ancestors for context;
 missing parents and cycles appear under Unplaced. Relationships are declarations,
 not monitored traffic. The static-route allowlist adds only the named graph assets
-and Worker, without widening CSP. The [research decision](../research/graph-layout.md)
+and worker. The npm build supplies the worker from the pinned dependency. The [research decision](../research/graph-layout.md)
 records alternatives, license and version pin.
 
-Validation: `tests/test_resource_graph.cjs` covers hierarchy, ancestor/cyclic edges,
+Validation: `dashboard/frontend/tests/resource-graph.test.ts` covers hierarchy, ancestor/cyclic edges,
 stable ordering, filtering and orthogonal routes; `dashboard/test_model.py` covers
 placement metadata; `tests/check_map_browser.py` renders the tab through the real
 static routes/CSP at desktop and phone widths.

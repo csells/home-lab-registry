@@ -15,6 +15,7 @@ ssh_known_hosts
 
 /dashboard/frontend/node_modules/
 /dashboard/dashboard-react.js
+/dashboard/vendor/elk-worker.min.js
 
 /dashboard/rust/target/
 

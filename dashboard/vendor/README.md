@@ -1,6 +1,6 @@
 # ELK.js 0.12.1
 
-Unmodified upstream `lib/elk-api.js`, `lib/elk-worker.min.js`, and `LICENSE.md`.
+The npm build bundles the unmodified ELK API and copies its worker to this directory. The worker and dashboard bundle are build outputs. The upstream license is provided here.
 Distributed under the Eclipse Public License 2.0 option; retain upstream notices.
 
 Source: https://github.com/kieler/elkjs/releases/tag/0.12.1

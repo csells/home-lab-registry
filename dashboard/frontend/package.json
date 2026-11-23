@@ -8,9 +8,10 @@
   "scripts": {
     "test": "node --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild main.tsx --bundle --minify --legal-comments=inline --outfile=../dashboard-react.js"
+    "build": "esbuild main.tsx --bundle --minify --legal-comments=inline --outfile=../dashboard-react.js && cp node_modules/elkjs/lib/elk-worker.min.js ../vendor/"
   },
   "dependencies": {
+    "elkjs": "0.12.1",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

@@ -25,7 +25,10 @@ fn initial() -> Snapshot {
 }
 
 fn setup() -> (Router, Dashboard, watch::Sender<bool>) {
-    let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    setup_assets(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."))
+}
+
+fn setup_assets(assets: PathBuf) -> (Router, Dashboard, watch::Sender<bool>) {
     let (shutdown, listening) = watch::channel(false);
     let dashboard = Dashboard::new(
         assets,
@@ -58,7 +61,19 @@ async fn body_json(response: Response) -> Value {
 
 #[tokio::test]
 async fn static_assets_keep_csp_and_cannot_bypass_the_route_allowlist() {
-    let (app, _, _) = setup();
+    let assets = tempfile::tempdir().unwrap();
+    std::fs::write(
+        assets.path().join("index.html"),
+        include_bytes!("../../index.html"),
+    )
+    .unwrap();
+    std::fs::create_dir(assets.path().join("vendor")).unwrap();
+    std::fs::write(
+        assets.path().join("vendor/elk-worker.min.js"),
+        "// Worker asset test",
+    )
+    .unwrap();
+    let (app, _, _) = setup_assets(assets.path().into());
     let response = get(&app, "/", &[], false).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(
@@ -76,11 +91,15 @@ async fn static_assets_keep_csp_and_cannot_bypass_the_route_allowlist() {
     let body = to_bytes(response.into_body(), 1_000_000).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("dashboard-react.js"));
     assert_eq!(
-        get(&app, "/vendor/elk-api.js", &[], true).await.status(),
+        get(&app, "/vendor/elk-worker.min.js", &[], true)
+            .await
+            .status(),
         StatusCode::OK
     );
     for path in [
         "/app.js",
+        "/resource-graph.js",
+        "/vendor/elk-api.js",
         "/private/login.json",
         "/vendor/%2e%2e/private/login.json",
     ] {

@@ -3,9 +3,11 @@ import { MachineCard, ServiceCard } from './cards.tsx';
 import { connectDashboard, refreshCatalog } from './dashboard-connection.ts';
 import { Discrepancies } from './discrepancy-view.tsx';
 import { describeDiscrepancies } from './discrepancies.ts';
-import type { DashboardInventory, InventoryRecord } from './inventory.ts';
+import type { DashboardInventory } from './inventory.ts';
 import { LeaseView } from './lease-view.tsx';
 import type { LeaseList } from './leases.ts';
+import { mountResourceGraph } from './resource-graph.ts';
+import type { GraphRecord } from './resource-graph.ts';
 import { health, resources, statuses } from './resources.ts';
 import type { Health, ResourceFilters, ResourceView } from './resources.ts';
 
@@ -40,18 +42,13 @@ function filterLabel(status: Health | 'all', machine: boolean) {
   return status[0].toUpperCase() + status.slice(1);
 }
 
-type GraphRecord = Pick<InventoryRecord, 'id' | 'name' | 'machine_id' | 'dependencies'> & { kind?: string; status: Health };
-declare const ResourceGraph: {
-  mount(element: HTMLElement, records: GraphRecord[], options: { matching: Set<string> }): () => void;
-};
-
 function MapCards({ items, matching }: { items: GraphRecord[]; matching: string[] }) {
   const ref = useRef<HTMLElement>(null);
   const graph = JSON.stringify([items, matching]);
   useEffect(() => {
     if (!ref.current) return;
     const [records, visible]: [GraphRecord[], string[]] = JSON.parse(graph);
-    return ResourceGraph.mount(ref.current, records, { matching: new Set(visible) });
+    return mountResourceGraph(ref.current, records, new Set(visible));
   }, [graph]);
   return <section ref={ref} id="cards" aria-label="Resources" />;
 }

@@ -13,6 +13,7 @@ Private operations planning stays outside the public index.
 | [0005 Inventory coverage and change delivery](0005-inventory-coverage-and-change-delivery.md) | Catalog changes, scoped presence and one clone registration passed bounded staging checks. Broader coverage, recovery and rollout remain open. |
 | [0006 Dashboard health review](0006-dashboard-health-review.md) | Eight corrections implemented and verified in disposable staging. Production promotion is pending. |
 | [0007 React, TypeScript and Rust port](0007-react-typescript-and-rust-port.md) | The full React dashboard and all three Rust services are verified in disposable staging. Production promotion is pending. |
+| [0008 Finish the Rust and TypeScript migration](0008-remove-python-and-javascript.md) | Port the remaining runtime dependencies, operator tools, and tests to Rust and TypeScript. |
 
 ## Archived
 

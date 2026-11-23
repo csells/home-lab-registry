@@ -149,8 +149,6 @@ npm --prefix dashboard/frontend ci
 npm --prefix dashboard/frontend run typecheck
 npm --prefix dashboard/frontend test
 npm --prefix dashboard/frontend run build
-node --check dashboard/resource-graph.js
-node tests/test_resource_graph.cjs
 cargo test --locked --manifest-path registry/rust/Cargo.toml
 cargo test --locked --manifest-path dashboard/rust/Cargo.toml
 cargo test --locked --manifest-path allocator/rust/Cargo.toml
