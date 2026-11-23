@@ -376,14 +376,21 @@ struct Audit {
     appliances: Vec<appliance::Details>,
 }
 
+fn router_cookie(token: &str) -> io::Result<String> {
+    if token.is_empty()
+        || !token.bytes().all(
+            |byte| matches!(byte, 0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e),
+        )
+    {
+        return Err(error("Invalid router session."));
+    }
+    Ok(format!("s={token}"))
+}
+
 fn router_reservations(config: &Audit) -> Result<Value, Box<dyn Error>> {
     let session: Value = serde_json::from_reader(File::open(&config.session_file)?)?;
     let token = string(&session, "session_token")?;
-    if !token.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'=' | b'+' | b'/')
-    }) {
-        return Err(error("Invalid router session.").into());
-    }
+    let cookie = router_cookie(token)?;
     let id = config
         .network_id
         .as_str()
@@ -400,10 +407,13 @@ fn router_reservations(config: &Audit) -> Result<Value, Box<dyn Error>> {
         .get(format!(
             "https://api-user.e2ro.com/2.2/networks/{id}/reservations"
         ))
-        .header("Cookie", format!("s={token}"))
+        .header("Cookie", cookie)
         .header("User-Agent", "eero-api-rs/0.1")
-        .send()?
-        .error_for_status()?;
+        .header("Content-Type", "application/json")
+        .send()
+        .map_err(reqwest::Error::without_url)?
+        .error_for_status()
+        .map_err(reqwest::Error::without_url)?;
     let mut bytes = Vec::new();
     response.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > 4 * 1024 * 1024 {
@@ -606,4 +616,17 @@ pub fn run(private: &Path) -> Result<Value, Box<dyn Error>> {
         "message":format!("{violations} violations · {unverified} unverified checks · {warnings} warnings"),
         "scope":"Fresh router reservations, live host and appliance settings, and read-only saved profiles. Offline verification is distinct from live verification; inaccessible configurations remain unverified."}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::router_cookie;
+
+    #[test]
+    fn router_tokens_accept_cookie_characters_without_allowing_another_cookie() {
+        assert_eq!(router_cookie("opaque:v1=0").unwrap(), "s=opaque:v1=0");
+        for invalid in ["", "two words", "a;b=other", "line\r\nbreak", "quoted\""] {
+            assert!(router_cookie(invalid).is_err());
+        }
+    }
 }

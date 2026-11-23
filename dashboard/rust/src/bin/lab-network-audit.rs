@@ -18,8 +18,8 @@ fn main() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Err(_) => {
-            eprintln!("Read-only address audit failed.");
+        Err(problem) => {
+            eprintln!("Read-only address audit failed: {problem}");
             println!(
                 "{}",
                 json!({"status":"error","rows":[],

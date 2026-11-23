@@ -14,6 +14,8 @@ const streamPort = 9911;
 const registryBinary = process.env.LAB_REGISTRY ?? join(root, "registry/rust/target/release/lab-registry");
 const collectorBinary = process.env.LAB_METRICS ?? join(root, "agent/lab-metrics");
 const backupBinary = process.env.LAB_BACKUP_COLLECT ?? join(root, "backup/rust/target/release/lab-backup-collect");
+const registerBinary = process.env.LAB_REGISTER_DEPLOYMENT ?? join(root, "registry/rust/target/release/lab-register-deployment");
+const publishBinary = process.env.LAB_PUBLISH_RUNTIME ?? join(root, "registry/rust/target/release/lab-publish-runtime");
 const dashboardBinary = process.env.LAB_DASHBOARD ?? join(root, "dashboard/rust/target/release/lab-dashboard");
 const keep = process.env.REGISTRATION_KEEP_STAGE === "1";
 
@@ -57,7 +59,7 @@ async function main(): Promise<void> {
   if (process.platform !== "linux" || process.getuid?.() !== 0 || process.env.DISPOSABLE_VM_TEST !== "1") {
     throw new Error("Requires root and DISPOSABLE_VM_TEST=1 in a disposable Linux VM");
   }
-  for (const path of [registryBinary, collectorBinary, backupBinary, ...(keep ? [dashboardBinary] : [])]) {
+  for (const path of [registryBinary, collectorBinary, backupBinary, registerBinary, publishBinary, ...(keep ? [dashboardBinary] : [])]) {
     if (!existsSync(path)) throw new Error("Build the requested test binary first: " + path);
   }
   process.umask(0o077);
@@ -71,6 +73,8 @@ async function main(): Promise<void> {
   const enrollment = token();
   const reader = token();
   const writer = token();
+  const publisher = token();
+  const runtimeBinding = { kind: "native", provider: "systemd", instance: unit + ".service" };
   let networkAdded = false;
   let collectorStarted = false;
   let successful = false;
@@ -143,6 +147,11 @@ async function main(): Promise<void> {
         "-days", "1", "-extfile", path(name + ".ext"), "-out", path(name + ".pem"));
     }
     writeFileSync(path("token"), enrollment, { mode: 0o600 });
+    writeFileSync(path("publisher-token"), publisher, { mode: 0o600 });
+    const registryUrl = "https://127.0.0.1:" + port;
+    write("registry-operator.json", { url: registryUrl, reader_token: reader, writer_token: writer, ca_file: ca });
+    write("publisher.json", { registry: registryUrl, record_id: "test-runtime", token_file: path("publisher-token"),
+      ca_file: ca, unit: runtimeBinding.instance });
     write("registry.json", {
       database: path("catalog.db"), bind: "127.0.0.1", port, reader_token: reader, writer_token: writer,
       cert: path("registry.pem"), key: path("registry.key"),
@@ -151,6 +160,7 @@ async function main(): Promise<void> {
         allowed_networks: ["192.0.2.0/24"], tls_name: "test-node",
       } },
       presence_tls: { ca_file: ca, cert_file: path("client.pem"), key_file: path("client.key") },
+      runtime_publishers: { "test-runtime": { token: publisher, binding: runtimeBinding } },
     });
     command("ip", "link", "add", link, "type", "dummy");
     networkAdded = true;
@@ -188,6 +198,21 @@ async function main(): Promise<void> {
     await wait("real cached metrics over mTLS", async () => (await readStream("192.0.2.10")).history);
     await assert.rejects(() => readStream("192.0.2.10", "wrong-node"));
     console.log("PASS wrong TLS identity rejected");
+
+    const runtime = { name: "Disposable collector", host: machine.host, owner: machine.owner,
+      capabilities: ["test-service"], lifecycle: "active", runbook: machine.runbook,
+      endpoints: {}, dependencies: [], resources: { runtime_binding: runtimeBinding, deployment_generation: "review-generation" } };
+    write("runtime-manifest.json", runtime);
+    const managed = (action: "register" | "retire") => JSON.parse(command(registerBinary,
+      "--config", path("registry-operator.json"), action, "test-runtime", path("runtime-manifest.json")));
+    assert.equal(managed("register").lifecycle, "active");
+    assert.equal(JSON.parse(command(publishBinary, path("publisher.json"), "--systemd")).state, "present");
+    const observed = await get<{runtime_observation?: { state: string }}>("/v1/services/test-runtime");
+    assert.equal(observed.runtime_observation?.state, "present");
+    await assert.rejects(() => get("/v1/services/app/runtime", { state: "present", ttl_seconds: 900 }, publisher), /401|403/);
+    assert.equal(managed("retire").lifecycle, "retired");
+    await assert.rejects(() => get("/v1/services/test-runtime/runtime", { state: "present", ttl_seconds: 900 }, publisher), /409/);
+    console.log("PASS Rust deployment registration, scoped systemd observation, and exact retirement");
 
     const backup = path("backrest");
     mkdirSync(join(backup, "private"), { recursive: true });
