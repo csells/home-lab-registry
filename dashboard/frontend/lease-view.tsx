@@ -1,5 +1,4 @@
 import { Fragment, useSyncExternalStore } from 'react';
-import { createPortal } from 'react-dom';
 import type { Lease, LeaseList } from './leases.ts';
 
 const date = (value: number) => new Date(value * 1000).toLocaleString();
@@ -22,13 +21,12 @@ function LeaseCard({ lease }: { lease: Lease }) {
   </article>;
 }
 
-export function LeaseView({ leases, badge }: { leases: LeaseList; badge: HTMLElement }) {
+export function LeaseView({ leases, hidden }: { leases: LeaseList; hidden: boolean }) {
   const state = useSyncExternalStore(leases.subscribe, leases.read);
   const status = state.asOf ? 'Updated ' + date(state.asOf) : state.loading
     ? state.scope === 'current' ? 'Loading current leases…' : 'Loading lease history…'
     : '';
-  return <>
-    {createPortal(<span id="lease-count">{state.counts?.current ?? '—'}</span>, badge)}
+  return <section id="lease-panel" aria-labelledby="lease-title" hidden={hidden}>
     <div className="inventory-tools"><div className="inventory-title">
       <h2 id="lease-title">Environment leases</h2><p id="lease-as-of" role="status">{status}</p>
     </div></div>
@@ -48,5 +46,5 @@ export function LeaseView({ leases, badge }: { leases: LeaseList; badge: HTMLEle
     </div>
     <button type="button" className="button secondary" id="older" hidden={state.cursor === null} disabled={state.loading}
       onClick={() => void leases.loadMore()}>Show more leases</button>
-  </>;
+  </section>;
 }

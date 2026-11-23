@@ -38,8 +38,10 @@ try:
                 page=browser.new_page(viewport={'width':width,'height':1000});errors=[]
                 page.on('pageerror',lambda e:errors.append(str(e)))
                 page.route('**/api/inventory',lambda route:route.fulfill(json=catalog))
-                page.route('**/api/network-audit',lambda route:route.fulfill(json={'message':'Synthetic audit'}))
+                page.route('**/api/inventory/stream',lambda route:route.abort())
                 page.route('**/api/metrics/stream?*',lambda route:route.fulfill(content_type='text/event-stream',body='event: metrics\ndata: {"status":"waiting"}\n\n'))
+                requests=[]
+                page.on('request',lambda request:requests.append(request.url))
                 page.goto(f'http://127.0.0.1:{http.server_port}/#map')
                 page.locator('#cards[data-layout-ready="true"]').wait_for()
                 expect(page.locator('.resource-node[data-resource-id]')).to_have_count(10)
@@ -63,6 +65,7 @@ try:
                 expect(page.locator('.resource-node[data-resource-id]')).to_have_count(10)
                 assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                 assert not errors,errors
+                assert not any(url.endswith('/app.js') for url in requests),'The legacy dashboard script still loaded'
                 page.locator('#machines-tab').click();expect(page.locator('#cards .machine-card')).to_have_count(7)
                 page.locator('#services-tab').click();expect(page.locator('#cards .service-card')).to_have_count(3)
                 page.locator('#backups-tab').click();expect(page.locator('#cards .service-card')).to_have_count(1)

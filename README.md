@@ -127,7 +127,10 @@ Take a SQLite-consistent export and back up private configuration, proxy, servic
 ```sh
 (cd registry && python3 -m unittest -v)
 (cd dashboard && python3 -m unittest -v)
-node --check dashboard/app.js
+npm --prefix dashboard/frontend ci
+npm --prefix dashboard/frontend run typecheck
+npm --prefix dashboard/frontend test
+npm --prefix dashboard/frontend run build
 node --check dashboard/resource-graph.js
 node tests/test_resource_graph.cjs
 (cd agent && go test -race ./...)

@@ -16,17 +16,68 @@ interface Observation {
   evidence?: string;
 }
 
-interface InventoryRecord {
+export interface AccessRoute {
+  id: string;
+  label: string;
+  url?: string;
+  username?: string | null;
+  username_required?: boolean;
+  password_available?: boolean;
+  password_note?: string;
+  browser_terminal?: string | null;
+  note?: string;
+}
+
+export interface MetricSample {
+  status: string;
+  checked?: number;
+  expires?: number;
+  cpu_percent?: number;
+  memory_total?: number;
+  memory_used?: number;
+  gpu?: { status: string; percent?: number | null; note?: string };
+  disks?: { name: string; used: number; total: number; checked?: number }[];
+  warnings?: string[];
+}
+
+export interface Metrics extends MetricSample {
+  history?: MetricSample[];
+}
+
+export interface InventoryRecord {
+  id: string;
   name: string;
+  host: string;
   display_name?: string;
   lifecycle: 'active' | 'planned' | 'retired';
+  capabilities: string[];
+  dependencies?: string[];
+  kind?: 'machine' | 'service' | 'backup';
+  machine_type?: 'machine' | 'virtual-machine' | 'container';
+  machine_id?: string | null;
+  model?: string | null;
+  os?: string | null;
+  deployment?: string;
+  endpoints?: Record<string, string>;
+  access?: AccessRoute[];
+  console_login?: { username?: string; credential_id: string; password_available?: boolean } | null;
+  config_backup?: { status?: string; locations?: { host: string; path: string }[]; notes?: string };
+  metrics?: Metrics;
   health?: Observation;
-  runtime?: { state?: string; expires?: number };
+  runtime?: { state?: string; expires?: number; checked?: number };
+}
+
+export interface HostReport {
+  machine_id: string;
+  status: string;
+  expires?: number;
+  checked?: number;
+  hardware?: { expires: number; checked: number; architecture: string; os: string; logical_cpus: number; memory_bytes: number };
 }
 
 export interface InventoryAccuracy {
   checked: number;
-  hosts: { machine_id: string; status: string; expires?: number; checked?: number }[];
+  hosts: HostReport[];
   findings: Finding[];
   deployments?: { record_id: string; state: string; expires: number }[];
   coverage: { verified: number; expected: number; unconfigured: number };

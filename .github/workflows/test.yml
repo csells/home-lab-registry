@@ -15,7 +15,6 @@ jobs:
       - run: python -m unittest discover -s allocator -v
       - run: python -m unittest discover -s dashboard -v
       - run: PYTHONPATH=backup:registry python -m unittest discover -s backup -v
-      - run: node --check dashboard/app.js
       - run: node --check dashboard/resource-graph.js
       - run: node tests/test_resource_graph.cjs
       - uses: actions/setup-node@v4

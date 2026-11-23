@@ -81,7 +81,8 @@ class NetworkAuditRemovalTests(unittest.TestCase):
  def test_dashboard_cannot_start_an_audit(self):
   self.assertNotIn('network_audit',(BASE/'server.py').read_text())
   self.assertNotIn('network-check',(BASE/'index.html').read_text())
-  self.assertNotIn('api/network-audit',(BASE/'app.js').read_text())
+  for source in (BASE/'frontend').glob('*.[tT][sS]*'):
+   self.assertNotIn('api/network-audit',source.read_text())
 
  def test_latest_published_audit_is_summarized_read_only(self):
   records=[{'id':'router','spec':{'resources':{'fleet_address_audit':{'latest_run':{'at':'2026-10-19T13:20:49Z','status':'warning','warnings':[{'kind':'offline-config-unverified','target':'x'}],'verified_unreserved_static_count':0,'evidence_ref':'/private/path'}}}}}]
