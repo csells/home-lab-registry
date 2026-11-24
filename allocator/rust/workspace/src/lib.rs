@@ -3,7 +3,9 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use flate2::bufread::GzDecoder;
 use ring::digest::{Context, SHA256};
 
-pub const MAX_ARCHIVE: u64 = 64 * 1024 * 1024;
+pub const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
+pub const MAX_EXPANDED: u64 = 2 * 1024 * 1024 * 1024;
+pub const MAX_MEMBERS: usize = 20_000;
 pub const APPLE_WORKSPACE: &str = "/Volumes/My Shared Files/workspace/project";
 
 #[cfg(unix)]

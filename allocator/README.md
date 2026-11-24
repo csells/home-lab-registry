@@ -231,7 +231,9 @@ mutations automatically.
 A task with a supplied manifest uses `lab-lease --session SESSION capabilities`
 and `lab-lease --session SESSION leases` to find suitable recipes and its own
 recent environments. The same input works for acquisition, renewal and
-checkpoint recovery.
+checkpoint recovery. Both discovery responses include `checkpoint_limits` for
+the protocol's compressed and expanded byte ceilings and maximum archive entry
+count. An individual storage worker may enforce a lower configured limit.
 
 Use `lab-lease --session SESSION contract` or the authenticated
 `GET /v1/contract` to discover the core routes and versioned JSON schemas for
@@ -572,7 +574,12 @@ refused. Retire the account, keys, gateway and review VM at teardown.
 
 Before acknowledging an archive the worker extracts it into an empty private
 directory using the same extractor and limits as the guest. Allow temporary
-space for both a decompressed tar stream and its extracted files (up to 512 MiB each). The limit covers headers and padding. The validator accepts up to 20,000 archive entries and 64 MiB of compressed input. On Linux its child process also has memory and CPU limits. An incompatible final checkpoint leaves the original disk held.
+space for both a decompressed tar stream and its extracted files, up to 2 GiB
+each. The limit covers headers and padding. The protocol accepts up to 20,000
+entries and 512 MiB of compressed input. Provision temporary storage for those
+files and the compressed copies held during transfer and verification. On Linux
+the validator also has memory and CPU limits. An incompatible final checkpoint
+leaves the original disk held.
 The verifier must attest both managed storage and successful restore validation.
 
 An owner retry keeps the original storage challenge. The worker looks up that

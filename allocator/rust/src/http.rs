@@ -24,6 +24,7 @@ use tokio::sync::Mutex;
 use crate::{
     Controller, Provider, Rejected,
     tokens::{hash, valid_token},
+    workspace::{MAX_ARCHIVE, MAX_EXPANDED, MAX_MEMBERS},
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -143,6 +144,14 @@ impl Credentials {
     }
 }
 
+pub(crate) fn checkpoint_limits() -> Value {
+    json!({
+        "compressed_bytes": MAX_ARCHIVE,
+        "expanded_bytes": MAX_EXPANDED,
+        "entries": MAX_MEMBERS
+    })
+}
+
 pub fn task_contract() -> Value {
     let text = json!({"type":"string","minLength":1});
     let short = json!({"type":"string","minLength":1,"maxLength":128});
@@ -153,6 +162,7 @@ pub fn task_contract() -> Value {
         "api_version":1,
         "schema_dialect":"https://json-schema.org/draft/2020-12/schema",
         "capabilities":"/v1/capabilities",
+        "checkpoint_limits":checkpoint_limits(),
         "operations":{
             "acquire":{"method":"POST","path":"/v1/leases","body_schema":"acquire"},
             "list":{"method":"GET","path":"/v1/leases"},

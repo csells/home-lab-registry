@@ -423,11 +423,12 @@ verified restore of the updated capture configurations.
   Check temporary capture capacity before admitting work or expanding recipes.
   When a required resource is constrained, choose another eligible slot when
   possible and report the missing resource immediately otherwise.
-- Exercise workloads that exceed the current workspace archive limit. Publish
-  the recoverable workspace limits before work starts, detect approaching
-  limits during the lease, and qualify a recovery path for larger workspaces.
-  Report which limit was exceeded and avoid repeated full-disk captures for
-  the same deterministic failure.
+- The expanded checkpoint contract advertises a 512 MiB compressed ceiling
+  and a 2 GiB expanded ceiling. A real Linux lease in staging uploaded and
+  recovered a 224 MiB checkpoint and released after a verified final export.
+  Recovery matched the contents and modes of all 4,911 files. Continue to
+  qualify larger workloads, detect approaching limits during a lease, and
+  avoid repeated full-disk captures for the same deterministic failure.
 - Verify a declared periodic checkpoint interval and the loss bound under
   sustained load.
 - Interrupt an actual asynchronous reset and verify admission waits for

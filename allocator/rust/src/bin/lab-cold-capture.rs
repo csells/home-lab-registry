@@ -367,7 +367,7 @@ fn capture(settings: &Settings, lease: &str, image: &Path) -> io::Result<()> {
         &mut command,
         &mut archive,
         MAX_ARCHIVE,
-        Duration::from_secs(90),
+        Duration::from_secs(180),
     )?;
     io::copy(&mut archive, &mut io::stdout().lock())?;
     Ok(())

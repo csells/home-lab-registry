@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use super::{APPLE_WORKSPACE, MAX_ARCHIVE, decode_gzip, digest_to};
+use super::{APPLE_WORKSPACE, MAX_ARCHIVE, MAX_EXPANDED, MAX_MEMBERS, decode_gzip, digest_to};
 use flate2::{Compression, write::GzEncoder};
 use serde_json::{Value, json};
 
@@ -19,8 +19,6 @@ fn hex(text: &str, size: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-pub const MAX_EXPANDED: u64 = 512 * 1024 * 1024;
-pub const MAX_MEMBERS: usize = 20_000;
 const RECEIPT: &str = ".lease-restore-receipt";
 
 fn invalid(message: &'static str) -> io::Error {

@@ -38,7 +38,21 @@ fn checkpoint_tickets_bind_content_owner_and_exact_storage_acknowledgment() {
     let mut store = CheckpointStore::new(&mut ledger);
     let hash = "e".repeat(64);
     let snapshot = "d".repeat(64);
-    let request = json!({"request_key":"task-file","sha256":hash,"size":30});
+    let request = json!({"request_key":"task-file","sha256":hash,"size":268_435_456});
+    let over_limit = json!({"request_key":"oversized","sha256":hash,"size":536_870_913});
+    assert_eq!(
+        store
+            .grant(
+                "lease-id",
+                "owner",
+                &over_limit,
+                Some("https://recovery.example.invalid/"),
+                99.0,
+            )
+            .unwrap_err()
+            .code(),
+        "invalid_checkpoint"
+    );
     let denied = store
         .grant(
             "lease-id",
@@ -75,7 +89,7 @@ fn checkpoint_tickets_bind_content_owner_and_exact_storage_acknowledgment() {
     );
     let response = store.redeem(ticket, 102.0).unwrap();
     assert_eq!(response["sha256"], hash);
-    assert_eq!(response["size"], 30);
+    assert_eq!(response["size"], 268_435_456);
     assert_eq!(
         store.redeem(ticket, 103.0).unwrap_err().code(),
         "ticket_unavailable"

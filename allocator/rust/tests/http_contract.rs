@@ -11,6 +11,15 @@ fn task_api_schema_matches_the_python_client_contract() {
     let expected: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/task-contract-0230fe1.json")).unwrap();
     let mut current = task_contract();
+    let checkpoint_limits = current.as_object_mut().unwrap().remove("checkpoint_limits");
+    assert_eq!(
+        checkpoint_limits,
+        Some(json!({
+            "compressed_bytes": 536_870_912_u64,
+            "expanded_bytes": 2_147_483_648_u64,
+            "entries": 20_000
+        }))
+    );
     let grant = current["operations"]
         .as_object_mut()
         .unwrap()

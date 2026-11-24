@@ -4,10 +4,10 @@ use serde_json::{Value, json};
 use crate::{
     Ledger, Rejected,
     tokens::{hash, token, valid_hash, valid_token},
+    workspace::MAX_ARCHIVE,
 };
 
 const UPLOAD_SECONDS: f64 = 300.0;
-const ARCHIVE_LIMIT: i64 = 64 * 1024 * 1024;
 const SELECT: &str =
     "SELECT id,lease_id,created_at,size,sha256,receipt,error FROM incremental_checkpoint";
 
@@ -137,7 +137,7 @@ impl<'a, G: FnMut() -> Result<String, Rejected>> CheckpointStore<'a, G> {
                 .ok_or_else(||Rejected::new("unknown_lease","No lease has this identifier.",404))?;
             let fields=request["request_key"].as_str().filter(|key|(1..=128).contains(&key.chars().count()))
                 .zip(request["sha256"].as_str().filter(|digest|valid_hash(digest)))
-                .zip(request["size"].as_i64().filter(|size|(1..=ARCHIVE_LIMIT).contains(size)));
+                .zip(request["size"].as_i64().filter(|size|(1..=MAX_ARCHIVE as i64).contains(size)));
             let Some(((key,digest),size))=fields else {
                 return Err(Rejected::new("invalid_checkpoint","Supply a request key, digest and permitted archive size.",400));
             };

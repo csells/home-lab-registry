@@ -303,7 +303,8 @@ impl Controller {
             .values()
             .map(|slot| &slot.recipe)
             .collect::<BTreeSet<_>>();
-        let mut response = json!({"api_version":1,"recipe":LINUX,"recipes":recipes,"observed_at":now(),"slots":slots});
+        let mut response = json!({"api_version":1,"recipe":LINUX,"recipes":recipes,"observed_at":now(),"slots":slots,
+            "checkpoint_limits":crate::http::checkpoint_limits()});
         if slots.len() == 1 {
             if slots[0]["capabilities"].is_null() {
                 return Err(Rejected::new(
