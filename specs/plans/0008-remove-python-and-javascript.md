@@ -151,10 +151,11 @@ Backrest hook generated fresh encrypted registry and host backups. The restored
 registry archive passed SQLite integrity. The registry records pre-change and
 post-change snapshots, exact artifact digests and available rollback copies.
 
-The full combined staging rerun and rollback rehearsal were waived for this
-rollout. The allocator needs a permanent production authority with enrolled
-provider, capture and recovery scopes before its operational cutover. Keep
-Windows client TLS, private configuration ACLs and packaging deferred.
+The earlier registry and dashboard rollout used an explicit staging exception.
+The subsequent combined production release used the checksummed bundle tested
+in staging, the signed ledger handoff and production provider, capture and
+recovery scopes. Keep Windows client TLS, private configuration ACLs and
+packaging deferred.
 
 ## Carried from archived plans
 

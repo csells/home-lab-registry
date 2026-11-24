@@ -33,11 +33,14 @@ host's configuration, credentials, ledgers and workspaces stay outside it.
   accounts and private configuration. The sample units use
   `/etc/lab-registry/config.json`, `/etc/lab-allocator/config.json` and the
   dashboard configuration directory at `/opt/machine-dashboard/private`.
-  Give each account access to its own config, state and credentials.
+  Give each account access to its own config, state and credentials. Configure
+  at least one static task credential. An operator recovery identity can
+  supply it when routine agents use short-lived grants from a separate issuer.
 - On first installation, install the bundled [target](lab-platform.target) and its three service units
   in `/etc/systemd/system`. Keep host-specific settings in systemd drop-ins.
-  Remove any old drop-in that pins a process or its assets to a previous release. If migrating individually
-  managed services, preserve their definitions and rollback paths, then stop
+  Remove old drop-ins that pin processes or assets to previous releases.
+  When migrating individually managed services, preserve their definitions
+  and rollback paths, then stop
   and disable the old units at cutover so they cannot start alongside the
   target. Leave other provider and storage workloads running.
 - Point local checkpoint, export and alert workers and their capture commands
@@ -50,7 +53,7 @@ host's configuration, credentials, ledgers and workspaces stay outside it.
   that a prior controller has lost mutation authority before enrolling or
   transferring its pools. Recover a ledger using its independently held
   revision witness. Give the allocator write access to its state directory and
-  to the separately mounted witness path. Activate a compatible binary against
+  to the witness directory outside the ledger's restore set. Activate a compatible binary against
   the current ledger during rollback.
 
 Put the root-owned release directory under `/opt/lab-platform-releases`. Add
@@ -65,7 +68,8 @@ sudo systemctl enable lab-platform.target
 
 The check runs after all three units start. It must make an authenticated
 catalog read, an authenticated allocator read and a dashboard request through
-the normal access path. If the check fails, activation restores the previous
+the normal access path. Open the authenticated inventory stream or refresh
+the dashboard before asserting live lease status. If the check fails, activation restores the previous
 release pointer and its unit definitions, then starts the target again.
 Subsequent activations install the bundled units and reload systemd. On a
 first-time migration, use the preserved unit definitions to recover the previous installation if activation

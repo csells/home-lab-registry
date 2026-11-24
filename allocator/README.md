@@ -1,6 +1,6 @@
 # Environment allocator
 
-The disposable staging controller supports restricted Debian pools and one
+The allocator supports restricted Debian pools and one
 qualified Tart macOS/Xcode recipe. A single journal holds admission and release
 intents for all enrolled slots. The fixed Proxmox setup below remains supported.
 See [Apple worker enrollment](#apple-worker-enrollment) for the second provider.

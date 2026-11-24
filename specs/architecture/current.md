@@ -234,15 +234,15 @@ completed for all six configured collectors and the live inventory stream
 delivered events. Five eligible collectors now report native hardware and
 delivery mode. Backrest uses the Rust collector for 18 fleet plans, with fresh
 encrypted registry and host snapshots and registry archive verification.
-The allocator and its provider, export and recovery grants remain scoped to
-disposable staging. The registry records the deployed artifact identities
-and rollback and backup evidence.
+The production allocator runs alongside the registry and dashboard. Its
+enrolled provider, capture and recovery roles have production credentials.
+The registry records the artifact identity, cutover and recovery evidence.
 
 ## Registry platform releases
 
 The registry, dashboard, allocator and local lease workers share one
-checksummed release directory. In disposable staging, the units start under
-`lab-platform.target` and resolve their executables and assets through the
+checksummed release directory. In staging and production, the units start
+under `lab-platform.target` and resolve their executables and assets through the
 same release pointer. A failed authenticated check restores the previous unit
 definitions and release pointer. The catalog database and independently
 witnessed lease ledger keep their own state, recovery and authorization.
