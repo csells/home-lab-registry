@@ -401,6 +401,12 @@ retry command for the affected lease. The installed template rendered the
 recorded failure, and the encrypted backup restored the updated worker
 configuration.
 
+The Linux capture spool was expanded online and the three enrolled disk-capture
+budgets now cover their full admitted disks. An export that exceeded the old
+temporary disk budget then reached the separate compressed workspace archive
+limit. That disk remains held. The live registry records the spool capacity and
+verified restore of the updated capture configurations.
+
 ## Remaining allocator acceptance
 
 - Verify that fresh authorized agents can onboard and refresh production
@@ -413,6 +419,15 @@ configuration.
   and verify isolation from other tasks. Apply the same checks to any
   enrolled production build binding. NativeLink execution was verified
   through a private staging route.
+- Qualify admission and release together at the largest supported disk shape.
+  Check temporary capture capacity before admitting work or expanding recipes.
+  When a required resource is constrained, choose another eligible slot when
+  possible and report the missing resource immediately otherwise.
+- Exercise workloads that exceed the current workspace archive limit. Publish
+  the recoverable workspace limits before work starts, detect approaching
+  limits during the lease, and qualify a recovery path for larger workspaces.
+  Report which limit was exceeded and avoid repeated full-disk captures for
+  the same deterministic failure.
 - Verify a declared periodic checkpoint interval and the loss bound under
   sustained load.
 - Interrupt an actual asynchronous reset and verify admission waits for
@@ -514,11 +529,14 @@ configuration.
 
 ## Success measures
 
-Measure intervention-free task completion, admission and acquisition latency, renewable
-environment reuse, export lag and data-loss window, reconstruction time, orphan
-disk/resource count and controller overhead. Require zero protected-service
-mutations, zero cross-owner cleanup and zero unreserved static LAN assignments in
-qualification. A matching-environment claim requires a real restored workload,
+Measure intervention-free task completion and separate elapsed time waiting
+for admission, waiting for guest readiness, waiting for a durable checkpoint,
+and waiting for the slot to return to service. Keep the failure reason with
+each phase so capacity, provider latency and retry delays can be measured
+independently. Track renewable environment reuse, export lag and data-loss
+window, reconstruction time, orphan disk/resource count and controller overhead.
+Require zero protected-service mutations, zero cross-owner cleanup and zero
+unreserved static LAN assignments in qualification. A matching-environment claim requires a real restored workload,
 not just a successful clone command.
 
 

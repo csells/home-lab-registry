@@ -453,6 +453,13 @@ temporary allocation. Set `guest_id`, the absolute `workspace` and optionally
 timeout. Use a service-managed temporary directory that is cleaned on worker
 termination. A stale or full spool must leave the lease held.
 
+For a slot that accepts an arbitrary workload up to an enrolled disk size,
+set the capture budget for the full disk. Provision the spool for the largest
+simultaneous captures plus filesystem and working-space headroom. Check
+available bytes from the capture worker before enabling a larger disk shape
+or adding another export worker. Host storage free space and the worker's
+mounted spool capacity are separate limits.
+
 The reader checks stream completion and size before opening the explicit raw
 image read-only in a network-disabled appliance. The supported recipe has one
 x86-64 Linux root GPT partition with ext4. The reader checks the protected
