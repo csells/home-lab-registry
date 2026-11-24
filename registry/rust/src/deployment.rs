@@ -340,7 +340,9 @@ pub async fn observe_launchd(
         let mut domain_lookup = Command::new("/bin/launchctl");
         domain_lookup.args(["print", domain]);
         if !stderr.contains(&expected)
-            || !local(domain_lookup).await.is_some_and(|reply| reply.status.success())
+            || !local(domain_lookup)
+                .await
+                .is_some_and(|reply| reply.status.success())
         {
             return Ok(RuntimeState::Unverified);
         }
@@ -350,17 +352,17 @@ pub async fn observe_launchd(
     };
     match (state, fs::symlink_metadata(plist)) {
         (RuntimeState::Present, Ok(metadata))
-            if metadata.is_file() && stdout.lines().any(|line| {
-                line.trim()
-                    .strip_prefix("path = ")
-                    .is_some_and(|path| Path::new(path) == plist)
-            }) =>
+            if metadata.is_file()
+                && stdout.lines().any(|line| {
+                    line.trim()
+                        .strip_prefix("path = ")
+                        .is_some_and(|path| Path::new(path) == plist)
+                }) =>
         {
             Ok(RuntimeState::Present)
         }
         (RuntimeState::Missing, Err(error))
-            if error.kind() == ErrorKind::NotFound
-                && plist.parent().is_some_and(Path::is_dir) =>
+            if error.kind() == ErrorKind::NotFound && plist.parent().is_some_and(Path::is_dir) =>
         {
             Ok(RuntimeState::Missing)
         }

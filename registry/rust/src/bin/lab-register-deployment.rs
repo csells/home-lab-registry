@@ -9,7 +9,9 @@ use std::{
 use clap::{Parser, ValueEnum};
 use lab_registry::{
     client::RegistryClient,
-    deployment::{DeploymentCatalog, DeploymentIdentity, RuntimeState, observe_launchd, observe_systemd},
+    deployment::{
+        DeploymentCatalog, DeploymentIdentity, RuntimeState, observe_launchd, observe_systemd,
+    },
 };
 use serde_json::{Value, json};
 
@@ -63,15 +65,20 @@ async fn execute(args: Args) -> Result<Value, Box<dyn Error>> {
             if binding["kind"] != "native" {
                 return Err("Runtime sync requires a native deployment binding".into());
             }
-            let instance = binding["instance"].as_str().ok_or("Missing deployment instance")?;
+            let instance = binding["instance"]
+                .as_str()
+                .ok_or("Missing deployment instance")?;
             let state = match action {
                 Action::SyncSystemd if binding["provider"] == "systemd" => {
                     observe_systemd(instance).await?
                 }
                 Action::SyncLaunchd if binding["provider"] == "launchd" => {
-                    let (domain, label) = instance.rsplit_once('/')
+                    let (domain, label) = instance
+                        .rsplit_once('/')
                         .ok_or("Provide a launchd domain and label in the deployment instance")?;
-                    let plist = binding["plist_path"].as_str().ok_or("Missing launchd plist path")?;
+                    let plist = binding["plist_path"]
+                        .as_str()
+                        .ok_or("Missing launchd plist path")?;
                     observe_launchd(domain, label, Some(Path::new(plist))).await?
                 }
                 _ => return Err("Runtime sync needs the matching native provider binding".into()),
