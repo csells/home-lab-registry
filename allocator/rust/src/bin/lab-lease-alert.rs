@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::{Seek, Write},
     path::PathBuf,
@@ -21,8 +22,19 @@ struct Settings {
     endpoint: String,
     ca_file: PathBuf,
     alert_token_file: PathBuf,
+    #[serde(default)]
     delivery_command: Vec<String>,
+    #[serde(default)]
+    delivery_by_owner: BTreeMap<String, Vec<String>>,
     lock_file: PathBuf,
+}
+
+impl Settings {
+    fn recipient(&self, owner: &str) -> &[String] {
+        self.delivery_by_owner
+            .get(owner)
+            .unwrap_or(&self.delivery_command)
+    }
 }
 
 fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -32,8 +44,8 @@ fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     };
     let client = lab_allocator::task_client::TaskClient::new(
         &settings.endpoint,
-        settings.ca_file,
-        settings.alert_token_file,
+        settings.ca_file.clone(),
+        settings.alert_token_file.clone(),
     )?;
     let pending = client.request("/v1/export-alerts", None)?;
     if pending.get("alert").is_none_or(serde_json::Value::is_null) {
@@ -44,8 +56,9 @@ fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     serde_json::to_writer(&mut bytes, &envelope)?;
     writeln!(bytes)?;
     bytes.rewind()?;
-    let [program, args @ ..] = settings.delivery_command.as_slice() else {
-        return Err("An alert delivery command is required.".into());
+    let owner = envelope["owner"].as_str().ok_or("Missing alert owner.")?;
+    let [program, args @ ..] = settings.recipient(owner) else {
+        return Err("No alert recipient is configured for this owner.".into());
     };
     let mut command = std::process::Command::new(program);
     command.args(args);
@@ -73,5 +86,25 @@ fn main() -> ExitCode {
             eprintln!("Export alert needs retry: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_an_exact_owner_uses_a_dedicated_recipient() {
+        let settings: Settings = serde_json::from_value(json!({
+            "endpoint":"https://controller.example.invalid",
+            "ca_file":"/ca", "alert_token_file":"/token", "lock_file":"/lock",
+            "delivery_command":["/inbox","operator"],
+            "delivery_by_owner":{"build-42":["/inbox","build-42"],"disabled":[]}
+        }))
+        .unwrap();
+        assert_eq!(settings.recipient("build-42"), ["/inbox", "build-42"]);
+        assert_eq!(settings.recipient("build-421"), ["/inbox", "operator"]);
+        assert!(settings.recipient("disabled").is_empty());
     }
 }

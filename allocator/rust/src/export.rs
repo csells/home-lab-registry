@@ -1,13 +1,56 @@
+use std::{fs, path::Path};
+
 use rusqlite::{OptionalExtension, params};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    Controller, LeasePhase, ProviderKind, Rejected,
+    Controller, LeasePhase, Provider, ProviderKind, Rejected,
     controller::{EXPORT_REVIEW, now, provider_shape},
     recovery::short_reason,
     rows::{lease, phase, sqlite_json, stored},
     tokens::{hex, valid_hash},
 };
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportReconciliation {
+    lease_id: String,
+    additional_start: String,
+    workspace_sha256: String,
+    reason: String,
+}
+
+fn invalid_reconciliation() -> Rejected {
+    Rejected::new(
+        "invalid_export_reconciliation",
+        "Provide the exact lease, additional Proxmox start task, verified workspace archive digest and reason.",
+        400,
+    )
+}
+
+pub fn reconcile_final_export(config: &Path, proof: &Path) -> Result<Value, Rejected> {
+    let invalid_config = || {
+        Rejected::new("configuration_invalid", "Read the allocator configuration.", 503)
+    };
+    let settings = fs::read(config).map_err(|_| invalid_config())?;
+    let settings = serde_json::from_slice(&settings).map_err(|_| invalid_config())?;
+    let proof = fs::read(proof).map_err(|_| invalid_reconciliation())?;
+    let proof: ExportReconciliation =
+        serde_json::from_slice(&proof).map_err(|_| invalid_reconciliation())?;
+    let reason = proof.reason.trim();
+    if !hex(&proof.lease_id, 32)
+        || !valid_hash(&proof.workspace_sha256)
+        || !proof.additional_start.starts_with("UPID:")
+        || proof.additional_start.len() > 256
+        || !proof.additional_start.bytes().all(|byte| byte.is_ascii_graphic())
+        || !(1..=240).contains(&reason.chars().count())
+    {
+        return Err(invalid_reconciliation());
+    }
+    let provider = Provider::native(&settings)?;
+    Controller::open(&settings, provider)?.reconcile_export_source(&proof)
+}
 
 fn final_receipt(id: &str, value: &Value, stamp: f64) -> Result<Value, Rejected> {
     if value["outcome"] != "verified"
@@ -56,6 +99,56 @@ fn pending(row: &Value, stamp: f64) -> Result<(), Rejected> {
 }
 
 impl Controller {
+    fn reconcile_export_source(&mut self, proof: &ExportReconciliation) -> Result<Value, Rejected> {
+        let id = &proof.lease_id;
+        let row = lease(self.database(), id, None)?;
+        let entry = json!({
+            "lease_id": id,
+            "additional_start": proof.additional_start,
+            "workspace_sha256": proof.workspace_sha256,
+            "reason": proof.reason.trim(),
+        });
+        let previous = stored(&row["export_reconciliation"])?;
+        if previous["proof"] == entry {
+            return Ok(previous);
+        }
+        if !previous.is_null()
+            || phase(&row)? != LeasePhase::AwaitingExport
+            || !row["checkpoint"].is_null()
+            || !row["export_disposition"].is_null()
+            || self.slot(&row)?.kind == ProviderKind::Tart
+        {
+            return Err(Rejected::new(
+                "export_reconciliation_unavailable",
+                "Only an unresolved stopped Proxmox export without a prior reconciliation or owner disposition can be reconciled.",
+                409,
+            ));
+        }
+        self.ledger().verify()?;
+        let mut query = provider_shape(&row, "export-source")?;
+        let original_starts = stored(&row["export_start_tasks"])?;
+        query["start_tasks"] = original_starts.clone();
+        query["additional_start"] = json!(proof.additional_start);
+        let verified = self.provider_call(query)?;
+        let challenge = uuid::Uuid::new_v4().simple().to_string();
+        let receipt = json!({
+            "proof": entry,
+            "reconciled_at": now(),
+            "original_start_tasks": original_starts,
+            "verified_start_tasks": verified["start_tasks"],
+        });
+        self.ledger().mutate(|tx| {
+            tx.execute(
+                "UPDATE lease SET export_start_tasks=?,export_reconciliation=?,
+                    export_challenge=?,export_last_attempt_at=NULL,
+                    export_failed_at=NULL,export_error=NULL WHERE id=?",
+                params![verified["start_tasks"].to_string(),receipt.to_string(),challenge,id],
+            )?;
+            Ok(())
+        })?;
+        Ok(receipt)
+    }
+
     pub fn next_export(&mut self) -> Result<Value, Rejected> {
         let eligible = self
             .database()

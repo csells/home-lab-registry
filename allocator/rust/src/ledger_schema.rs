@@ -14,6 +14,9 @@ const LEASE_COLUMNS: &[(&str, &str)] = &[
     ("restore_completed_at", "REAL"),
     ("resume_point", "TEXT"),
     ("requirements", "TEXT NOT NULL DEFAULT '{}'"),
+    ("allocated_disk_mib", "INTEGER"),
+    ("pending_disk_mib", "INTEGER"),
+    ("resize_result", "TEXT"),
     ("prior_tasks", "TEXT"),
     ("owner", "TEXT NOT NULL DEFAULT 'operator'"),
     ("ssh_key", "TEXT"),
@@ -32,6 +35,7 @@ const LEASE_COLUMNS: &[(&str, &str)] = &[
     ("export_failed_at", "REAL"),
     ("export_error", "TEXT"),
     ("export_disposition", "TEXT"),
+    ("export_reconciliation", "TEXT"),
     ("checkpoint", "TEXT"),
     ("released_at", "REAL"),
 ];

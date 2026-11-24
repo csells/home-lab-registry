@@ -1,4 +1,4 @@
-# Environment lease pilot
+# Environment allocator
 
 The disposable staging controller supports restricted Debian pools and one
 qualified Tart macOS/Xcode recipe. A single journal holds admission and release
@@ -7,7 +7,8 @@ See [Apple worker enrollment](#apple-worker-enrollment) for the second provider.
 
 ## Rust controller candidate
 
-Build the reviewed candidate from the repository root.
+For staging and production, deploy the [registry platform release](../deploy/README.md).
+For controller development or recovery, build the allocator from the repository root.
 
 ```sh
 cargo build --locked --release --manifest-path allocator/rust/Cargo.toml
@@ -53,6 +54,37 @@ guest account whose effective SSH configuration reads keys from
 baseline snapshot. The controller only writes that fixed path. The provider's
 file-write privilege itself is guest-wide, so keep its token within the
 controller and scope it to the owned staging guest.
+
+Install the Debian recipe's workspace configuration after creating the
+`lease-task` user and before sealing the snapshot or clone template.
+
+```sh
+install -D -m 0644 allocator/recipes/debian13-amd64/lab-lease-workspace.conf \
+  /etc/tmpfiles.d/lab-lease-workspace.conf
+install -D -m 0644 allocator/recipes/debian13-amd64/10-lease-workspace.conf \
+  /etc/systemd/system/qemu-guest-agent.service.d/10-lease-workspace.conf
+systemctl daemon-reload
+```
+
+The guest agent creates the task-owned workspace before it answers the
+allocator's readiness checks. A missing task account or invalid workspace
+path prevents the guest agent from starting. Verify a fresh boot and
+release an untouched lease through the normal exporter before enrolling
+the recipe.
+
+A fixed Debian CUDA slot must have one dedicated NVIDIA display-class PCI
+device mapped directly to `hostpci0`. Qualify the driver in the actual
+guest with `lab-cuda-smoke`. Add the recipe's `20-lease-cuda.conf` to the
+guest agent's systemd drop-in directory before sealing the clean snapshot.
+The scoped provisioning credential applies only to that VM. Give its
+separate capacity credential read-only access to the node PCI inventory
+and VM configurations so the controller can detect conflicting claims.
+
+Set the slot's `proxmox.cuda` to an object with the full PCI
+`pci_address` and the NVIDIA `device_id` as printed by the provider API.
+Only explicit `gpu: "cuda"` requests use that slot. The controller verifies
+the hardware and guest mapping before admission and start. Enroll the
+stopped-disk exporter through the usual fixed-slot process.
 
 The API defaults to loopback. A non-loopback listener requires TLS 1.3 and a
 certificate matching the registered endpoint. Each distinct staging bearer
@@ -374,10 +406,12 @@ A failed final export and its alert are recorded together in the lease ledger.
 Repeated failures of the same export attempt create one notification.
 
 The worker configuration contains `endpoint`, `ca_file`, `alert_token_file`,
-`lock_file` and an operator-configured `delivery_command` argument array.
-The command reads one JSON object on standard input with the alert ID, owner,
-lease ID, failure time and event kind. It routes the event to the configured
-owner. Use the alert ID as the delivery idempotency key and return success only
+`lock_file` and either a `delivery_command` argument array or a
+`delivery_by_owner` map from exact task principals to argument arrays.
+An exact owner entry takes precedence over the default. An empty entry
+disables delivery for that owner and leaves the alert pending. The recipient
+reads one JSON object on standard input with the alert ID, owner, lease ID,
+failure time and event kind. Use the alert ID as the delivery idempotency key and return success only
 after accepting the alert durably. A failed command or interrupted acknowledgment
 leaves the same event pending for retry. The delivery command receives no raw
 export diagnostics. The allocator retains its normal failure and disk-hold
@@ -427,6 +461,26 @@ A missing or mismatched identity, unsupported layout or unreadable workspace
 fails the export and preserves the stopped slot. Leases predating the marker
 need operator review. Lease owners should place their work and evidence in the
 declared workspace. OS data elsewhere on the disk is outside the archive.
+
+If an operator started the guest during an export failure, the original start
+seal keeps the disk held. Reconcile only after confirming the exact disk and
+its current stopped state, preserving a read-only workspace capture, and
+checking that provider history contains exactly one additional successful start.
+Stop the controller and exporter before running the offline operation.
+
+```sh
+lab-allocator CONFIG.json --reconcile-final-export RECONCILIATION.json
+```
+
+The private reconciliation file contains `lease_id`, `additional_start` (the
+full Proxmox task UPID), `workspace_sha256` from the preserved capture, and a
+short `reason`. The controller verifies the enrolled guest, generation, disk
+and complete start history before sealing the updated history. The receipt is
+durable, and repeating the same input returns that receipt. Restart the normal
+controller and exporter so they can capture and verify a fresh checkpoint before
+reclamation. Any later start invalidates the new seal. If storage already has
+an unacknowledged archive for that lease, the exporter also checks that the
+new capture matches it before proceeding.
 
 ### Operator lease review
 
@@ -561,6 +615,35 @@ matching replacements require a newly qualified binding. The endpoint is
 a reference to the existing service. The service retains its normal access
 controls and issues its own credentials as needed.
 
+For a shared service behind an authorization gateway, check
+`GET /v1/leases/{id}/dependencies/{name}` with the task's credential
+on each new request. A grant requires the requesting owner, an unexpired
+ready lease and explicit admission for the current binding. Missing or
+withdrawn grants return HTTP 403. The gateway forwards requests only to
+its configured service and discards the task credential before contacting
+that service.
+
+The [Ollama nginx example](dependency-access/ollama.nginx.conf.example)
+requires the `auth_request` module and serves model requests over TLS.
+A task supplies `Authorization: Bearer …` and `X-Lab-Lease-Id` to the
+gateway. Keep the service's own listener protected separately. The
+gateway checks new requests and does not interrupt an upstream request
+already underway when the lease expires or its credential is revoked.
+See the [nginx authorization module](https://nginx.org/en/docs/http/ngx_http_auth_request_module.html).
+
+The [NativeLink nginx example](dependency-access/bazel-capabilities.nginx.conf.example)
+checks a `build` lease grant before forwarding the read-only REAPI
+`GetCapabilities` method across an authorized private transport. The route
+reports the actual server's build capabilities. The
+[execution example](dependency-access/bazel-execution.nginx.conf.example)
+and its [request configuration](dependency-access/bazel-request.nginx.conf.example)
+extend the scoped gateway to the allowed execution and cache methods.
+Point the execution gateway at a separately enrolled upstream whose worker
+limit and storage policy fit the job. Staging verified remote execution and
+cache readback using the live NativeLink executable, one worker, and isolated
+stores. The gateway strips the task credential before forwarding.
+See the [nginx gRPC module](https://nginx.org/en/docs/http/ngx_http_grpc_module.html).
+
 ### Multiple Proxmox slots
 
 The original slot remains `primary`. To add another, give it a unique
@@ -600,6 +683,20 @@ that uses the task key file, and QEMU Guest Agent. The qualified profile
 adjusts CPU, RAM and raw disk size within configured bounds. Disk capacity
 rounds up to a whole GiB. The controller records a separate resize intent
 when it needs to grow the boot volume.
+
+An enrolled Debian dynamic recipe can also grow an active boot disk.
+Install [the growth helper and its systemd timer](recipes/debian13-amd64)
+on a disposable SCSI/ext4 image, verify the mounted root and guest-agent
+file access, and set `dynamic.online_disk_growth` to true for that recipe.
+The owner runs `lab-lease resize LEASE --disk-mib 9216` with an absolute
+whole-GiB target. The controller checks the live storage floor and existing
+reservations, then journals the request before starting the Proxmox task.
+Inspect the lease until it returns to ready with `allocated_disk_mib`.
+Replaying the same target does not dispatch a second resize. The controller
+requires the guest filesystem receipt before it reports completion or
+proceeds with release. If the operation cannot be attributed or verified,
+preserve the guest and inspect the recorded provider task. The verified
+size also governs stopped-disk export and matching replacement admission.
 
 Add a `dynamic` object to the slot. It declares the pool, template ID, name,
 hardware UUID and boot volume, default and maximum CPU/RAM/disk, and an
@@ -652,6 +749,12 @@ configuration. The worker records clone, start, stop and delete intents on
 disk. Uncertain operations retain the slot. Before readiness, the clone
 creates its own SSH host identity and installs the task public key. The
 task's declared workspace is the project directory in its dedicated share.
+
+After a managed lease runs the Metal compute test from [Apple test workloads](apple-smoke/README.md),
+record the qualification for that worker and pinned template. Set
+`metal_qualified: true` in that slot's `tart` configuration to admit requests
+with `{"os":"macos","gpu":"metal"}`. Recheck qualification when the recipe or
+worker changes.
 
 Enroll the matching export slot with `workspace_capture: true` and call
 `lab-tart-capture` with the private capture configuration. Capture reads the

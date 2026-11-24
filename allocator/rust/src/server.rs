@@ -20,6 +20,7 @@ pub mod proxmox;
 pub mod http;
 
 mod export;
+pub use export::reconcile_final_export;
 mod owners;
 mod recovery;
 pub use controller::{Controller, enroll, enroll_handoff_authority, handoff};

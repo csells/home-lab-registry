@@ -89,6 +89,7 @@ pub(crate) struct Tart {
     auth: header::HeaderValue,
     client: Client,
     shape: Shape,
+    metal_qualified: bool,
 }
 
 impl Tart {
@@ -100,6 +101,10 @@ impl Tart {
         let secret = secret.trim();
         let shape: Shape =
             serde_json::from_value(config["shape"].clone()).map_err(|_| invalid())?;
+        let metal_qualified = config
+            .get("metal_qualified")
+            .map_or(Some(false), Value::as_bool)
+            .ok_or_else(invalid)?;
         if !hex(node, 32)
             || !valid_token(secret, 43, 128)
             || shape.memory_mib < 1
@@ -124,7 +129,12 @@ impl Tart {
             auth,
             client,
             shape,
+            metal_qualified,
         })
+    }
+
+    pub fn gpu(&self) -> &'static str {
+        if self.metal_qualified { "metal" } else { "none" }
     }
 
     pub fn identity(&self) -> Vec<Value> {

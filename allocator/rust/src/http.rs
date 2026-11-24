@@ -157,7 +157,9 @@ pub fn task_contract() -> Value {
             "acquire":{"method":"POST","path":"/v1/leases","body_schema":"acquire"},
             "list":{"method":"GET","path":"/v1/leases"},
             "inspect":{"method":"GET","path":"/v1/leases/{id}"},
+            "authorize_dependency":{"method":"GET","path":"/v1/leases/{id}/dependencies/{name}"},
             "renew":{"method":"POST","path":"/v1/leases/{id}/renew","body_schema":"renew"},
+            "grow_disk":{"method":"POST","path":"/v1/leases/{id}/resize","body_schema":"grow_disk"},
             "release":{"method":"POST","path":"/v1/leases/{id}/release","body_schema":"release"}
         },
         "schemas":{
@@ -174,6 +176,8 @@ pub fn task_contract() -> Value {
                 "dependentRequired":{"checkpoint_id":["resume_from"]}
             },
             "renew":{"type":"object","required":["seconds"],"properties":{"seconds":duration}},
+            "grow_disk":{"type":"object","required":["disk_mib"],"additionalProperties":false,
+                "properties":{"disk_mib":{"type":"integer","minimum":1024,"multipleOf":1024}}},
             "release":{"type":"object","properties":{"preserve_checkpoint":{"const":true}}}
         }
     })
@@ -364,6 +368,9 @@ fn dispatch(
         (Method::GET, ["v1", "capabilities"]) => controller.capabilities(),
         (Method::GET, ["v1", "leases"]) => controller.list(owner),
         (Method::GET, ["v1", "leases", id]) => controller.inspect(id, owner),
+        (Method::GET, ["v1", "leases", id, "dependencies", name]) => {
+            controller.authorize_dependency(id, owner, name)
+        }
         (Method::GET, ["v1", "capacity-reservations"]) => controller.reservations(owner),
         (Method::GET, ["v1", "export-alerts"]) => controller.export_alert(),
         (Method::GET, ["v1", "final-export"]) => controller.next_export(),
@@ -388,6 +395,10 @@ fn dispatch(
         (Method::POST, ["v1", "leases"]) => {
             status = StatusCode::ACCEPTED;
             controller.acquire(data, owner)
+        }
+        (Method::POST, ["v1", "leases", id, "resize"]) => {
+            status = StatusCode::ACCEPTED;
+            controller.grow_disk(id, owner, data)
         }
         (Method::POST, ["v1", "leases", id, "release"]) => {
             status = StatusCode::ACCEPTED;

@@ -1,8 +1,9 @@
 # Reusable platform source and deployment boundaries
 
-Status: active, reconciled 2026-11-22. The reviewed backup collector shipped,
-and selected integration sources have a private home. Reusable Apple tooling,
-qualified device tooling and remaining exporter provenance are open.
+Status: active, reconciled 2026-11-23. The scoped backup collector shipped.
+Staging verified a clean Apple image rebuild, exact deployed device firmware
+provenance and the source ownership of the reviewed exporters. The component
+inventory and reusable source separation continue.
 
 ## Outcome
 
@@ -17,7 +18,7 @@ Neither public nor private Git stores credentials, live inventory or recovery ar
 | Registry, dashboard, collector, browser terminal and reconciliation | Existing source in this repository; preserve current review branches and source ownership |
 | Environment allocation and lifecycle | Reusable controller and provider adapters here, following [plan 0001](0001-renewable-test-environments.md); one reservation authority and a separate provider-mutation authorization boundary |
 | Mac worker and service-management tooling | Reusable executor, reviewed setup/helper templates, stable automation identity procedures and image tooling here; audit existing helper source before import; signing identities, certificates, accounts and device assignments stay private |
-| Central backup integration | Generic `backup/rust` already lives here; compare other deployed exporters/controller scripts with tracked source before extracting reusable hooks; operator schedules, deployment manifests, credentials and recovery inputs remain private |
+| Central backup integration | The Python collector shipped from main. The [Rust port](0008-remove-python-and-javascript.md) is in staging; compare other deployed exporters/controller scripts with tracked source before extracting reusable hooks; operator schedules, deployment manifests, credentials and recovery inputs remain private |
 | Plex sync/maintenance, Alook deployment and mail dynamic DNS | Audit custom integration source and maintain deployment-specific units/templates privately; these use third-party products, not new internally authored Plex/Alook/DNS services |
 | Device firmware and household configuration | Establish actual custom content and ownership first; publish reusable tooling only after review; household configuration remains private |
 | Applications and shared services with existing repositories | Preserve their existing source owners; correct stale private registry pointers instead of importing duplicate code |
@@ -32,16 +33,19 @@ repository pointer is unknown ownership, not permission to relocate code.
   through the authenticated registry and source checkout. Compare deployed files
   with source; keep private findings in operational records.
   The reviewed private integrations and [merged collector delivery](#verified-private-source-progress)
-  have provenance evidence. Resolve parity and ownership for remaining candidates.
+  have provenance evidence. Apply the same check to each remaining component before any import.
 - [ ] Separate reusable code/templates from deployment values and incident scripts.
   Review for credentials, private catalog data, personal data, licensing and attribution.
   The collector separates generic export and provider code from private deployment
-  profiles. Review the Apple helpers, image tooling and device integrations individually.
+  profiles. The reviewed Apple helper and toolchain inputs have source and hash evidence.
+  Finish reusable packaging and review any additional device integration individually.
 - [ ] Import one bounded reusable component at a time, with placeholders/secret
   references, source history where useful, and build/deployment/recovery instructions.
   The [scoped collector](../../backup/README.md) is available on main. The
   [allocator source](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/README.md) is available for staging review.
-  Reusable Apple worker imports and any additional exporters remain open.
+  The integrated candidate contains the Rust Tart worker and capture tool.
+  Reusable setup and image tooling packaging and any later exporter imports
+  still require individual source and license review.
 - [ ] Give deployment-specific assets a maintained private source home. Configuration
   backups provide recovery evidence, not a substitute for reviewed source ownership.
   The bounded operator-integration batch has a private home. Establish a home and
@@ -51,7 +55,7 @@ repository pointer is unknown ownership, not permission to relocate code.
   The backup deployment record confirms source hashes and production restore evidence
   for the reviewed slice. Verify parity and recovery for each later delivery.
 - [ ] Verify service code changes in a disposable VM against actual lab interfaces,
-  preserve stable state, and obtain explicit staged-candidate promotion approval.
+  and preserve stable state.
   The collector review exercised actual sources and encrypted restore, then was merged
   and promoted with staging cleanup. Apply the same gate to pending service changes.
 
@@ -74,16 +78,36 @@ source. Private SSH profiles preserve required tunnels and host-key aliases.
 The deployment record owns current source identities, coverage and recovery
 evidence. Disabled historical plans retain their archives.
 
-Remaining source work covers the reusable Apple worker and image/setup tooling,
-device tooling with verified ownership, and any exporters outside the reviewed
-collector delivery. The staged Tart allocator has lifecycle evidence for one
-recipe. Its reusable worker is combined with the registry review candidate.
-Its read-only enrollment preflight verified the pinned template, role separation
-and idle slot on the host without starting a VM. Qualify a clean installation
-using operator-supplied signing and image inputs. The staging source includes
-the reusable simulator input and Metal smoke workloads. Preserve private
-device settings, the signing identity and production helper authorization in
-operator deployment records.
+Remaining source work covers reusable setup and image tooling packaging
+and individual review for integrations outside the verified component scope. The staged Tart allocator has lifecycle evidence for one
+recipe. The [Rust Tart worker](../../allocator/rust/src/tart_worker.rs) and
+[stopped-workspace capture](../../allocator/rust/src/bin/lab-tart-capture.rs) are
+in the integrated candidate. They have prepared-host lifecycle evidence.
+The running Tart worker executable matched a reviewed build and source
+revision. The installed Mac service-management helper matched the tracked
+private source byte for byte. The private Tart setup file has a retained
+source revision and the prepared image has a pinned configuration hash.
+The signed Tart release archive was installed into an empty directory
+and matched the running provider. A fresh worker identity and credentials
+preflighted the pinned template and verified role separation and an idle slot.
+A disposable lease from that template reported macOS 26.6.2 (`25G83`), Xcode
+27.0 (`27A266a`) and iOS Simulator 27.0 (`24A434`). The manifest served by
+Apple's restore CDN confirmed the same macOS build and virtual Mac support.
+Apple's Xcode catalog confirmed the same arm64 simulator build. A new Tart
+guest booted from the matching Apple restore image with no Xcode installed.
+It installed the Apple-signed Xcode application recovered from the enrolled
+recipe, verified the same code-signing digest, and imported the exact
+simulator runtime. Native Swift, Metal compute, and the simulator button
+interaction passed. The live registry holds the build fingerprints and
+test evidence. Keep private device settings, signing identities and
+production helper authorization in operator deployment records.
+The deployed device firmware matched the versioned upstream project and the
+recorded factory build. The deployed television exporter matched the original
+file hash in the reviewed private source manifest. The mail exporter's
+authenticated installed bytes are tracked in a private source candidate,
+with the same configured owner and an exact hash match. The code refers to
+external deployment inputs.
+
 Check the actual source revision, license and deployment parity before importing
 each component. The private operations plan tracks
 individual application and hardware recovery limits.

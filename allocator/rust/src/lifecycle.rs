@@ -10,6 +10,7 @@ const MAX_SECONDS: u64 = 365 * 86400;
 pub enum LeasePhase {
     Cloning,
     Resizing,
+    ResizingActive,
     Starting,
     Ready,
     Stopping,
@@ -24,7 +25,7 @@ impl LeasePhase {
     pub fn renewable(self) -> bool {
         matches!(
             self,
-            Self::Cloning | Self::Resizing | Self::Starting | Self::Ready
+            Self::Cloning | Self::Resizing | Self::ResizingActive | Self::Starting | Self::Ready
         )
     }
 }
@@ -76,6 +77,7 @@ impl Lifecycle<'_> {
             LeasePhase::Starting
             | LeasePhase::Cloning
             | LeasePhase::Resizing
+            | LeasePhase::ResizingActive
             | LeasePhase::Resetting
             | LeasePhase::Deleting
             | LeasePhase::ExportStopping => ReclaimAction::Inspect,
@@ -108,6 +110,13 @@ impl Lifecycle<'_> {
             | LeasePhase::Resetting
             | LeasePhase::Deleting => return Ok(ReclaimAction::Inspect),
             LeasePhase::Ready => {}
+            LeasePhase::ResizingActive => {
+                return Err(Rejected::new(
+                    "resize_in_progress",
+                    "Wait for the recorded disk expansion before releasing this lease.",
+                    409,
+                ));
+            }
             _ => {
                 return Err(Rejected::new(
                     "lease_not_releasable",

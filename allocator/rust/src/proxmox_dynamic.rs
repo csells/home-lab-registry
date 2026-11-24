@@ -67,6 +67,7 @@ pub(crate) struct DynamicScope {
     pub maximum: Shape,
     inventory_command: Option<Vec<String>>,
     qualification: Option<Value>,
+    pub online_disk_growth: bool,
 }
 
 fn invalid() -> Rejected {
@@ -333,6 +334,11 @@ impl DynamicScope {
             maximum,
             inventory_command,
             qualification,
+            online_disk_growth: settings
+                .get("online_disk_growth")
+                .map(|value| value.as_bool().ok_or_else(invalid))
+                .transpose()?
+                .unwrap_or(false),
         })
     }
 
@@ -598,7 +604,7 @@ impl DynamicScope {
         Ok(json!({"uuid":hardware,"volume":volume,"generation":generation}))
     }
 
-    fn config_matches(
+    pub(crate) fn config_matches(
         &self,
         api: &Proxmox,
         lease: &str,

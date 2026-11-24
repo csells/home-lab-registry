@@ -1,8 +1,9 @@
 # Dashboard health and reconciliation corrections
 
-Status — staged. The review found eight defects in the dashboard, health
-publisher, and collector. Runtime revision `d4f9607` contains the fixes.
-Production promotion remains pending.
+Status: finished in staging with a remainder, reconciled 2026-11-23.
+The eight review corrections passed at `d4f9607` and were exercised in the
+integrated preview. [Plan 0008](../0008-remove-python-and-javascript.md#carried-from-archived-plans)
+owns the remaining integrated and production verification.
 
 | Requirement | Regression evidence to capture |
 | --- | --- |
@@ -14,6 +15,19 @@ Production promotion remains pending.
 | Keep lease problems current | An already open dashboard reflects missed deadlines, export failures, and recovery. Read failures show incomplete coverage and recover without requiring unrelated guest changes. |
 | Bound work triggered by health renewals | A health-only update refreshes the affected observation through the change feed. Routine observations leave guest subscriptions and lease ownership untouched. |
 | Compare configured HTTP status correctly | Probe status comparison handles matching non-2xx responses and preserves the numeric status for diagnosis. Redirect destinations remain outside the probe. |
+
+The port carries the comparison and refresh contract in
+[dashboard operations](../../../dashboard/rust/src/operations.rs) and the
+[HTTP regression tests](../../../dashboard/rust/tests/http_contract.rs).
+[Dashboard runtime](../../../dashboard/rust/src/runtime.rs) handles catalog
+freshness, health-only updates and lease issue reads. [Guest comparison](../../../dashboard/rust/src/reconcile.rs),
+[registry enrollment](../../../registry/rust/src/enrollment.rs) and
+[health probes](../../../registry/rust/src/probe.rs) cover the remaining paths.
+
+## Production verification
+
+During production verification, exercise session recovery, live discrepancy
+updates and lease export-failure recovery with the approved build.
 
 ## Staging acceptance
 
@@ -39,7 +53,7 @@ records so old review metadata cannot produce false findings.
   failure that held the disk. Both findings appeared in the preview. After the
   workspace was initialized, the retry cleared the finding, released the slot,
   and produced a downloadable checkpoint that matched its receipt. The
-  [Linux recipe follow-up](0001-renewable-test-environments.md#initialize-the-managed-linux-workspace-before-declaring-readiness)
+  [Linux recipe follow-up](../0001-renewable-test-environments.md#initialize-the-managed-linux-workspace-before-declaring-readiness)
   tracks workspace preparation at admission.
 - Transport enforcement and DHCP-change notifications passed focused regression
   tests. The lab's production addresses stayed in place.

@@ -22,16 +22,22 @@ func guestTaskEvents(ctx context.Context, directory string) (<-chan struct{}, er
 		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), "guest-task-events")
-	if _, err := unix.InotifyAddWatch(fd, directory, unix.IN_ONLYDIR|unix.IN_CLOSE_WRITE|unix.IN_MOVED_TO|unix.IN_CREATE); err != nil {
+	if _, err := unix.InotifyAddWatch(fd, directory, unix.IN_ONLYDIR|unix.IN_CLOSE_WRITE|unix.IN_MOVED_TO|unix.IN_CREATE|unix.IN_MOVE_SELF|unix.IN_DELETE_SELF); err != nil {
 		file.Close()
 		return nil, err
 	}
 	wake := make(chan struct{}, 1)
+	done := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		file.Close()
+		select {
+		case <-ctx.Done():
+			file.Close()
+		case <-done:
+		}
 	}()
 	go func() {
+		defer close(wake)
+		defer close(done)
 		defer file.Close()
 		buffer := make([]byte, 8192)
 		for {
@@ -45,6 +51,10 @@ func guestTaskEvents(ctx context.Context, directory string) (<-chan struct{}, er
 			for start := 0; start+unix.SizeofInotifyEvent <= n; {
 				header := buffer[start : start+unix.SizeofInotifyEvent]
 				mask := binary.NativeEndian.Uint32(header[4:8])
+				if mask&(unix.IN_IGNORED|unix.IN_UNMOUNT|unix.IN_MOVE_SELF|unix.IN_DELETE_SELF) != 0 {
+					log.Print("guest task event watch lost")
+					return
+				}
 				length := int(binary.NativeEndian.Uint32(header[12:16]))
 				nameStart := start + unix.SizeofInotifyEvent
 				if length < 0 || length > n-nameStart {

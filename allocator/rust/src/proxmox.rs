@@ -2,11 +2,12 @@
 use std::{collections::BTreeSet, fs, io::Read, time::Duration};
 
 use reqwest::{Certificate, Method, blocking::Client, header, redirect, retry};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 use uuid::Uuid;
 
-use crate::{Rejected, provider::unavailable, protocol::public_key};
+use crate::{Rejected, protocol::public_key, provider::unavailable};
 
 #[derive(Clone, Copy)]
 pub enum TaskKind {
@@ -39,7 +40,7 @@ impl TaskKind {
             "stopping" | "export-stopping" => Some(Self::Shutdown),
             "resetting" => Some(Self::Rollback),
             "deleting" => Some(Self::Destroy),
-            "resizing" => Some(Self::Resize),
+            "resizing" | "resizing-active" => Some(Self::Resize),
             _ => None,
         }
     }
@@ -62,6 +63,53 @@ pub struct GuestPin {
     pub name: String,
     pub uuid: String,
     pub volume: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CudaDevice {
+    pci_address: String,
+    device_id: String,
+}
+
+impl CudaDevice {
+    pub(crate) fn open(value: &Value) -> Result<Self, Rejected> {
+        let device: Self = serde_json::from_value(value.clone()).map_err(|_| invalid_config())?;
+        let address = device.pci_address.as_bytes();
+        let valid = address.len() == 12
+            && address.iter().enumerate().all(|(index, byte)| match index {
+                4 | 7 => *byte == b':',
+                10 => *byte == b'.',
+                11 => (b'0'..=b'7').contains(byte),
+                _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(byte),
+            });
+        if !valid
+            || !device
+                .device_id
+                .strip_prefix("0x")
+                .is_some_and(|id| crate::tokens::hex(id, 4))
+        {
+            return Err(invalid_config());
+        }
+        Ok(device)
+    }
+
+    fn claimed(&self, property: &str) -> bool {
+        let first = property.split(',').next().unwrap_or_default();
+        if first.starts_with("mapping=") {
+            // A mapping needs independent identity resolution before enrollment.
+            return true;
+        }
+        let direct = first.strip_prefix("host=").unwrap_or(first);
+        direct.split(';').any(|address| {
+            let actual = self.pci_address.trim_start_matches("0000:");
+            let address = address.trim_start_matches("0000:");
+            address == actual
+                || actual
+                    .strip_suffix(".0")
+                    .is_some_and(|slot| address == slot)
+        })
+    }
 }
 
 impl GuestPin {
@@ -297,11 +345,18 @@ impl ControllerVm {
         let node = node(config)?;
         let guest = api_id(&config["guest_id"]).ok_or_else(invalid_config)?;
         let (_, token) = credential(config_text(config, "audit_token_file")?)?;
-        Ok(Self {api: PinnedApi::open(config)?, config_route: format!("/nodes/{node}/qemu/{guest}/config"), token})
+        Ok(Self {
+            api: PinnedApi::open(config)?,
+            config_route: format!("/nodes/{node}/qemu/{guest}/config"),
+            token,
+        })
     }
 
     pub fn config(&self) -> Result<Value, Rejected> {
-        PinnedApi::accepted(self.api.request(Method::GET, &self.config_route, None, &self.token)?)
+        PinnedApi::accepted(
+            self.api
+                .request(Method::GET, &self.config_route, None, &self.token)?,
+        )
     }
 }
 
@@ -324,7 +379,14 @@ impl Proxmox {
         if identity == audit_identity {
             return Err(invalid_config());
         }
-        Ok(Self {api: PinnedApi::open(config)?, node, guest_id, identity, write_token, audit_token})
+        Ok(Self {
+            api: PinnedApi::open(config)?,
+            node,
+            guest_id,
+            identity,
+            write_token,
+            audit_token,
+        })
     }
 
     pub fn base(&self) -> &str {
@@ -338,7 +400,16 @@ impl Proxmox {
         form: Option<&[(&str, &str)]>,
         audit: bool,
     ) -> Result<Result<Value, u16>, Rejected> {
-        self.api.request(method, route, form, if audit { &self.audit_token } else { &self.write_token })
+        self.api.request(
+            method,
+            route,
+            form,
+            if audit {
+                &self.audit_token
+            } else {
+                &self.write_token
+            },
+        )
     }
 
     pub fn get(&self, route: &str) -> Result<Value, Rejected> {
@@ -489,6 +560,56 @@ impl Proxmox {
             .ok_or_else(unavailable)
     }
 
+    pub(crate) fn verify_cuda_device(
+        &self,
+        guest: &Value,
+        device: &CudaDevice,
+    ) -> Result<(), Rejected> {
+        let unverified = || {
+            Rejected::new(
+                "cuda_binding_unverified",
+                "Verify the enrolled, dedicated NVIDIA PCI assignment and hardware identity.",
+                409,
+            )
+        };
+        let direct = first_property(&guest["hostpci0"]).ok_or_else(unverified)?;
+        if direct.strip_prefix("host=").unwrap_or(direct) != device.pci_address {
+            return Err(unverified());
+        }
+        let node = format!("/nodes/{}", self.node);
+        let devices = as_list(self.audit(&format!("{node}/hardware/pci"))?)?;
+        if !devices.iter().any(|entry| {
+            entry["id"] == device.pci_address
+                && entry["device"] == device.device_id
+                && entry["vendor"] == "0x10de"
+                && entry["class"]
+                    .as_str()
+                    .is_some_and(|class| class.starts_with("0x03"))
+        }) {
+            return Err(unverified());
+        }
+        for other in as_list(self.audit(&format!("{node}/qemu"))?)? {
+            let id = api_id(&other["vmid"]).ok_or_else(unverified)?;
+            if id == self.guest_id {
+                continue;
+            }
+            let config = self.audit(&format!("{node}/qemu/{id}/config"))?;
+            let config = config.as_object().ok_or_else(unverified)?;
+            if config.iter().any(|(name, value)| {
+                name.strip_prefix("hostpci").is_some_and(|index| {
+                    !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+                }) && value.as_str().is_none_or(|value| device.claimed(value))
+            }) {
+                return Err(Rejected::new(
+                    "cuda_device_already_claimed",
+                    "Another guest has a matching or unresolved PCI mapping.",
+                    409,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn ipv4(&self) -> Result<Option<String>, Rejected> {
         let route = format!("{}/agent/network-get-interfaces", self.guest_route());
         let response = match self.request(Method::GET, &route, None, false)? {
@@ -505,6 +626,33 @@ impl Proxmox {
             .and_then(|item| item["ip-address"].as_str())
             .map(str::to_owned);
         Ok(ipv4)
+    }
+
+    pub(crate) fn guest_file(&self, path: &str) -> Result<Option<String>, Rejected> {
+        let route = format!(
+            "{}/agent/file-read?file={}",
+            self.guest_route(),
+            escape(path)
+        );
+        let result = match self.request(Method::GET, &route, None, false)? {
+            Err(500) => return Ok(None),
+            outcome => PinnedApi::accepted(outcome)?,
+        };
+        Ok(Some(
+            result["content"]
+                .as_str()
+                .ok_or_else(unavailable)?
+                .to_owned(),
+        ))
+    }
+
+    pub(crate) fn write_guest_file(&self, path: &str, content: &str) -> Result<(), Rejected> {
+        self.modify(
+            Method::POST,
+            &format!("{}/agent/file-write", self.guest_route()),
+            Some(&[("file", path), ("content", content)]),
+        )?;
+        Ok(())
     }
 
     pub fn host_key(&self) -> Result<Option<String>, Rejected> {

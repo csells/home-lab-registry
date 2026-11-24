@@ -1,7 +1,7 @@
 use std::{
     error::Error,
-    fs::File,
-    io::Read,
+    fs::{self, File},
+    io::{ErrorKind, Read},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Output, Stdio},
@@ -298,6 +298,76 @@ pub async fn observe_systemd(unit: &str) -> Result<RuntimeState, Box<dyn Error>>
         }))
 }
 
+pub async fn observe_launchd(
+    domain: &str,
+    label: &str,
+    plist: Option<&Path>,
+) -> Result<RuntimeState, Box<dyn Error>> {
+    let named_domain = ["gui/", "user/"]
+        .iter()
+        .find_map(|prefix| domain.strip_prefix(prefix))
+        .is_some_and(|uid| {
+            (1..=10).contains(&uid.len())
+                && !uid.starts_with('0')
+                && uid.bytes().all(|b| b.is_ascii_digit())
+        });
+    if (domain != "system" && !named_domain)
+        || !identifier(label, 180, b"_.-")
+        || !label
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Err("Use an exact launchd domain and service label".into());
+    }
+    if plist.is_some_and(|path| {
+        !path.is_absolute()
+            || path.extension().and_then(|extension| extension.to_str()) != Some("plist")
+    }) {
+        return Err("Use an absolute launchd plist path".into());
+    }
+    let target = format!("{domain}/{label}");
+    let mut command = Command::new("/bin/launchctl");
+    command.env("LC_ALL", "C").args(["print", &target]);
+    let Some(result) = local(command).await else {
+        return Ok(RuntimeState::Unverified);
+    };
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    let state = classify_launchd(&target, result.status.code(), &stdout, &stderr);
+    if state == RuntimeState::Missing {
+        let expected = format!("Could not find service \"{label}\" in domain");
+        let mut domain_lookup = Command::new("/bin/launchctl");
+        domain_lookup.args(["print", domain]);
+        if !stderr.contains(&expected)
+            || !local(domain_lookup).await.is_some_and(|reply| reply.status.success())
+        {
+            return Ok(RuntimeState::Unverified);
+        }
+    }
+    let Some(plist) = plist else {
+        return Ok(state);
+    };
+    match (state, fs::symlink_metadata(plist)) {
+        (RuntimeState::Present, Ok(metadata))
+            if metadata.is_file() && stdout.lines().any(|line| {
+                line.trim()
+                    .strip_prefix("path = ")
+                    .is_some_and(|path| Path::new(path) == plist)
+            }) =>
+        {
+            Ok(RuntimeState::Present)
+        }
+        (RuntimeState::Missing, Err(error))
+            if error.kind() == ErrorKind::NotFound
+                && plist.parent().is_some_and(Path::is_dir) =>
+        {
+            Ok(RuntimeState::Missing)
+        }
+        _ => Ok(RuntimeState::Unverified),
+    }
+}
+
 impl Publisher {
     pub async fn systemd(&self) -> Result<RuntimeState, Box<dyn Error>> {
         let unit = self.unit.as_deref().ok_or("Missing systemd unit")?;
@@ -307,36 +377,7 @@ impl Publisher {
     pub async fn launchd(&self) -> Result<RuntimeState, Box<dyn Error>> {
         let domain = self.domain.as_deref().ok_or("Missing launchd domain")?;
         let label = self.label.as_deref().ok_or("Missing launchd label")?;
-        let named_domain = ["gui/", "user/"]
-            .iter()
-            .find_map(|prefix| domain.strip_prefix(prefix))
-            .is_some_and(|uid| {
-                (1..=10).contains(&uid.len())
-                    && !uid.starts_with('0')
-                    && uid.bytes().all(|b| b.is_ascii_digit())
-            });
-        if (domain != "system" && !named_domain)
-            || !identifier(label, 180, b"_.-")
-            || !label
-                .bytes()
-                .next()
-                .is_some_and(|byte| byte.is_ascii_alphanumeric())
-        {
-            return Err("Use an exact launchd domain and service label".into());
-        }
-        let target = format!("{domain}/{label}");
-        let mut command = Command::new("/bin/launchctl");
-        command.env("LC_ALL", "C").args(["print", &target]);
-        Ok(local(command)
-            .await
-            .map_or(RuntimeState::Unverified, |result| {
-                classify_launchd(
-                    &target,
-                    result.status.code(),
-                    &String::from_utf8_lossy(&result.stdout),
-                    &String::from_utf8_lossy(&result.stderr),
-                )
-            }))
+        observe_launchd(domain, label, None).await
     }
 
     pub fn publish(&self, state: RuntimeState) -> Result<Value, Box<dyn Error>> {

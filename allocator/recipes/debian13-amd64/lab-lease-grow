@@ -1,0 +1,51 @@
+#!/bin/sh
+# Run as root only on the qualified Debian cloud image with a SCSI ext4 root.
+set -eu
+export LC_ALL=C
+umask 077
+state=/run/lab-lease-grow
+install -d -m 0700 "$state"
+trap 'rm -f -- "$state/next"' EXIT
+
+if [ "$(findmnt -n -o SOURCE,FSTYPE /)" != '/dev/sda1 ext4' ]; then
+    rm -f -- "$state/online"
+    exit 1
+fi
+for command in growpart resize2fs tune2fs blockdev; do
+    command -v "$command" >/dev/null
+done
+printf '1\n' > "$state/online"
+[ -f "$state/request" ] || exit 0
+read -r target < "$state/request"
+case "$target" in
+    ''|*[!0-9]*) exit 1 ;;
+esac
+[ "${#target}" -le 5 ] && [ "$target" -ge 1024 ] && [ "$target" -le 65536 ]
+[ "$((target % 1024))" -eq 0 ]
+if [ -f "$state/receipt" ] && [ "$(cat "$state/receipt")" = "$target" ]; then
+    exit 0
+fi
+
+target_bytes=$((target * 1048576))
+disk_bytes=$(blockdev --getsize64 /dev/sda)
+[ "$disk_bytes" -eq "$target_bytes" ]
+end_gap() {
+    start=$(cat /sys/class/block/sda1/start)
+    length=$(cat /sys/class/block/sda1/size)
+    echo "$((disk_bytes - (start + length) * 512))"
+}
+if [ "$(end_gap)" -gt 16777216 ]; then
+    TMPDIR="$state" growpart /dev/sda 1
+fi
+gap=$(end_gap)
+[ "$gap" -ge 0 ] && [ "$gap" -le 16777216 ]
+resize2fs /dev/sda1
+partition_bytes=$(blockdev --getsize64 /dev/sda1)
+[ "$partition_bytes" -gt 0 ]
+tune2fs -l /dev/sda1 | awk -F: -v bytes="$partition_bytes" '
+    $1 == "Block count" { count = $2 + 0 }
+    $1 == "Block size" { size = $2 + 0 }
+    END { exit !(size > 0 && count > 0 && count * size <= bytes && bytes - count * size < size) }
+'
+printf '%s\n' "$target" > "$state/next"
+mv -T -- "$state/next" "$state/receipt"

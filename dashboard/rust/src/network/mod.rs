@@ -546,11 +546,15 @@ fn add_missing_coverage(catalog: &[Value], targets: &[Target], rows: &mut Vec<Va
             || spec["capabilities"]
                 .as_array()
                 .is_some_and(|caps| caps.iter().any(|cap| cap == "machine"));
-        if machine && !coverage.contains(id) && !guest_covered {
+        let audit = &resources["network_authority_audit"];
+        if audit["firmware_source"].is_string() && !observed.contains(id) {
+            let at = audit["at"].as_str().unwrap_or("unknown");
+            rows.push(json!({"machine":id,"status":"unverified",
+                "reason":format!("Installed firmware was not refreshed by this audit. Last recorded audit was {at}.")}));
+        } else if machine && !coverage.contains(id) && !guest_covered {
             rows.push(json!({"machine":id,"status":"unverified",
                 "reason":"No direct live collector; guest observations may appear under its hypervisor"}));
         }
-        let audit = &resources["network_authority_audit"];
         for kind in ["kvm", "amt"] {
             if audit.get(kind).is_some() {
                 let at = audit[kind]["at"]

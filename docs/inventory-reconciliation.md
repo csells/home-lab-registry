@@ -52,6 +52,15 @@ owner, and deployment generation. A stopped unit still has a deployment and
 stays registered. An inconclusive lookup leaves the catalog alone. Keep catalog
 writer credentials in the deployment tool's private operator context.
 
+A launchd deployment tool can call
+`lab-register-deployment --config PATH sync-launchd RECORD MANIFEST`.
+Use a native binding with provider `launchd`, an instance such as
+`system/com.example.worker` or `gui/501/com.example.worker`, and the exact
+absolute `plist_path` in that binding. Run the command after bootstrapping
+the job and again after removing it and its plist. A loaded job that is
+idle stays registered. An unavailable domain, mismatched path, or
+remaining plist leaves the record in place.
+
 After authorized teardown, verify that the exact guest and its dedicated storage are
 gone, preserve required external evidence, retire the corresponding records, then
 reconcile again. Never retire records merely because a host failed to report.
@@ -89,3 +98,14 @@ workload deletion.
 The staged agent reads a real hypervisor through its own read-only audit token. The
 private endpoint override changes guest discovery only; it does not misrepresent the
 staging VM's CPU/RAM as the physical host's metrics. Production verification covered all six configured collectors on 2026-11-20.
+
+
+## Collector delivery
+
+Fresh reconciliation entries can include the collector's delivery mode.
+`event-assisted` means a native watcher is waking the same periodic
+collector. The provider remains the authority for guest identities and
+states. `polling` means periodic collection is active by itself. If an
+open watcher is lost, the collector switches to polling and keeps its
+existing observation time until a new provider read succeeds. Previously
+installed collectors can omit the delivery field.

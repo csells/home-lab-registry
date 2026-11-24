@@ -1,0 +1,8 @@
+limit_except POST { deny all; }
+auth_request /check-build-lease;
+
+grpc_pass grpc://127.0.0.1:52352;
+grpc_set_header Authorization "";
+grpc_set_header X-Lab-Lease-Id "";
+grpc_connect_timeout 3s;
+grpc_read_timeout 120s;

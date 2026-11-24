@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use crate::{
     AcquireRequest, CheckpointStore, GuestScope, LeasePhase, Ledger, Lifecycle, Provider,
     ProviderKind, ReclaimAction, Rejected, Slot, TaskCredentials, lease_inventory,
-    provider::unavailable,
     protocol::LINUX,
+    provider::unavailable,
     rows::{
         available_receipt, invalid_data, lease, no_checkpoint, phase, sqlite_json, stored, text,
     },
@@ -107,11 +107,20 @@ fn rollback_needed() -> Rejected {
     )
 }
 
+fn allocation_requirements(row: &Value) -> Result<Value, Rejected> {
+    let mut requirements = stored(&row["requirements"])?;
+    if let Some(size) = row["allocated_disk_mib"].as_i64() {
+        requirements["disk_mib"] = json!(size);
+    }
+    Ok(requirements)
+}
+
 pub(crate) fn provider_shape(row: &Value, action: &str) -> Result<Value, Rejected> {
     Ok(
         json!({"action":action,"slot_id":text(row,"slot_id")?,"lease":text(row,"id")?,
         "phase":text(row,"phase")?,"pins":stored(&row["dynamic_guest"])?,"generation":row["generation"],
-        "task":row["upstream"],"requirements":stored(&row["requirements"])?}),
+        "task":row["upstream"],"requirements":allocation_requirements(row)?,
+        "target_disk_mib":row["pending_disk_mib"]}),
     )
 }
 
@@ -468,7 +477,7 @@ impl Controller {
                 409,
             ));
         }
-        let requirements = stored(&source_row["requirements"])?;
+        let requirements = allocation_requirements(&source_row)?;
         if request.requirements_explicit && request.requirements != requirements {
             return Err(Rejected::new(
                 "not_matching",
@@ -617,6 +626,7 @@ impl Controller {
             begin,
             LeasePhase::Cloning
                 | LeasePhase::Resizing
+                | LeasePhase::ResizingActive
                 | LeasePhase::Starting
                 | LeasePhase::Stopping
                 | LeasePhase::ExportStopping
@@ -629,8 +639,25 @@ impl Controller {
                 };
                 row = recovered;
             }
-            if self.call(&row, "task-state")? != true {
-                return self.public(&row, None);
+            match self.call(&row, "task-state") {
+                Ok(value) if value == true => {}
+                Ok(_) => return self.public(&row, None),
+                Err(error)
+                    if begin == LeasePhase::ResizingActive
+                        && error.code() == "provider_task_failed" =>
+                {
+                    self.ledger.verify()?;
+                    let mut verify = provider_shape(&row, "verify-shape")?;
+                    verify["target_disk_mib"] = Value::Null;
+                    self.provider.call(verify)?;
+                    row = self.ledger.mutate(|tx| {
+                        tx.execute("UPDATE lease SET phase='ready',pending_disk_mib=NULL,
+                            upstream=NULL,prior_tasks=NULL,resize_result='provider-failed' WHERE id=?", [id])?;
+                        lease(tx, id, Some(owner))
+                    })?;
+                    return self.public(&row, Some("resize-failed"));
+                }
+                Err(error) => return Err(error),
             }
         }
         match begin {
@@ -681,6 +708,20 @@ impl Controller {
             LeasePhase::Resizing => {
                 self.call(&row, "verify-shape")?;
                 row = self.dispatch(&row, "starting")?;
+            }
+            LeasePhase::ResizingActive => {
+                self.ledger.verify()?;
+                if self.call(&row, "finish-active-grow")? != true {
+                    return self.public(&row, Some("waiting-for-guest-filesystem"));
+                }
+                row = self.ledger.mutate(|tx| {
+                    tx.execute(
+                        "UPDATE lease SET phase='ready',allocated_disk_mib=pending_disk_mib,
+                        pending_disk_mib=NULL,upstream=NULL,prior_tasks=NULL,resize_result='verified' WHERE id=?",
+                        [id],
+                    )?;
+                    lease(tx, id, Some(owner))
+                })?;
             }
             LeasePhase::Starting => {
                 let observation = self.call(&row, "guest-observation")?;
@@ -767,6 +808,55 @@ impl Controller {
         self.public(&row, status)
     }
 
+    pub fn grow_disk(&mut self, id: &str, owner: &str, command: &Value) -> Result<Value, Rejected> {
+        let target = command["disk_mib"]
+            .as_i64()
+            .filter(|size| *size >= 1024 && size % 1024 == 0)
+            .filter(|_| command.as_object().is_some_and(|fields| fields.len() == 1))
+            .ok_or_else(|| {
+                Rejected::new(
+                    "invalid_resize",
+                    "Specify a positive whole-GiB disk_mib.",
+                    400,
+                )
+            })?;
+        let row = lease(self.database(), id, Some(owner))?;
+        if phase(&row)? == LeasePhase::ResizingActive && row["pending_disk_mib"] == target {
+            return self.inspect(id, owner);
+        }
+        if phase(&row)? != LeasePhase::Ready
+            || !row["deadline"].as_f64().is_some_and(|until| now() < until)
+            || !row["address"].is_string()
+            || row["hold_mode"].is_string()
+            || row["reviewer_hold"].is_string()
+        {
+            return Err(Rejected::new(
+                "resize_unavailable",
+                "Resize requires a ready, unexpired lease without a hold.",
+                409,
+            ));
+        }
+        if row["allocated_disk_mib"] == target {
+            return self.public(&row, None);
+        }
+        self.ledger.verify()?;
+        let mut preflight = provider_shape(&row, "prepare-active-grow")?;
+        preflight["target_disk_mib"] = json!(target);
+        preflight["reservations"] = json!(self.totals(text(&row, "slot_id")?)?);
+        let observed = self.provider.call(preflight)?;
+        if observed["current_disk_mib"] == target {
+            return self.public(&row, None);
+        }
+        let tasks = observed["prior_tasks"].as_array().ok_or_else(unavailable)?;
+        let row = self.ledger.mutate(|tx| {
+            tx.execute("UPDATE lease SET phase='resizing-active',upstream=NULL,resize_result=NULL,prior_tasks=?,pending_disk_mib=?
+                WHERE id=? AND phase='ready'", params![json!(tasks).to_string(),target,id])?;
+            lease(tx, id, Some(owner))
+        })?;
+        let row = self.dispatch_recorded(&row)?;
+        self.public(&row, None)
+    }
+
     fn stopped(&self, row: &Value) -> Result<(), Rejected> {
         let mut input = provider_shape(row, "guest-observation")?;
         input["include_address"] = json!(false);
@@ -812,6 +902,39 @@ impl Controller {
         })
     }
 
+    pub fn authorize_dependency(
+        &self,
+        id: &str,
+        owner: &str,
+        name: &str,
+    ) -> Result<Value, Rejected> {
+        let unavailable_grant = || {
+            Rejected::new(
+                "dependency_grant_unavailable",
+                "No active grant for this lease and dependency.",
+                403,
+            )
+        };
+        let row = match lease(self.database(), id, Some(owner)) {
+            Err(error) if error.code() == "unknown_lease" => return Err(unavailable_grant()),
+            record => record?,
+        };
+        let requirements = stored(&row["requirements"])?;
+        let admitted = requirements["dependencies"]
+            .as_array()
+            .is_some_and(|names| names.iter().any(|requested| requested == name));
+        let ready = matches!(phase(&row)?, LeasePhase::Ready | LeasePhase::ResizingActive)
+            && row["address"].is_string()
+            && row["deadline"]
+                .as_f64()
+                .is_some_and(|expires| expires > now());
+        self.dependencies
+            .get(name)
+            .filter(|_| admitted && ready)
+            .cloned()
+            .ok_or_else(unavailable_grant)
+    }
+
     pub fn list(&self, owner: &str) -> Result<Value, Rejected> {
         let mut statement = self.database().prepare(
             "SELECT id,task,phase,deadline,recipe,released_at,resume_point,checkpoint
@@ -838,6 +961,7 @@ impl Controller {
             "export_challenge",
             "storage_challenge",
             "export_start_tasks",
+            "export_reconciliation",
             "checkpoint",
             "dynamic_guest",
             "dynamic_host_key",
@@ -930,7 +1054,10 @@ impl Controller {
             if self.provider.call(query)?["status"] == "stopped" {
                 // A proven terminal start may exit before the task ever receives SSH.
                 // Keep the usual hold and export policy while reclaiming that exact clone.
-                let policy = Lifecycle { phase: LeasePhase::Ready, ..lifecycle };
+                let policy = Lifecycle {
+                    phase: LeasePhase::Ready,
+                    ..lifecycle
+                };
                 policy.release(data)?;
                 let updated = self.request_export(&row)?;
                 return self.public(&updated, None);
@@ -1197,15 +1324,25 @@ fn administer_ledger(config: &Path, operation: LedgerAdministration<'_>) -> Resu
         .iter()
         .map(|(id, slot)| (id.as_str(), slot.identity.as_str()))
         .collect::<Vec<_>>();
-    let key = || settings.get("ledger_handoff_public_key")
-        .map(|value| value.as_str().ok_or_else(invalid)).transpose();
+    let key = || {
+        settings
+            .get("ledger_handoff_public_key")
+            .map(|value| value.as_str().ok_or_else(invalid))
+            .transpose()
+    };
     match operation {
         LedgerAdministration::Handoff(path) => {
             let proof = std::fs::read(path)
                 .ok()
                 .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
                 .ok_or_else(invalid)?;
-            Ledger::handoff(database, witness, || provider.generation(), &bindings, &proof)?;
+            Ledger::handoff(
+                database,
+                witness,
+                || provider.generation(),
+                &bindings,
+                &proof,
+            )?;
         }
         LedgerAdministration::EnrollAuthority => {
             let key = key()?.ok_or_else(invalid)?;
@@ -1217,7 +1354,13 @@ fn administer_ledger(config: &Path, operation: LedgerAdministration<'_>) -> Resu
             for id in slots.keys() {
                 provider.call(json!({"action":"enrollment-check","slot_id":id}))?;
             }
-            Ledger::enroll_for_handoff(database, witness, || provider.generation(), &bindings, key)?;
+            Ledger::enroll_for_handoff(
+                database,
+                witness,
+                || provider.generation(),
+                &bindings,
+                key,
+            )?;
         }
     }
     Ok(())

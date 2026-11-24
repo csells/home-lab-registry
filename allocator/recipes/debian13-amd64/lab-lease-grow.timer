@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for an enrolled lease disk expansion
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

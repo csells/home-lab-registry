@@ -1,9 +1,10 @@
 # React, TypeScript and Rust port
 
-Status — implementation verified in disposable staging. Production promotion
-requires separate approval. The port builds on the dashboard health review
-candidate in [Plan 0006](0006-dashboard-health-review.md) and preserves the
-existing clients, browser workflow, and persisted state.
+Status: finished in staging with a remainder, reconciled 2026-11-23.
+The core port passed disposable staging at `0230fe1`. That revision is the
+executable comparison baseline. [Plan 0008](../0008-remove-python-and-javascript.md#carried-from-archived-plans)
+owns the remaining integrated and production contract checks and rollback.
+The port builds on the [dashboard health review](0006-dashboard-health-review.md).
 
 ## Order of delivery
 
@@ -15,10 +16,9 @@ existing clients, browser workflow, and persisted state.
 | Rust registry | Preserve catalog revisions, enrollment and health report semantics, scoped authorization, SQLite compatibility and audit history. Test a backup restore and exercise Python and Rust-compatible clients through the existing interfaces. |
 | Rust lease allocator | Preserve lease ownership, durable operation state, checkpoint receipts, provider boundaries, recovery and expiry. Exercise open-lease recovery, restore and release through the existing clients and real staged dependencies before migration. |
 
-Go remains the on-host collector language. Keep provider tools and scripts in
-their current language where the runtime interface is stable. Choose Rust
-libraries when their slice starts and keep transport contracts independent of
-the implementation.
+This milestone kept provider tools and scripts behind stable interfaces.
+[Plan 0008](../0008-remove-python-and-javascript.md) subsequently ported those
+first-party tools. Go remains the on-host collector language.
 
 ## Delivery rules
 

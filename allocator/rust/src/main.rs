@@ -12,6 +12,9 @@ struct Options {
     handoff_ledger: Option<PathBuf>,
     #[arg(long, conflicts_with = "enroll_ledger")]
     enroll_handoff_authority: bool,
+    /// Accept a verified operator start on a stopped Proxmox lease and queue a fresh export.
+    #[arg(long, conflicts_with_all = ["enroll_ledger", "handoff_ledger", "enroll_handoff_authority"])]
+    reconcile_final_export: Option<PathBuf>,
 }
 
 #[tokio::main(worker_threads = 2)]
@@ -21,6 +24,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_target(false)
         .init();
     let options = Options::parse();
+    if let Some(proof) = options.reconcile_final_export {
+        let receipt = tokio::task::spawn_blocking(move || {
+            lab_allocator::reconcile_final_export(&options.configuration, &proof)
+        })
+        .await??;
+        println!("{receipt}");
+        return Ok(());
+    }
     if let Some(authorization) = options.handoff_ledger {
         tokio::task::spawn_blocking(move || {
             lab_allocator::handoff(&options.configuration, &authorization)

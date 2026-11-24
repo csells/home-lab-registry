@@ -37,6 +37,7 @@ type Guest struct {
 type GuestReport struct {
 	Status   string           `json:"status"`
 	Source   string           `json:"source,omitempty"`
+	Delivery string           `json:"delivery,omitempty"`
 	Checked  float64          `json:"checked,omitempty"`
 	Expires  float64          `json:"expires,omitempty"`
 	Guests   []Guest          `json:"guests"`
@@ -280,7 +281,7 @@ type guestState struct {
 func (s *guestState) set(r GuestReport) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	different := s.report.Status != r.Status || s.report.Source != r.Source || !reflect.DeepEqual(s.report.Guests, r.Guests) || !reflect.DeepEqual(s.report.Warnings, r.Warnings) || !reflect.DeepEqual(s.report.Hardware, r.Hardware)
+	different := s.report.Status != r.Status || s.report.Source != r.Source || s.report.Delivery != r.Delivery || !reflect.DeepEqual(s.report.Guests, r.Guests) || !reflect.DeepEqual(s.report.Warnings, r.Warnings) || !reflect.DeepEqual(s.report.Hardware, r.Hardware)
 	s.report = r
 	if s.changed == nil {
 		s.changed = make(chan struct{})
@@ -321,13 +322,22 @@ func runGuests(ctx context.Context, s *guestState, interval time.Duration, colle
 func runGuestsWithEvents(ctx context.Context, s *guestState, interval time.Duration, collect guestCollector, wake <-chan struct{}) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
+	report := collect(ctx)
 	for {
-		s.set(collect(ctx))
+		report.Delivery = "polling"
+		if wake != nil {
+			report.Delivery = "event-assisted"
+		}
+		s.set(report)
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-		case <-wake:
+		case _, open := <-wake:
+			if !open {
+				wake = nil
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -335,10 +345,14 @@ func runGuestsWithEvents(ctx context.Context, s *guestState, interval time.Durat
 			}
 			// The wake channel is bounded and already coalesces busy task bursts.
 			select {
-			case <-wake:
+			case _, open := <-wake:
+				if !open {
+					wake = nil
+				}
 			default:
 			}
 		}
+		report = collect(ctx)
 	}
 }
 

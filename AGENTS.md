@@ -3,7 +3,7 @@
 This public repository owns the reusable home-lab platform: registry/dashboard,
 collectors and reconciliation, environment allocation/lifecycle, provider adapters,
 and shared Apple-worker tooling. Preserve application source ownership and private
-deployment configuration. Proposed contracts are not available APIs.
+deployment configuration. Use the deployed contract identified by the live registry.
 
 ## Read by task
 
@@ -15,8 +15,12 @@ deployment configuration. Proposed contracts are not available APIs.
 - For alternatives and prior evidence, read
   `specs/research/2026-11-20-bb-home-lab-usage-audit.md` and
   `specs/research/source-provenance.md`.
-- For implemented boundaries, read `specs/architecture/current.md`. Reconciliation
-  rollout remains owned by its existing candidate/plan; verify its current state.
+- For implemented boundaries, read `specs/architecture/current.md`. Guest
+  inventory reconciliation shipped. Verify deployment records before using
+  capabilities from the integrated Rust and TypeScript staging candidate.
+- For candidate cutover and parity, read
+  `specs/plans/0008-remove-python-and-javascript.md`. The plans index links its
+  earlier milestones and their evidence.
 
 ## Execution and verification
 
@@ -33,7 +37,9 @@ Exercise actual browser interactions for UI changes and real lifecycle/failure r
 for controllers. Present working staging; merge/promote service changes only after
 explicit approval of that candidate. Promotion includes production verification,
 preserved evidence/rollback artifacts, and cleanup of exactly owned staging resources.
-Documentation-only commits do not deploy or promote services.
+Stage and promote the registry, dashboard, allocator and local lease workers
+as one [platform release](deploy/README.md). Use the same bundle in both
+environments. Documentation-only commits do not deploy or promote services.
 
 Third-party installation/migration follows its authorized backup, validation and
 rollback plan; preserve already granted authority and explicit cutover requirements.

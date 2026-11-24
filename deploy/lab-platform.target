@@ -1,0 +1,8 @@
+[Unit]
+Description=Home Lab Registry, Dashboard and Environment Allocator
+Wants=network-online.target
+Requires=lab-registry.service lab-dashboard.service lab-allocator.service
+After=network-online.target lab-registry.service lab-dashboard.service lab-allocator.service
+
+[Install]
+WantedBy=multi-user.target

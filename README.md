@@ -1,11 +1,10 @@
 # Home Lab Registry
 
 A self-hosted home-lab platform for discovering machines and services, understanding
-their capabilities, and acquiring suitable environments. The implemented foundation
-is an authenticated machine/service catalog and dashboard; the expanded charter adds
-shared environment allocation, lifecycle management and Apple workers through the
-[proposed environment-service plan](specs/plans/0001-renewable-test-environments.md).
-The allocator and Mac-worker lifecycle are not implemented by this documentation change.
+their capabilities, and acquiring suitable environments. The platform includes
+an authenticated catalog, a dashboard and an environment allocator for Linux
+and macOS workers. The [environment plan](specs/plans/0001-renewable-test-environments.md)
+tracks deployment and qualification.
 
 Machines and services have separate views. Machine cards put compact CPU, RAM, GPU and disk history bars above browser SSH, hypervisor, KVM and AMT access. Device and host-console credentials are separate; copy confirmation stays inside the button. Services show health freshness, placement and configuration-backup locations.
 
@@ -71,8 +70,9 @@ Use a dedicated Linux VM with an authenticated HTTPS reverse proxy. Docker
 Compose runs the optional Guacamole stack. Build the Rust binaries with Cargo,
 a C toolchain and OpenSSL development files. Provision independent registry
 reader and writer credentials and keep TLS keys and configuration private. The
-[example units](deploy/) run the registry and dashboard as unprivileged
-accounts. The dashboard listens on loopback behind the proxy.
+[platform release](deploy/README.md) runs the registry, dashboard and allocator
+as unprivileged services on one host. The dashboard listens on loopback behind
+the proxy.
 
 Build the React dashboard asset before installing the dashboard. Node 22.18
 or newer is required on the build machine.
@@ -90,8 +90,9 @@ HTML and CSS. Install the generated `dashboard/vendor/elk-worker.min.js` in the 
 
 ### Build and run the services
 
-The disposable review uses the Rust executables with the existing private
-configuration and data formats. Build on the deployment platform with Cargo
+Build the [platform release](deploy/README.md) once and deploy the same
+verified bundle to staging and production. Each service can also be run
+directly for development and recovery. Build on the deployment platform with Cargo
 and the platform's C toolchain and OpenSSL development files.
 
 ```sh

@@ -46,6 +46,9 @@ Verify the app through the same review URL and sign-in the reviewer will use. Ex
 
 Record the checks and any differences in the registry. If a required integration, permission or safe test target is missing, identify the affected workflow and report staging as partial until it works or the operator explicitly accepts the exception.
 
+
+When Chris explicitly accepts a staging exception for a specific rollout, record the skipped checks and exact artifact versions in that deployment’s registry record. Take the pre-change backup, keep the previous service and configuration available for rollback, and verify the live workflows after switching. Use the normal staging process for later changes.
+
 ## Promotion includes staging cleanup
 
 Approval to promote a staged service to stable also authorizes and requires cleanup of that service's disposable staging environment, without a separate confirmation. After verifying the promoted production service end to end and preserving needed source, evidence and recoverable rollback/configuration backups outside staging, stop and permanently delete the staging service, its dedicated VM or container and disks, temporary credentials, relays, shares and routes. Release reservations, retire registry records and verify that allocated resources were returned to the pool. A stopped VM still consumes disk; stopping alone is not completed cleanup.

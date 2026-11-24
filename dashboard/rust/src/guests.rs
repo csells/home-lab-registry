@@ -29,12 +29,18 @@ pub(crate) struct Report {
     pub expires: Option<f64>,
     pub entries: Option<Vec<Value>>,
     pub hardware: Option<Value>,
+    pub delivery: Option<&'static str>,
     pub error: Option<String>,
 }
 
 impl Report {
     fn parse(value: &Value, now: f64) -> Result<Self, &'static str> {
         let hardware = verified_hardware(&value["hardware"], now);
+        let delivery = match value["delivery"].as_str() {
+            Some("polling") => Some("polling"),
+            Some("event-assisted") => Some("event-assisted"),
+            _ => None,
+        };
         match value["status"].as_str() {
             Some("waiting" | "unavailable") => {
                 let reason = value["warnings"]
@@ -76,6 +82,7 @@ impl Report {
                     expires: Some(expires),
                     entries: Some(entries),
                     hardware,
+                    delivery,
                     error: None,
                 })
             }
@@ -398,6 +405,20 @@ mod tests {
         assert!(!report.fresh(1000.0));
         assert_eq!(report.hardware.as_ref().unwrap()["logical_cpus"], 4);
         assert_eq!(report.entries.as_ref().unwrap()[0]["state"], "running");
+        assert!(report.delivery.is_none());
+        let mut with_delivery = sample.clone();
+        with_delivery["delivery"] = json!("polling");
+        assert_eq!(
+            Report::parse(&with_delivery, 102.0).unwrap().delivery,
+            Some("polling")
+        );
+        with_delivery["delivery"] = json!("unsupported");
+        assert!(
+            Report::parse(&with_delivery, 102.0)
+                .unwrap()
+                .delivery
+                .is_none()
+        );
 
         let mut duplicate = sample.clone();
         duplicate["guests"] = json!([sample["guests"][0], sample["guests"][0]]);

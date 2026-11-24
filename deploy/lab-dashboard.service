@@ -1,14 +1,14 @@
 [Unit]
+PartOf=lab-platform.target
 Description=Home lab machines and services dashboard
 After=network-online.target
 Wants=network-online.target
 [Service]
+Type=exec
 User=lab-dashboard
-WorkingDirectory=/opt/machine-dashboard
-ExecStart=/opt/machine-dashboard/bin/lab-dashboard /opt/machine-dashboard 8089
+WorkingDirectory=/opt/lab-platform-releases/current/dashboard
+ExecStart=/opt/lab-platform-releases/current/bin/lab-dashboard /opt/lab-platform-releases/current/dashboard 8089
 Restart=on-failure
 NoNewPrivileges=true
 PrivateTmp=true
 UMask=0077
-[Install]
-WantedBy=multi-user.target

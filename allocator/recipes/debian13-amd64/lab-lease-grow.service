@@ -1,0 +1,11 @@
+[Unit]
+Description=Grow the enrolled Debian lease filesystem
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/lab-lease-grow
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateNetwork=yes

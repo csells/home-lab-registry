@@ -255,3 +255,35 @@ func TestGuestLoopPublishesEachInterval(t *testing.T) {
 		t.Fatal("report not published")
 	}
 }
+
+func TestClosedGuestWatcherReturnsToPeriodicSampling(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wake := make(chan struct{})
+	calls := make(chan time.Time, 4)
+	state := &guestState{}
+	go runGuestsWithEvents(ctx, state, 1600*time.Millisecond, func(ctx context.Context) GuestReport {
+		calls <- time.Now()
+		return GuestReport{Status: "available"}
+	}, wake)
+	select {
+	case <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("initial inventory was not sampled")
+	}
+	close(wake)
+	var second time.Time
+	select {
+	case second = <-calls:
+	case <-time.After(2600 * time.Millisecond):
+		t.Fatal("closed watcher stopped periodic sampling")
+	}
+	select {
+	case third := <-calls:
+		if third.Sub(second) < 1350*time.Millisecond {
+			t.Fatalf("closed watcher triggered another sample after %s", third.Sub(second))
+		}
+	case <-time.After(2600 * time.Millisecond):
+		t.Fatal("collector stopped after switching to polling")
+	}
+}

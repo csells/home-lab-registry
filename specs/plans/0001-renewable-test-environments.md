@@ -1,10 +1,11 @@
 # Renewable test environments as a home-lab service
 
-Status: active, updated 2026-11-22. Two-host Linux leasing, on-demand clones
-and dashboard integration passed staging at `e86592f`. Subsequent staging
-verified one unattended Tart Xcode recipe, portable task access and replacement
-after a Linux lease expired. Cross-runtime acceptance, a full controller restore
-and managed CUDA remain open. Production remains on hold.
+Status: active, reconciled 2026-11-23. Staging verified Codex and Pi
+recovery, fenced cross-host controller replacement, three concurrent Proxmox
+leases, managed CUDA and Metal, online Debian disk growth and scoped model
+and build access. The latest recovery and provider evidence is in the
+private deployment records. Broader operating policy and recovery acceptance
+remain open. Windows and physical-device qualification are deferred.
 
 Context: [vision](../vision/home-lab.md), [current architecture](../architecture/current.md).
 
@@ -241,7 +242,7 @@ concurrency using simultaneous real workloads, not nominal host capacity alone.
 Return approved shared voice/model/build bindings rather than duplicating runtimes.
 Exercise uncommitted-work recovery and evidence retrieval after guest deletion.
 Native clustering or hypervisor replacement needs a separate guest-data preservation
-and authorized cutover plan. Windows/GPU/device adapters remain explicit later work.
+and authorized cutover plan. The evidence below covers managed GPU access. Windows and physical-device qualification are deferred.
 
 ### Staged milestone: one unattended Apple lease
 
@@ -297,7 +298,7 @@ Tart harness took about 191 seconds from its pre-clone marker to its screenshot
 record. These runs used different timing boundaries and provide a reference
 for a future repeatable latency benchmark.
 
-### Next delivery sequence
+### Staged delivery and follow-up
 
 1. **Shared access from the home-lab skill.** Verify that fresh authorized
    agents in different runtimes can start with the same installed skill and
@@ -305,18 +306,26 @@ for a future repeatable latency benchmark.
    For the allocator, verify scoped access, owner continuity across restarts
    and credential refresh, no allocation before a request, and immediate
    rejection when capacity is exhausted.
-2. **Recover an interrupted agent and failed workload.** Repeat the verified
-   client interruption drill after terminating and restarting a coding-agent
-   runtime. Recover an actual failed workload, its evidence and its unfinished
-   work. Measure export lag, the acknowledged recovery point and remaining data
-   loss. Extend the verified same-controller restore to a fenced replacement
-   controller on a different VM.
-3. **Qualify one managed CUDA recipe.** Discover a suitable registered worker,
+2. **Measure recovery after interruption.** A standalone Codex session resumed
+   the same task and recovered a failed workload into a matching Debian lease.
+   A separate controller on another physical host adopted a live Proxmox
+   lease after provider fencing. A separate Pi runtime resumed its conversation
+   through the native launcher and recovered an interrupted Linux task. The
+   same principal used a refreshed credential after the original returned 401.
+   In that staged run, checkpoint capture and acknowledgment took 37 seconds,
+   final export took 145 seconds, and replacement restore took 31 seconds.
+   One file written after the selected checkpoint was absent from that
+   recovery point and present in the final export. The controller consumed
+   0.72 CPU seconds during the test and peaked at about 13.7 MiB over its
+   service lifetime. Export workers run in separate units.
+3. **Managed CUDA acceptance.** Discover a suitable registered worker,
    verify available GPU capacity and run a real CUDA workload through the same
    lease API. Verify immediate rejection of a competing request, durable
    checkpoint recovery and return of the GPU after release. Exercise a second
    lease to prove the resource is available again. Record the GPU access mode
    and driver/image requirements separately from the generic Linux recipe.
+   The managed CUDA lifecycle, denial of a competing task, exact export and
+   successful GPU reacquisition were verified in staging.
 
 Use the [Mayfly review](../research/2026-11-21-mayfly-allocator-review.md) to
 improve worker maintenance alongside these milestones. Version each recipe by
@@ -329,8 +338,8 @@ overlap and name the missing capacity. Keep leases and reclamation under the
 same allocator authority. Evaluate ephemerd separately if a GitHub Actions
 workload needs a bounded lab pool.
 
-Windows and wider Apple recipe enrollment follow these milestones. Production
-promotion remains on hold.
+Additional Apple recipes can follow the same acceptance checks. Windows and
+physical-device qualification are deferred.
 
 ### Current qualification evidence
 
@@ -345,13 +354,14 @@ promotion remains on hold.
   removed the guest and its disks. The same task recovered the acknowledged
   archive and restored the unchanged file in a matching clone in 35 seconds.
   Both leases released, and the isolated drill restored the normal grace
-  policy. A full restart of a coding-agent runtime remains a separate check.
+  policy. Later Codex and Pi trials exercised actual runtime restarts.
 - A separate Linux workload acquired through curl and recovered through the
   standalone Python client. After requester termination, a matching clone
   restored the failing test, its log and uncommitted data byte for byte in
   42.17 seconds. The restored test reproduced the failure and both guests
   were reclaimed. This qualifies the HTTP interface and recovery across
-  clients. Independent coding-agent runtime acceptance remains open.
+  clients. The integrated Rust follow-up exercised an actual standalone Codex
+  process interruption. Pi subsequently passed the same scoped recovery check.
 - Staging renewed a 45-minute lease to 45 days through the live API, then
   exercised six additional renewals with a controlled clock. The export worker
   verified failure notification, retry and recovery across restart. The scoped
@@ -366,8 +376,22 @@ promotion remains on hold.
   check. New code can pin recipe versions and estimate maintenance impact without
   provider writes. Independent image provenance and qualification of a new
   enrolled version remain open.
-- The real CUDA LXC probe passed and its disposable container and disk were
-  removed. The allocator has no enrolled CUDA provider yet.
+- The CUDA LXC probe was followed by a managed CUDA lease. A competing task
+  was refused, and a replacement reacquired the GPU and restored verified work.
+
+## Remaining allocator acceptance
+
+- Finish cross-provider schema and quota acceptance, standing task credential
+  onboarding and external owner alert delivery. Exercise bounded delegated
+  renewal and maintenance or replacement admission with measured overlap
+  capacity.
+- Verify a declared periodic checkpoint interval and the loss bound under load.
+  Exercise asynchronous reset interruption and confirm that admission waits
+  for verified completion. Define supported recovery when every independent
+  witness is lost and test recovery from an older catalog and ledger backup.
+- The operator deferred Windows guest qualification and physical-device access.
+  Track additional Apple recipes, host GUI login and cold host recovery under
+  their independent acceptance requirements.
 
 ## Implementation sequence and acceptance
 
@@ -390,8 +414,10 @@ promotion remains on hold.
   The staged [checkpoint and recovery implementation](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/README.md#matching-replacement-and-workspace-restore)
   verified multiple acknowledged versions, encrypted Drive readback after
   actual guest deletion, and matching replacement with byte-equal workspace
-  recovery. Keep the full failed-workload acceptance and the measured
-  export/recovery window open.
+  recovery. The failed-workload drill restored the failing test, its log and
+  unfinished work. The Pi drill measured 37 seconds to acknowledgment and 145 seconds to final
+  export. The restored checkpoint excluded a later write. A periodic export
+  policy and its loss bound under sustained load remain open.
 - [ ] **Failure qualification.** Concurrent requests exceed capacity without
   oversubscription; controller/requester crashes, lost success responses, export
   failure and delayed cleanup cannot duplicate or destroy another allocation.
@@ -402,8 +428,13 @@ promotion remains on hold.
   generations, and held disks on export failure. The latest backup restored
   a consistent SQLite journal and matched retained receipts. Long-duration
   renewal has staged evidence. The encrypted journal restore continued a
-  real in-flight operation on the same controller. Qualify total controller loss,
-  replacement identity fencing and recovery from older backups.
+  real in-flight operation on the same controller. The cross-host drill
+  fenced the former provider token before adopting a live lease. Recovering
+  without a surviving independent witness still requires reconciliation.
+  A staging drill using an isolated copy of the actual ledger rejected both
+  a missing witness and an older witness. Restoring the exact current witness
+  from a separate machine restored access to an existing reconciliation
+  receipt without advancing the ledger revision.
 - [ ] **Agent and dashboard integration.** A fresh agent completes a user-level task
   without manual provisioning instructions; reconnects after interruption; sees
   rejection reasons, renewal and evidence freshness. Human UI shows ownership and
@@ -411,17 +442,15 @@ promotion remains on hold.
   inference is used to keep leases alive.
   A fresh BB task discovered the pilot, ran on Debian, and retrieved its workspace
   after release. The staged browser verified active managed clones and their
-  removal across all six configured collectors. Production credential onboarding,
-  owner alert routing and end-to-end recovery after an actual agent-runtime
-  restart remain open. The shared workflow uses the skill, the registry and the
-  standalone client. The later runtime-specific BB integration was retired.
-- [ ] **Review and promotion.** Present functioning staging, real lifecycle evidence,
-  overhead measurements and rollback/recovery artifacts. Obtain explicit approval
-  for this candidate before promotion. Verify stable behavior, preserve source and
-  recovery artifacts, then remove dedicated staging resources and retire records.
-  [Review CI](https://github.com/csells/home-lab-registry/actions/runs/45037022105) identifies the tested source,
-  and the staging record holds browser, lifecycle and restored journal evidence.
-  Comparative overhead and production verification remain open.
+  removal across all six configured collectors. Pi qualified a second runtime
+  with scoped credential refresh and recovery into a matching Linux lease.
+  Production credential onboarding and owner alert routing remain open. The
+  shared workflow uses the skill, the registry and the standalone client. The later runtime-specific BB integration was retired.
+- [x] **Controller overhead.** Measure the controller's time and resource use
+  during real acquisition, export and restore. The Pi staged lifecycle logged
+  0.72 controller CPU seconds and a service-lifetime peak of about 13.7 MiB.
+  Replacement restore took 31 seconds. Separate export workers have their
+  own resource accounting.
 - [ ] **Documentation completion.** Update current architecture with implemented
   boundaries and validation, update the home-lab skill to use the service, and
   archive this plan only when required work is complete. Track later platform
@@ -453,6 +482,41 @@ qualification. A matching-environment claim requires a real restored workload,
 not just a successful clone command.
 
 
+## Integrated Rust qualification
+
+The [migration candidate](0008-remove-python-and-javascript.md#regression-qualification)
+matched the frozen legacy ledger and verified a real on-demand Proxmox clone,
+SSH access, verified checkpoint recovery after release, and removal of the
+guest, disk and test task credentials. The integrated candidate includes the
+timestamp fixes for the Rust workspace writer and stopped Linux disk capture.
+A real Debian replacement restored the exact permissions and timestamp and
+retained both on final export.
+
+The same-controller encrypted journal drill resumed a real in-flight Proxmox
+clone. The failed-workload drill recovered the failing test, log and uncommitted
+files. A standalone Codex process was interrupted after a verified incremental
+checkpoint. The same session resumed under the same task scope, restored the
+failing test and its work into a matching Debian guest, verified the expected
+failure and released the replacement. This qualifies one actual agent runtime.
+The `a7805b8` cross-host drill exercised a live Proxmox lease on a second
+physical host. The operator rotated the original provider token, verified its
+revocation and signed the current witness revision and both controller VM
+generations. The replacement refused an older database and forged or replayed
+authorization. It adopted the exact live lease, read its unfinished file,
+renewed it, and completed shutdown, independently verified encrypted export
+and rollback. The former credential could no longer restart the slot. See the
+[handoff procedure](../../allocator/README.md#fenced-replacement-controller).
+An enrollment trial against a copy of the real review ledger kept its held
+lease and historical provider bindings. It accepted the same key twice and
+rejected replacing the enrolled key.
+The Pi runtime and recovery measurements are recorded above. A dedicated
+staging inbox exercised alert retry, durable delivery and deduplication
+across a restart. A separate test routed an actual stopped-disk export
+failure to the exact issuing task principal's controlled inbox. Its other
+inbox remained empty. The controller acknowledged the alert once, and
+the guest returned after a verified export. External recipient delivery
+requires its own configured route and qualification.
+
 ## First implementation slice
 
 Use the existing Proxmox API and a dedicated pool-scoped service identity for
@@ -465,7 +529,7 @@ the existing destination to qualify for checkpoint export and restore.
 The pilot started with explicit release and overdue owner review. The agreed
 Linux policy now governs staged automatic reclamation. Staging verified
 reclamation after expiry and verified export, plus a disk hold on export failure.
-Wider delegation, operator routing and production deployment remain open.
+Standing credential enrollment, external alert delivery and delegated renewal remain open.
 
 ## Staging evidence and provider work
 
@@ -480,19 +544,53 @@ registry's staging deployment record holds the qualification receipts.
 
 Independent Tart checks exercised a fresh Swift build, iPhone simulator input,
 Metal and encrypted workspace retrieval after clone deletion. The allocator
-subsequently qualified one prepared Tart Xcode recipe as recorded above;
-the independent Metal probe does not qualify a managed Metal recipe. A
-disposable Linux CUDA container exercised actual GPU memory; managed CUDA
-still needs authenticated provider operations and recovery. Windows
-and physical-device adapters, wider pool enrollment, in-place resize of active
-leases, and task grants for model and Bazel services remain open. The current
-voice binding returned the service endpoint and relies on its own authorization.
+subsequently qualified the prepared Tart Xcode recipe with an explicit Metal
+requirement. A managed
+clone compiled and ran the compute fixture, then released and recovered the
+verified result from encrypted storage. A dedicated Proxmox recipe with
+an NVIDIA RTX 1000 Ada uses PCI passthrough and the Debian NVIDIA 550
+driver. A non-admin task copied and verified device memory through the normal
+lease API. The controller rejected a competing owner, verified the stopped
+disk export in encrypted storage, then restored the same output into a
+matching replacement. The replacement ran the GPU workload again and
+returned the slot after a verified export. A November 23 operator decision
+deferred Windows and physical-device adapter qualification. Four eligible
+Proxmox nodes had no prepared Windows media or template. One has measured
+headroom for a Windows recipe. No dedicated physical test device is enrolled.
+Additional host recipes can qualify through the same admission checks.
+
+Three independent Proxmox nodes ran a fixed Debian lease, a dynamic Debian
+lease and a dedicated CUDA lease concurrently. The allocation API denied
+access from the fourth task to the other leases and refused its acquisition
+when the pool was full. Each release verified an encrypted checkpoint and
+returned its slot to admission.
+
+A leased non-admin task used the [model gateway](../../allocator/README.md#shared-dependency-bindings)
+to reach the actual Ollama server. A different owner, an unselected dependency,
+a revoked credential and a lease that had begun release all failed authorization.
+A separately authorized private route verified NativeLink's real gRPC capability
+response. The same deployed executable also ran with one worker and separate
+staging stores. An admitted Linux task wrote and read content-addressed bytes,
+ran a remote action, and read the verified action result from cache. The wrong
+owner and revoked credential were refused. Releasing the lease closed the grant
+and preserved the result in an encrypted checkpoint. This exercise used explicit
+REAPI calls. The shared worker still serves its enrolled clients.
+The voice binding continues to use the service's own authorization.
+
+A managed Debian SCSI/ext4 guest grew its active disk from 8 to 9 GiB.
+The guest retained its boot ID, SSH identity and workspace. The controller
+recovered the resize intent after restart and accepted both acquisition and
+resize replays. The encrypted checkpoint recovered into a matching 9 GiB
+replacement. Both guests completed verified export and release.
 
 ### Initialize the managed Linux workspace before declaring readiness
 
 The dashboard health qualification found that the fixed Linux recipe can reach
 ready without the directory used for final capture. An untouched lease then
-holds its disk for export review even though no task files exist. Prepare the
-canonical workspace with the task account's ownership before reporting ready.
-Keep missing or redirected workspace paths as errors during capture. Verify
-renewal and verified release of a newly acquired guest whose task writes nothing.
+holds its disk for export review even though no task files exist. The Debian
+recipe starts the guest agent only after creating the canonical workspace for
+the task account. Cold capture continues to reject missing or redirected paths.
+The same live fixed-slot test first reproduced a missing directory at readiness,
+then passed with the updated recipe. It checked ownership and an empty workspace,
+renewed the lease, released it, and downloaded a verified empty checkpoint.
+The controller restored the clean snapshot and the task credential was revoked.

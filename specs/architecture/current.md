@@ -1,8 +1,8 @@
 # Current home-lab architecture
 
-Reconciled 2026-11-22 against `main` at `63624fb`, the verified November 20
-inventory rollout and the November 21 backup collector promotion. The staging
-section records the separately verified allocator at `e86592f`. The registry
+Reconciled 2026-11-23 against `main` at `63624fb`, the verified inventory and
+backup deployments, and the integrated staging candidate on
+`feature/remaining-lab-work`. The registry
 holds current machine inventory, access references and operational evidence.
 
 The [vision](../vision/home-lab.md) describes intended outcomes. The
@@ -109,12 +109,11 @@ persistent integrations, reviewable application deployments and disposable stagi
 These are separate from the agent process that requested them. A test VM need not
 run the coding agent.
 
-Stable provisioning uses registry runbooks and hypervisor administration for capacity,
-ownership and cleanup. The separate Linux staging pilot exercises a renewable
-lease, checkpoint recovery and matching replacement through one controller.
-
-Use the registry to discover independently qualified build services and their
-access paths. Task-level Bazel bindings through the allocator remain open.
+Stable provisioning uses registry runbooks and hypervisor administration. The
+disposable allocator shares one lease contract across Linux and Tart. Staging
+verified scoped Ollama access and NativeLink cache reads, writes and remote
+execution against an isolated instance of the deployed worker. Release and
+credential revocation both gated task access.
 
 ## Shared application capabilities
 
@@ -191,37 +190,66 @@ change delivery, native event sources and coverage beyond hypervisor guests.
 
 ## Allocator staging
 
-The allocator runs in disposable staging. One SQLite operation ledger governs
-a pre-provisioned slot, an on-demand Debian pool on independent Proxmox hosts
-and one prepared Tart Xcode recipe. The Linux pool uses a pinned template and
-bounded CPU, memory and disk sizes. The controller records intent before dispatch
-and fences mutations with
-guest generation and a separate ledger witness. Task credentials grant access
-to the leased guest. Admission verifies capacity and returns a reason for
-refusals. [Controller](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/pilot.py) · [Dynamic provider](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/pve_dynamic.py)
+One durable SQLite ledger governs a fixed Debian slot, an on-demand Proxmox
+pool, a dedicated CUDA slot and a prepared Tart Xcode slot with managed Metal.
+Three Proxmox nodes ran independent leases concurrently and refused a fourth
+request at capacity. Capacity checks use live provider observations. Task
+credentials bind a principal to its lease and grant only the selected service
+dependencies. The Debian recipe initializes the canonical workspace before
+readiness. The SCSI/ext4 recipe supports qualified active disk growth with
+durable intent and replay after controller restart.
 
-The export worker validates and reads back the declared workspace from a dedicated
-encrypted Drive repository before reuse or deletion. Checkpoints have independent
-retention and remain available after guest deletion. The staged expiry credential
-is time-limited and scoped to that repository. A matching replacement restored
-an acknowledged checkpoint. The staged Linux interruption drill recovered
-the saved workspace into a matching replacement after expiry and deletion.
-A separate journal backup verified the saved lease state and receipts. Full
-restore with an in-flight provider operation still needs qualification. [Export worker](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/exporter.py) · [Recovery client](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/client.py)
+The controller records intent before provider mutation. Exact guest and
+storage identity, provider task history and an independent ledger witness
+fence cleanup and replacement. An operator can reconcile explicitly proved
+additional provider activity; normal release still requires encrypted
+checkpoint readback before capacity returns. A cross-host drill fenced the
+former controller before adopting a live lease. Missing and stale witnesses
+were rejected until the current independent witness was restored. Recovery
+from an older backup and loss of all independent witnesses still need a
+qualified procedure.
 
-The staged dashboard presents lease history with the catalog and shows a managed
-clone when the controller's active intent matches the collector's exact machine,
-guest ID, type and name. Password-copy and terminal controls apply only to the
-disposable review machine. A fresh task ran an iPhone simulator UI test via the
-staged Tart adapter and retrieved its workspace after release. The standalone
-task client also verified registry discovery, scoped credential refresh and
-revocation. The CUDA probe ran independently of the allocator.
+Codex and Pi resumed real interrupted tasks and restored verified work.
+The Pi trial measured checkpoint, export and replacement time. Owner alerts
+passed retry, deduplication and exact routing to a controlled inbox.
+Standing credential enrollment, external alert delivery and sustained
+periodic checkpoint behavior remain acceptance items.
 
-Ordinary simulator tests can run directly through the Mac's installed Xcode.
-The native path runs outside the allocator today. Clean macOS and toolchain
-qualification and guest lifecycle testing can use the staged Tart recipe.
-Native admission, wider placement and task grants for shared services remain in
-[plan 0001](../plans/0001-renewable-test-environments.md).
+Managed Tart completed simulator and Metal work. A separate clean Tart
+install restored the exact macOS base, installed the matching Apple-signed
+Xcode app and simulator runtime, and passed Swift, Metal and simulator input.
+Native host admission and cold recovery have their own qualification.
+The operator deferred Windows and physical-device qualification.
+
+[Ledger](../../allocator/rust/src/ledger.rs) · [Proxmox placement](../../allocator/rust/src/proxmox_dynamic.rs) · [Tart worker](../../allocator/rust/src/tart_worker.rs) · [Export](../../allocator/rust/src/export.rs)
+
+[Allocator acceptance](../plans/0001-renewable-test-environments.md)
+
+## Production runtime
+
+The React dashboard and Rust dashboard and registry services run on the existing
+production host. The rollout retained the catalog database, TLS credentials,
+public sign-in route and collector identities. Authenticated reconciliation
+completed for all six configured collectors and the live inventory stream
+delivered events. Five eligible collectors now report native hardware and
+delivery mode. Backrest uses the Rust collector for 18 fleet plans, with fresh
+encrypted registry and host snapshots and registry archive verification.
+The allocator and its provider, export and recovery grants remain scoped to
+disposable staging. The registry records the deployed artifact identities
+and rollback and backup evidence.
+
+## Registry platform releases
+
+The registry, dashboard, allocator and local lease workers share one
+checksummed release directory. In disposable staging, the units start under
+`lab-platform.target` and resolve their executables and assets through the
+same release pointer. A failed authenticated check restores the previous unit
+definitions and release pointer. The catalog database and independently
+witnessed lease ledger keep their own state, recovery and authorization.
+
+The [deployment procedure](../../deploy/README.md) uses the same release in
+staging and production. The live registry records the release ID and where it
+has been exercised.
 
 ## Configuration backup and recovery
 

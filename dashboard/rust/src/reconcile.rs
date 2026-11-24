@@ -371,7 +371,7 @@ pub(crate) fn comparison(
             }
         }
         host_reports.push(json!({"machine_id":id,"status":"verified","checked":report.checked,"expires":report.deadline(),
-            "guests":guests,"hardware":report.hardware}));
+            "guests":guests,"hardware":report.hardware,"delivery":report.delivery}));
         let mut host_claims: Vec<_> = claims
             .iter()
             .filter(|((parent, _), _)| parent == id)
@@ -482,14 +482,17 @@ mod tests {
             checked: Some(100.0),
             expires: Some(110.0),
             entries: Some(vec![]),
+            delivery: Some("polling"),
             ..Report::default()
         };
         let reports = HashMap::from([("machine-test".into(), report)]);
         let fresh = comparison(&records, &reports, &LeaseOwnership::default(), 103.0);
         assert_eq!(fresh["coverage"]["verified"], 1);
+        assert_eq!(fresh["hosts"][0]["delivery"], "polling");
         assert_eq!(fresh["findings"][0]["code"], "missing-guest");
         let stale = comparison(&records, &reports, &LeaseOwnership::default(), 111.0);
         assert_eq!(stale["coverage"]["verified"], 0);
+        assert!(stale["hosts"][0].get("delivery").is_none());
         assert_eq!(stale["findings"].as_array().unwrap().len(), 1);
         assert_eq!(stale["findings"][0]["code"], "collector-unverified");
     }

@@ -10,7 +10,35 @@ use tower::ServiceExt;
 fn task_api_schema_matches_the_python_client_contract() {
     let expected: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/task-contract-0230fe1.json")).unwrap();
-    assert_eq!(task_contract(), expected);
+    let mut current = task_contract();
+    let grant = current["operations"]
+        .as_object_mut()
+        .unwrap()
+        .remove("authorize_dependency");
+    assert_eq!(
+        grant,
+        Some(json!({"method":"GET","path":"/v1/leases/{id}/dependencies/{name}"}))
+    );
+    let operation = current["operations"]
+        .as_object_mut()
+        .unwrap()
+        .remove("grow_disk");
+    assert_eq!(
+        operation,
+        Some(json!({"method":"POST","path":"/v1/leases/{id}/resize","body_schema":"grow_disk"}))
+    );
+    let schema = current["schemas"]
+        .as_object_mut()
+        .unwrap()
+        .remove("grow_disk");
+    assert_eq!(
+        schema,
+        Some(
+            json!({"type":"object","required":["disk_mib"],"additionalProperties":false,
+        "properties":{"disk_mib":{"type":"integer","minimum":1024,"multipleOf":1024}}})
+        )
+    );
+    assert_eq!(current, expected);
 }
 
 #[tokio::test]
@@ -67,6 +95,10 @@ fn bare_and_child_endpoint_paths_require_their_specific_roles() {
         (&["v1", "task-credentials"], RouteRole::Issuer),
         (&["v1", "delegated-renewal", "id"], RouteRole::Delegation),
         (&["v1", "leases", "id"], RouteRole::Task),
+        (
+            &["v1", "leases", "id", "dependencies", "models"],
+            RouteRole::Task,
+        ),
     ] {
         assert_eq!(RouteRole::for_path(path), role);
     }

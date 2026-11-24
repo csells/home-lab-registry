@@ -150,6 +150,12 @@ enum Operation {
         #[arg(long)]
         confirm_lease: String,
     },
+    /// Grow the boot disk and mounted filesystem of an enrolled running lease.
+    Resize {
+        lease: String,
+        #[arg(long)]
+        disk_mib: u64,
+    },
     RetryExport {
         lease: String,
     },
@@ -411,6 +417,9 @@ fn execute(args: Args) -> Result<Value, TaskError> {
             "/export-disposition",
             json!({"mode":"discard","reason":reason,"confirm_lease":confirm_lease}),
         ),
+        Operation::Resize { lease, disk_mib } => {
+            scoped(client, &lease, "/resize", json!({"disk_mib":disk_mib}))
+        }
         Operation::RetryExport { lease } => scoped(client, &lease, "/retry-export", json!({})),
         Operation::DelegateRenewal {
             lease,

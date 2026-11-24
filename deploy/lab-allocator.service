@@ -1,0 +1,19 @@
+[Unit]
+Description=Home lab environment allocator
+PartOf=lab-platform.target
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=lab-allocator
+Group=lab-allocator
+ExecStart=/opt/lab-platform-releases/current/bin/lab-allocator /etc/lab-allocator/config.json
+Restart=on-failure
+RestartSec=3
+StateDirectory=lab-allocator
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

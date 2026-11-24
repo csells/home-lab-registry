@@ -9,10 +9,13 @@ use serde_json::{Value, json};
 use crate::{
     ProviderKind, Rejected, Slot,
     capacity::{Capacity, Observation, Pool},
-    provider::unavailable,
-    proxmox::{ControllerVm, GuestPin, Proxmox, TaskKind, api_id, config_text, escape, task_matches, uuid_field},
-    proxmox_dynamic::{DynamicScope, Shape, legacy_json},
     protocol::{APPLE, LINUX, public_key},
+    provider::unavailable,
+    proxmox::{
+        ControllerVm, CudaDevice, GuestPin, Proxmox, TaskKind, api_id, config_text, escape,
+        task_matches, uuid_field,
+    },
+    proxmox_dynamic::{DynamicScope, Shape, legacy_json},
     request::canonical_requirements,
     tart::{Tart, operation as tart_operation},
     tokens::hex,
@@ -43,6 +46,7 @@ struct Linux {
     api: Proxmox,
     capacity: Capacity,
     mode: LinuxMode,
+    cuda: Option<CudaDevice>,
 }
 
 enum LinuxMode {
@@ -120,6 +124,13 @@ pub(crate) fn verify_requirements(
     dependencies: &Value,
 ) -> Result<(), Rejected> {
     canonical_requirements(requirements)?;
+    if offers["gpu"] == "cuda" && requirements["gpu"] != "cuda" {
+        return Err(Rejected::new(
+            "accelerator_reserved",
+            "This dedicated slot requires an explicit CUDA request.",
+            422,
+        ));
+    }
     for (key, wanted) in requirements.as_object().expect("validated requirements") {
         if key == "dependencies" {
             let absent: Vec<_> = wanted
@@ -194,7 +205,10 @@ impl NativeProvider {
         if !matches!(slots["primary"].worker, Worker::Linux(_)) {
             return Err(invalid());
         }
-        let controller = match (config.get("controller_vm"), config.get("controller_guest_id")) {
+        let controller = match (
+            config.get("controller_vm"),
+            config.get("controller_guest_id"),
+        ) {
             (Some(vm), None) => ControllerBinding::Independent(ControllerVm::open(vm)?),
             (None, Some(id)) => ControllerBinding::Primary(api_id(id).ok_or_else(invalid)?),
             _ => return Err(invalid()),
@@ -219,7 +233,8 @@ impl NativeProvider {
                         let Worker::Linux(host) = &self.slots["primary"].worker else {
                             return Err(invalid());
                         };
-                        host.api.audit(&format!("/nodes/{}/qemu/{guest}/config", host.api.node))?
+                        host.api
+                            .audit(&format!("/nodes/{}/qemu/{guest}/config", host.api.node))?
                     }
                 };
                 Ok(json!(
@@ -272,7 +287,11 @@ impl ProviderSlot {
             let config = &definition["proxmox"];
             let api = Proxmox::open(config, &definition["capacity"])?;
             let capacity = Capacity::open(&definition["capacity"], &api.guest_id)?;
-            let (identity, mode, kind, host_key, name) =
+            let cuda = config.get("cuda").map(CudaDevice::open).transpose()?;
+            if cuda.is_some() && definition.get("dynamic").is_some() {
+                return Err(invalid());
+            }
+            let (mut identity, mode, kind, host_key, name) =
                 if let Some(settings) = definition.get("dynamic") {
                     let scope = DynamicScope::open(settings, &api, &capacity.storage)?;
                     (
@@ -315,6 +334,9 @@ impl ProviderSlot {
                         name,
                     )
                 };
+            if let Some(device) = &cuda {
+                identity.push(json!(device));
+            }
             let descriptor = Slot {
                 identity: String::new(),
                 recipe: LINUX.to_owned(),
@@ -332,6 +354,7 @@ impl ProviderSlot {
                     api,
                     capacity,
                     mode,
+                    cuda,
                 })),
             )
         };
@@ -350,16 +373,17 @@ impl ProviderSlot {
 
     fn offers(&self, shape: Shape) -> Value {
         let mut value = json!(shape);
-        if self.descriptor.kind == ProviderKind::Tart {
+        if let Worker::Tart(tart) = &self.worker {
             value["os"] = json!("macos");
             value["architecture"] = json!("arm64");
             value["distribution"] = json!("macos");
-        } else {
+            value["gpu"] = json!(tart.gpu());
+        } else if let Worker::Linux(host) = &self.worker {
             value["os"] = json!("linux");
             value["architecture"] = json!("amd64");
             value["distribution"] = json!("debian13");
+            value["gpu"] = json!(if host.cuda.is_some() { "cuda" } else { "none" });
         }
-        value["gpu"] = json!("none");
         value
     }
 
@@ -439,6 +463,8 @@ impl ProviderSlot {
             | "install-key"
             | "shape"
             | "verify-shape"
+            | "prepare-active-grow"
+            | "finish-active-grow"
             | "export-source" => {
                 let lease = lease(request)?;
                 match &self.worker {
@@ -472,7 +498,13 @@ impl Linux {
 
     fn verify_recipe(&self) -> Result<(), Rejected> {
         match &self.mode {
-            LinuxMode::Fixed { pin, .. } => self.api.verify_config(pin).map(|_| ()),
+            LinuxMode::Fixed { pin, .. } => {
+                let config = self.api.verify_config(pin)?;
+                if let Some(device) = &self.cuda {
+                    self.api.verify_cuda_device(&config, device)?;
+                }
+                Ok(())
+            }
             LinuxMode::Dynamic(scope) => scope.template_config(&self.api).map(|_| ()),
         }
     }
@@ -521,6 +553,9 @@ impl Linux {
         &self,
         prior: Option<&str>,
     ) -> Result<(&'static str, Option<String>, BTreeSet<String>), Rejected> {
+        if self.cuda.is_some() {
+            self.verify_recipe()?;
+        }
         self.idle(prior)?;
         match &self.mode {
             LinuxMode::Fixed { pin, .. } => {
@@ -556,6 +591,57 @@ impl Linux {
             .filter(|name| !name.is_empty())
             .ok_or_else(missing_identity)?;
         Ok(GuestPin::new(guest_name(lease), uuid, volume))
+    }
+
+    fn active_growth(
+        &self,
+        id: &str,
+        pin: &GuestPin,
+        request: &Value,
+    ) -> Result<(&DynamicScope, Shape, Shape), Rejected> {
+        const ONLINE: &str = "/run/lab-lease-grow/online";
+        let unsupported = || {
+            Rejected::new(
+                "online_resize_unsupported",
+                "This lease has no qualified live disk growth recipe.",
+                422,
+            )
+        };
+        let scope = self.dynamic().map_err(|_| unsupported())?;
+        if !scope.online_disk_growth {
+            return Err(unsupported());
+        }
+        if self.api.status(pin)? != "running"
+            || self.api.guest_file(ONLINE)?.as_deref().map(str::trim) != Some("1")
+        {
+            return Err(Rejected::new(
+                "online_resize_unverified",
+                "The running guest has no verified live filesystem growth helper.",
+                409,
+            ));
+        }
+        let current = scope.default.for_request(&request["requirements"])?;
+        let requested = request["target_disk_mib"]
+            .as_i64()
+            .filter(|size| {
+                *size >= current.disk_mib && *size <= scope.maximum.disk_mib && size % 1024 == 0
+            })
+            .ok_or_else(|| {
+                Rejected::new(
+                    "invalid_resize",
+                    "The target cannot shrink the disk or exceed the qualified limit.",
+                    422,
+                )
+            })?;
+        let next = Shape {
+            disk_mib: requested,
+            ..current
+        };
+        // Keep the same pinned hardware generation and backing volume throughout growth.
+        if scope.describe(&self.api, id)? != request["pins"] {
+            return Err(different_generation());
+        }
+        Ok((scope, current, next))
     }
 
     fn operation(&self, action: &str, id: &str, request: &Value) -> Result<Value, Rejected> {
@@ -635,6 +721,9 @@ impl Linux {
             "dispatch" => {
                 let task = match phase {
                     "starting" => {
+                        if let Some(device) = &self.cuda {
+                            api.verify_cuda_device(&current, device)?;
+                        }
                         api.modify(Method::POST, &format!("{route}/status/start"), Some(&[]))?
                     }
                     "stopping" | "export-stopping" => api.modify(
@@ -664,6 +753,11 @@ impl Linux {
                             return Err(unexpected_stop());
                         }
                         api.modify(Method::DELETE, &route, None)?
+                    }
+                    "resizing-active" => {
+                        let (scope, current, next) = self.active_growth(id, &pin, request)?;
+                        scope.verify_shape(api, id, &request["pins"], current)?;
+                        scope.resize(api, id, &request["pins"], next)?
                     }
                     "resizing" => {
                         let scope = self.dynamic()?;
@@ -717,6 +811,34 @@ impl Linux {
                     Ok(json!({"current_disk_mib":actual,"disk_mib":shape.disk_mib}))
                 }
             }
+            "prepare-active-grow" => {
+                let (scope, current, next) = self.active_growth(id, &pin, request)?;
+                scope.verify_shape(api, id, &request["pins"], current)?;
+                let delta = next.disk_mib - current.disk_mib;
+                if delta > 0 {
+                    let [memory, storage] = reservations(request)?;
+                    let storage = storage.checked_add(delta).ok_or_else(unavailable)?;
+                    let measured = self.capacity.observe(api, self.pool(), false, true, None)?;
+                    self.capacity
+                        .admit((measured.memory, measured.storage), [memory, storage])?;
+                }
+                Ok(json!({"current_disk_mib":current.disk_mib,
+                          "prior_tasks":api.recent_tasks(&api.guest_id, TaskKind::Resize)?}))
+            }
+            "finish-active-grow" => {
+                const REQUEST: &str = "/run/lab-lease-grow/request";
+                const RECEIPT: &str = "/run/lab-lease-grow/receipt";
+                let (scope, _, next) = self.active_growth(id, &pin, request)?;
+                scope.verify_shape(api, id, &request["pins"], next)?;
+                let size = next.disk_mib.to_string();
+                if api.guest_file(RECEIPT)?.as_deref().map(str::trim) == Some(size.as_str()) {
+                    return Ok(json!(true));
+                }
+                if api.guest_file(REQUEST)?.as_deref().map(str::trim) != Some(size.as_str()) {
+                    api.write_guest_file(REQUEST, &format!("{size}\n"))?;
+                }
+                Ok(json!(false))
+            }
             "export-source" => {
                 if api.status(&pin)? != "stopped" {
                     return Err(export_changed(
@@ -729,7 +851,26 @@ impl Linux {
                     .map(|row| row["upid"].as_str().ok_or_else(unavailable))
                     .collect::<Result<Vec<_>, _>>()?;
                 starts.sort_unstable();
-                let mut result = export_source(request, json!(starts))?;
+                let mut result = if let Some(extra) = request["additional_start"].as_str() {
+                    let matched = tasks.iter().filter(|row| row["upid"] == extra);
+                    let exact_success = matched.count() == 1
+                        && tasks
+                            .iter()
+                            .any(|row| row["upid"] == extra && row["status"] == "OK");
+                    let remaining = starts
+                        .iter()
+                        .copied()
+                        .filter(|task| *task != extra)
+                        .collect::<Vec<_>>();
+                    if !exact_success || request["start_tasks"] != json!(remaining) {
+                        return Err(export_changed(
+                            "The stopped guest history does not match the one reconciled start. Preserve its disk for review.",
+                        ));
+                    }
+                    Ok(json!({"start_tasks":starts}))
+                } else {
+                    export_source(request, json!(starts))
+                }?;
                 if let LinuxMode::Dynamic(scope) = &self.mode {
                     let shape = scope.default.for_request(&request["requirements"])?;
                     result["dynamic_source"] = json!([

@@ -115,6 +115,7 @@ func (w *tartWatches) refresh(root string) error {
 }
 
 func (w *tartWatches) run(ctx context.Context, root string, wake chan<- struct{}) {
+	defer close(wake)
 	defer unix.Close(w.queue)
 	defer func() {
 		for _, fd := range w.directories {

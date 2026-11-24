@@ -14,7 +14,7 @@ canonical documents; original owner-controlled evidence remains in private histo
 | [Reconciliation candidate plan](https://github.com/csells/home-lab-registry/blob/277fbda89da4dcd1002d37665e3477ae93ad937e/specs/plans/0003-inventory-reconciliation.md) | Separate review work preserved; identity/freshness/event requirements integrated without claiming fleet rollout or promotion |
 | [Current architecture](../architecture/current.md) | Dated implemented baseline; verify source revisions and live state before relying on availability |
 | [Usage audit](2026-11-20-bb-home-lab-usage-audit.md) | Redacted synthesis of 28 retrieved conversation groups across 20 threads; coverage and uncertainty are recorded in the audit |
-| [Platform-source plan](../plans/0004-platform-source-consolidation.md) | Separates reusable source from operator deployment glue; no source import or live-file parity is claimed |
+| [Platform-source plan](../plans/0004-platform-source-consolidation.md) | Separates reusable source from private deployment glue and records component-specific source parity |
 | Private operational/security material | Used to identify staging, recovery and identity boundaries; vulnerability details, credentials, inventory and superseded instructions are excluded; current findings remain in private operational records |
 
 The public research is a synthesis, not a raw transcript archive. Internal thread
