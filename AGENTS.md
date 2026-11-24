@@ -15,12 +15,11 @@ deployment configuration. Use the deployed contract identified by the live regis
 - For alternatives and prior evidence, read
   `specs/research/2026-11-20-bb-home-lab-usage-audit.md` and
   `specs/research/source-provenance.md`.
-- For implemented boundaries, read `specs/architecture/current.md`. Guest
-  inventory reconciliation shipped. Verify deployment records before using
-  capabilities from the integrated Rust and TypeScript staging candidate.
-- For candidate cutover and parity, read
-  `specs/plans/0008-remove-python-and-javascript.md`. The plans index links its
-  earlier milestones and their evidence.
+- For implemented boundaries, read `specs/architecture/current.md`. Use the
+  live registry to verify the combined production release and enabled scopes.
+- For release verification and recovery drills, read
+  `specs/plans/0009-production-platform-verification.md`. The plans index links
+  prior delivery and rollback evidence.
 
 ## Execution and verification
 

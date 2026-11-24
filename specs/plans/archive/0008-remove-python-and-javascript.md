@@ -1,10 +1,9 @@
 # Finish the Rust and TypeScript migration
 
-Status: active, reconciled 2026-11-23. The registry, dashboard, five
-eligible collectors and 18 Backrest export plans now run the ported components
-in production. The operator accepted a targeted staging exception for this
-rollout. The allocator and associated provider and capture authority remain
-in staging.
+Status: finished with a remainder, reconciled 2026-11-23. The Rust and
+TypeScript platform, including the allocator, runs in production. Remaining
+production checks and deferred client qualification moved to
+[plan 0009](../0009-production-platform-verification.md).
 
 | Slice | Acceptance |
 | --- | --- |
@@ -24,7 +23,7 @@ where the behavior needs it.
 
 - The branch removes 95 tracked Python and JavaScript files and retains
   `0230fe1` in its ancestry. The migration retains the Go collector. The integrated
-  branch also carries the collector upgrades from [plan 0005](0005-inventory-coverage-and-change-delivery.md).
+  branch also carries the collector upgrades from [plan 0005](../0005-inventory-coverage-and-change-delivery.md).
 - A clean Git archive built the Rust executables, React bundle and backup
   review script on Debian. TypeScript checks, Rust contract tests, browser
   suites and Go race tests passed. The dedicated Rust lease-review test also
@@ -56,9 +55,8 @@ where the behavior needs it.
   evidence. KVM/AMT authentication and offline disk inspection were not
   repeated fleet-wide as part of this source migration.
 
-The staged runtime retains its existing catalog, ledger witness, scoped
-credentials, and rollback artifacts. Stable deployments and unrelated lab
-services were not changed.
+This staging run preserved the catalog, ledger witness, scoped credentials
+and rollback artifacts for the later production switch.
 
 ## Regression qualification
 
@@ -86,8 +84,8 @@ guest, disk and temporary task credentials were verified removed. The frozen
 ledger comparison also passed for current, issues, released and all views.
 
 The timestamp fix writes an exact PAX modification time in
-[the workspace writer](../../allocator/rust/workspace/src/unix.rs). The
-[file and directory regression](../../allocator/rust/tests/workspace_contract.rs)
+[the workspace writer](../../../allocator/rust/workspace/src/unix.rs). The
+[file and directory regression](../../../allocator/rust/tests/workspace_contract.rs)
 failed before the patch and passed afterward. Both writers and both readers
 preserved the timestamp in all four pairings. The separate disposable Linux
 build exercised the real archive and restore tools. All 49 enabled allocator
@@ -117,10 +115,12 @@ creation. The restore helper now uses that fallback without replacing an
 existing directory entry. A matching Tart VM restored the exact bytes, mode
 and timestamp and retained them when the replacement released and re-exported.
 
-The macOS client links system libraries. Windows x86-64 task and registry
-clients cross-built. Native Windows TLS, private configuration ACLs and
-packaging remain deferred. This concerns where the client runs. Windows guest
-provisioning is a separate capability in [plan 0001](0001-renewable-test-environments.md).
+The macOS client links system libraries. Native CI ran Windows task transport
+and registry private-configuration ACL tests and built and packaged both
+Windows x86-64 clients. A Windows installation using lab endpoints and
+credentials remains deferred in [plan 0009](../0009-production-platform-verification.md#deferred-verification).
+Windows guest provisioning is tracked separately in
+[plan 0001](../0001-renewable-test-environments.md).
 
 ## Held export and address-audit follow-up
 
@@ -154,14 +154,22 @@ post-change snapshots, exact artifact digests and available rollback copies.
 The earlier registry and dashboard rollout used an explicit staging exception.
 The subsequent combined production release used the checksummed bundle tested
 in staging, the signed ledger handoff and production provider, capture and
-recovery scopes. Keep Windows client TLS, private configuration ACLs and
-packaging deferred.
+recovery scopes. Proxmox and Tart production trials acquired and renewed
+leases, verified encrypted checkpoints, restored matching replacements and
+released both generations. Production preserved the existing lease history.
+An encrypted backup restored the registry catalog and allocator ledger with
+a matching witness. The staging controller, its disks, grants and preview
+route were retired. The live deployment record holds artifact identities
+and evidence. The remaining checks are in [plan 0009](../0009-production-platform-verification.md).
 
-## Carried from archived plans
+## Earlier acceptance requirements
 
-- [Plan 0006 production verification](archive/0006-dashboard-health-review.md#production-verification)
+[Plan 0009](../0009-production-platform-verification.md#carried-from-archived-plans)
+retains the remaining verification from these deliveries.
+
+- [Plan 0006 production verification](0006-dashboard-health-review.md#production-verification)
   carries all eight dashboard corrections forward, including authenticated
   session recovery, live discrepancy updates and lease export-failure recovery.
-- [Plan 0007 acceptance and delivery rules](archive/0007-react-typescript-and-rust-port.md#order-of-delivery)
+- [Plan 0007 acceptance and delivery rules](0007-react-typescript-and-rust-port.md#order-of-delivery)
   carry forward production contract parity, measured stream and recovery
   behavior, and separate rollback artifacts for the integrated deployment.

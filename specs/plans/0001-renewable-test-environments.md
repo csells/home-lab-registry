@@ -1,11 +1,12 @@
 # Renewable test environments as a home-lab service
 
-Status: active, reconciled 2026-11-23. Staging verified Codex and Pi
-recovery, fenced cross-host controller replacement, three concurrent Proxmox
-leases, managed CUDA and Metal, online Debian disk growth and scoped model
-and build access. The latest recovery and provider evidence is in the
-private deployment records. Broader operating policy and recovery acceptance
-remain open. Windows and physical-device qualification are deferred.
+Status: active, reconciled 2026-11-24. The allocator runs with the registry
+and dashboard in production. The signed handoff preserved the lease history.
+Production verified scoped discovery, credential issuance, and the Proxmox
+and Tart lease lifecycle through encrypted checkpoint recovery and release.
+Credential onboarding for routine agents, broader operating policy and
+failure recovery remain open. Windows and physical-device qualification are
+deferred.
 
 Context: [vision](../vision/home-lab.md), [current architecture](../architecture/current.md).
 
@@ -223,7 +224,7 @@ Use cached initial reports, change events and freshness heartbeats through the e
 Production guest streaming and reconciliation shipped under
 [plan 0003](archive/0003-inventory-reconciliation.md). General inventory coverage
 and registry change delivery continue in [plan 0005](0005-inventory-coverage-and-change-delivery.md).
-The lease review build joins dynamic clones to the controller projection under
+The production dashboard joins dynamic clones to the controller projection under
 this plan, while the controller remains the authority for lease mutations.
 
 ## Apple and cross-provider acceptance
@@ -366,8 +367,8 @@ physical-device qualification are deferred.
   exercised six additional renewals with a controlled clock. The export worker
   verified failure notification, retry and recovery across restart. The scoped
   expiry test removed an eligible stored checkpoint and confirmed recovery
-  access ended. Production owner routing and standing credential setup remain
-  open.
+  access ended. The production service issuer and scoped provider credentials
+  are enrolled. Routine agent onboarding remains open.
 - Staging paused the controller during a real Proxmox clone. The recovered
   encrypted Drive journal matched its independent witness and SHA-256. The
   controller resumed the same lease to readiness and reclaimed the exact guest
@@ -379,19 +380,55 @@ physical-device qualification are deferred.
 - The CUDA LXC probe was followed by a managed CUDA lease. A competing task
   was refused, and a replacement reacquired the GPU and restored verified work.
 
+## Production delivery
+
+The allocator runs in the same versioned release as the registry, dashboard
+and local lease workers. The signed handoff preserved the current ledger
+and rotated the provider credentials. The production service issuer issued
+and revoked task grants. The production run verified acquisition, renewal,
+checkpoint readback, matching replacement and release on Proxmox and Tart.
+All four enrolled slots reported capacity after the staging controller
+was deleted. The live registry records production credentials, rollback
+evidence and the encrypted restore of the catalog and matched ledger and
+witness. See the [migration record](archive/0008-remove-python-and-javascript.md#production-rollout-and-remaining-qualification).
+The scheduled alert worker submits export failures from a dedicated lab mailbox
+to the operator's external address. A controlled production failure generated
+one acknowledged alert, and the operator confirmed receipt. Retrying the
+restored exporter verified the encrypted checkpoint and released the lease.
+The email describes the failure and disk hold, recommends a recovery action,
+and links to the Leases dashboard and recovery instructions. It includes a
+retry command for the affected lease. The installed template rendered the
+recorded failure, and the encrypted backup restored the updated worker
+configuration.
+
 ## Remaining allocator acceptance
 
-- Finish cross-provider schema and quota acceptance, standing task credential
-  onboarding and external owner alert delivery. Exercise bounded delegated
-  renewal and maintenance or replacement admission with measured overlap
-  capacity.
-- Verify a declared periodic checkpoint interval and the loss bound under load.
-  Exercise asynchronous reset interruption and confirm that admission waits
-  for verified completion. Define supported recovery when every independent
-  witness is lost and test recovery from an older catalog and ledger backup.
+- Verify that fresh authorized agents can onboard and refresh production
+  credentials through the shared skill and client across supported runtimes.
+  Verify that a refreshed credential retains access to the same task's
+  existing lease. Production has an enrolled issuer and verified scoped
+  grant issuance.
+- Finish cross-provider schema, quota and API compatibility acceptance.
+  Exercise the production voice and model grants with authorized workloads
+  and verify isolation from other tasks. Apply the same checks to any
+  enrolled production build binding. NativeLink execution was verified
+  through a private staging route.
+- Verify a declared periodic checkpoint interval and the loss bound under
+  sustained load.
+- Interrupt an actual asynchronous reset and verify admission waits for
+  verified completion.
+- Test recovery from an older catalog and ledger backup. Define supported
+  reconciliation when every independent witness is lost.
+- Exercise bounded delegated renewal with a real job. Verify that the
+  maintenance plan reports affected leases and measured overlap capacity, and
+  that admission refuses a replacement when both worker generations cannot
+  safely run at once.
+- Version and qualify a newly enrolled recipe. Additional Apple recipes,
+  native host admission and concurrency, GUI login and cold host recovery
+  have their own acceptance requirements.
 - The operator deferred Windows guest qualification and physical-device access.
-  Track additional Apple recipes, host GUI login and cold host recovery under
-  their independent acceptance requirements.
+  Windows client deployment checks are tracked in
+  [plan 0009](0009-production-platform-verification.md#deferred-verification).
 
 ## Implementation sequence and acceptance
 
@@ -399,8 +436,8 @@ physical-device qualification are deferred.
   define typed schemas, authentication, durable state ownership, expiry/retention
   defaults, capture scope, quotas and API compatibility. Proxmox, scoped TLS
   credentials, a SQLite ledger and the Linux expiry and capture policy below
-  have staging evidence. Cross-provider schemas, quotas and compatibility
-  qualification remain open.
+  have staging and bounded production evidence. Cross-provider schemas, quotas
+  and compatibility qualification remain open.
 - [x] **One isolated lifecycle.** In a disposable development VM, implement acquire,
   inspect, renew and release against a bounded Linux test pool. Reuse one environment
   for multiple tests. Prove idempotency, protected capacity, scoped access, router
@@ -444,8 +481,11 @@ physical-device qualification are deferred.
   after release. The staged browser verified active managed clones and their
   removal across all six configured collectors. Pi qualified a second runtime
   with scoped credential refresh and recovery into a matching Linux lease.
-  Production credential onboarding and owner alert routing remain open. The
-  shared workflow uses the skill, the registry and the standalone client. The later runtime-specific BB integration was retired.
+  A newly issued production grant exercised the standalone client and was
+  revoked after release. Repeat routine onboarding and credential refresh
+  across supported agent runtimes. The production operator email route passed.
+  The shared workflow uses the skill, the registry and the standalone client.
+  The later runtime-specific BB integration was retired.
 - [x] **Controller overhead.** Measure the controller's time and resource use
   during real acquisition, export and restore. The Pi staged lifecycle logged
   0.72 controller CPU seconds and a service-lifetime peak of about 13.7 MiB.
@@ -455,8 +495,8 @@ physical-device qualification are deferred.
   boundaries and validation, update the home-lab skill to use the service, and
   archive this plan only when required work is complete. Track later platform
   adapters separately rather than implying they were qualified by the Linux slice.
-  The [architecture](../architecture/current.md#allocator-staging) now records
-  this staging boundary, and the home-lab skill documents scoped discovery,
+  The [architecture](../architecture/current.md#environment-allocator) records
+  the production and staging evidence, and the home-lab skill documents scoped discovery,
   renewal and recovery. The plan remains active through the open requirements.
 
 ## Agreed Linux operating policy
@@ -484,7 +524,7 @@ not just a successful clone command.
 
 ## Integrated Rust qualification
 
-The [migration candidate](0008-remove-python-and-javascript.md#regression-qualification)
+The [migration candidate](archive/0008-remove-python-and-javascript.md#regression-qualification)
 matched the frozen legacy ledger and verified a real on-demand Proxmox clone,
 SSH access, verified checkpoint recovery after release, and removal of the
 guest, disk and test task credentials. The integrated candidate includes the
@@ -514,8 +554,8 @@ staging inbox exercised alert retry, durable delivery and deduplication
 across a restart. A separate test routed an actual stopped-disk export
 failure to the exact issuing task principal's controlled inbox. Its other
 inbox remained empty. The controller acknowledged the alert once, and
-the guest returned after a verified export. External recipient delivery
-requires its own configured route and qualification.
+the guest returned after a verified export. The production operator route
+is recorded under [Production delivery](#production-delivery).
 
 ## First implementation slice
 
@@ -529,7 +569,7 @@ the existing destination to qualify for checkpoint export and restore.
 The pilot started with explicit release and overdue owner review. The agreed
 Linux policy now governs staged automatic reclamation. Staging verified
 reclamation after expiry and verified export, plus a disk hold on export failure.
-Standing credential enrollment, external alert delivery and delegated renewal remain open.
+Routine production agent onboarding and delegated renewal remain open.
 
 ## Staging evidence and provider work
 

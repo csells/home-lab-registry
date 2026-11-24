@@ -1,9 +1,10 @@
 # Reusable platform source and deployment boundaries
 
-Status: active, reconciled 2026-11-23. The scoped backup collector shipped.
-Staging verified a clean Apple image rebuild, exact deployed device firmware
-provenance and the source ownership of the reviewed exporters. The component
-inventory and reusable source separation continue.
+Status: active, reconciled 2026-11-23. The Rust backup collector and allocator
+run in production. The reviewed firmware and exporters have source
+provenance, and a clean Apple image rebuild passed on a disposable worker.
+Reusable Mac tooling packaging and component-by-component source review
+remain open.
 
 ## Outcome
 
@@ -18,7 +19,7 @@ Neither public nor private Git stores credentials, live inventory or recovery ar
 | Registry, dashboard, collector, browser terminal and reconciliation | Existing source in this repository; preserve current review branches and source ownership |
 | Environment allocation and lifecycle | Reusable controller and provider adapters here, following [plan 0001](0001-renewable-test-environments.md); one reservation authority and a separate provider-mutation authorization boundary |
 | Mac worker and service-management tooling | Reusable executor, reviewed setup/helper templates, stable automation identity procedures and image tooling here; audit existing helper source before import; signing identities, certificates, accounts and device assignments stay private |
-| Central backup integration | The Python collector shipped from main. The [Rust port](0008-remove-python-and-javascript.md) is in staging; compare other deployed exporters/controller scripts with tracked source before extracting reusable hooks; operator schedules, deployment manifests, credentials and recovery inputs remain private |
+| Central backup integration | The Python collector shipped from main and the [Rust port](archive/0008-remove-python-and-javascript.md) now runs the enrolled production plans. Compare other deployed exporters and controller scripts with tracked source before extracting reusable hooks. Keep operator schedules, deployment manifests, credentials and recovery inputs private |
 | Plex sync/maintenance, Alook deployment and mail dynamic DNS | Audit custom integration source and maintain deployment-specific units/templates privately; these use third-party products, not new internally authored Plex/Alook/DNS services |
 | Device firmware and household configuration | Establish actual custom content and ownership first; publish reusable tooling only after review; household configuration remains private |
 | Applications and shared services with existing repositories | Preserve their existing source owners; correct stale private registry pointers instead of importing duplicate code |
@@ -42,8 +43,8 @@ repository pointer is unknown ownership, not permission to relocate code.
 - [ ] Import one bounded reusable component at a time, with placeholders/secret
   references, source history where useful, and build/deployment/recovery instructions.
   The [scoped collector](../../backup/README.md) is available on main. The
-  [allocator source](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/README.md) is available for staging review.
-  The integrated candidate contains the Rust Tart worker and capture tool.
+  [allocator source](../../allocator/README.md) includes the Rust Tart
+  worker and capture tool. The combined release is verified in production.
   Reusable setup and image tooling packaging and any later exporter imports
   still require individual source and license review.
 - [ ] Give deployment-specific assets a maintained private source home. Configuration
@@ -79,10 +80,11 @@ The deployment record owns current source identities, coverage and recovery
 evidence. Disabled historical plans retain their archives.
 
 Remaining source work covers reusable setup and image tooling packaging
-and individual review for integrations outside the verified component scope. The staged Tart allocator has lifecycle evidence for one
-recipe. The [Rust Tart worker](../../allocator/rust/src/tart_worker.rs) and
-[stopped-workspace capture](../../allocator/rust/src/bin/lab-tart-capture.rs) are
-in the integrated candidate. They have prepared-host lifecycle evidence.
+and individual review for integrations outside the verified component scope.
+The [Rust Tart worker](../../allocator/rust/src/tart_worker.rs) and
+[stopped-workspace capture](../../allocator/rust/src/bin/lab-tart-capture.rs)
+have prepared-host and production checkpoint and replacement evidence for
+one recipe.
 The running Tart worker executable matched a reviewed build and source
 revision. The installed Mac service-management helper matched the tracked
 private source byte for byte. The private Tart setup file has a retained

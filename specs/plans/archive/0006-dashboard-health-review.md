@@ -2,7 +2,7 @@
 
 Status: finished in staging with a remainder, reconciled 2026-11-23.
 The eight review corrections passed at `d4f9607` and were exercised in the
-integrated preview. [Plan 0008](../0008-remove-python-and-javascript.md#carried-from-archived-plans)
+integrated preview. [Plan 0009](../0009-production-platform-verification.md#carried-from-archived-plans)
 owns the remaining integrated and production verification.
 
 | Requirement | Regression evidence to capture |

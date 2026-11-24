@@ -4,7 +4,7 @@ Reconciled 2026-11-23 against the live production deployment. The dashboard
 uses React and TypeScript with a Rust backend. The registry serves its existing
 TLS API and SQLite catalog through Rust. Backrest uses the Rust export hook
 for enrolled fleet plans. Artifact digests, exact deployed scope and rollback
-evidence are in the registry. Lease allocation remains in disposable staging.
+evidence are in the registry. Lease allocation runs in the combined production release.
 
 This is the implementation detail for the [whole-lab architecture](current.md).
 
@@ -16,6 +16,8 @@ flowchart LR
   Proxy --> Dashboard[Dashboard]
   Dashboard --> Registry[Registry HTTPS API / SQLite]
   Agent[Agent CLI] --> Registry
+  Agent -->|Scoped task credential| Allocator[Allocator / separate lease ledger]
+  Dashboard -->|Read-only lease review| Allocator
   Collector[Machine collector] -->|Address announcements| Registry
   Dashboard -->|mTLS metrics while viewed| Collector
   Dashboard -->|Persistent mTLS guest inventory subscription| Collector
@@ -42,7 +44,7 @@ Private client configuration bootstraps discovery without consulting the dashboa
 
 The schema has a loosely structured `resources` object, whole-document updates,
 a 65,536-byte request limit, and generic writer attribution in revision history.
-Allocation transactions belong to the separate staging controller.
+Allocation transactions belong to the allocator and its own durable ledger.
 
 ### Address identity and presence
 
@@ -60,14 +62,14 @@ addresses while preserving stable machine identity and pinned SSH host keys.
 ### Dashboard, access and observations
 
 [`dashboard/rust/src/lib.rs`](../../dashboard/rust/src/lib.rs) serves the UI and authenticated
-APIs behind a reverse proxy. The candidate loads the catalog at startup and
-during **Reconcile now**, and applies committed metadata changes through the
-registry feed. Staging verified live retirement, stream reconnect and snapshot
-retry. The dashboard delivers results over same-origin SSE. React renders the
-views. [Dashboard connection](../../dashboard/frontend/dashboard-connection.ts)
-and [typed inventory state](../../dashboard/frontend/inventory.ts) handle
-ordering and recovery. Production reloads metadata at startup and on manual
-reconciliation.
+APIs behind a reverse proxy. The production dashboard loads the catalog at
+startup, on **Refresh** and during **Reconcile now**. It subscribes to committed
+metadata changes through the registry feed and delivers updates to browsers over
+same-origin SSE. The production observation showed a connected catalog feed.
+Staging verified live retirement, cursor reconnect and snapshot retry. React
+renders the views. [Dashboard connection](../../dashboard/frontend/dashboard-connection.ts)
+and [typed inventory state](../../dashboard/frontend/inventory.ts) handle ordering
+and recovery.
 [`dashboard/rust/src/inventory.rs`](../../dashboard/rust/src/inventory.rs) separates machines, services,
 backup jobs and historical records. Catalog counts are not process counts.
 
@@ -161,8 +163,8 @@ from incomplete verification. It detects problems; it is not an admission contro
 
 ### Configuration backup and recovery
 
-[`backup/rust/src/bin/lab-backup-collect.rs`](../../backup/rust/src/bin/lab-backup-collect.rs) is the candidate export hook for the central
-Backrest controller. Enrolled fleet plans run the Rust export hook. It resolves sources through the registry, uses pinned SSH,
+[`backup/rust/src/bin/lab-backup-collect.rs`](../../backup/rust/src/bin/lab-backup-collect.rs) is the Rust export hook in use on enrolled
+Backrest plans. It resolves sources through the registry, uses pinned SSH,
 and checks exported archives in temporary staging. For supported guest sources,
 [`backup/rust/src/lib.rs`](../../backup/rust/src/lib.rs) checks the binding against a fresh
 observation before choosing the address. The forced read-only command in
@@ -173,8 +175,8 @@ Backrest, restic and rclone handle scheduling, versioning, encryption and Google
 Drive storage. Deployment profiles and credentials are private.
 [Capture tests](../../backup/rust/tests/capture.rs) cover identity and access
 rejection, portable acceptance and corrupt archives. The production deployment record
-holds source hashes and restore evidence. Application recoverability is assessed
-through the restore checks recorded for each service. [Merged collector delivery](https://github.com/csells/home-lab-registry/pull/1)
+holds source hashes and restore evidence. The combined release's encrypted
+restore verified the catalog, lease ledger and matching witness. [Merged collector delivery](https://github.com/csells/home-lab-registry/pull/1)
 
 Independent recovery requires both a catalog export and private bootstrap/access
 configuration. The recovery bundle must be retrievable without the failed registry
@@ -182,34 +184,36 @@ host. This document specifies the dependency; it does not certify every backup.
 
 ## Environment operations today
 
-Stable agents use the home-lab skill, registry runbooks and authenticated
-hypervisor access to provision and retire guests. The staging controller exercises
-renewable leases, scoped access, checkpoint-gated reclamation and matching
-replacement as described in [the whole-lab staging architecture](current.md#allocator-staging).
+Agents use the home-lab skill to discover the production allocator, then
+acquire and renew leases through its scoped HTTPS API. Production verified
+checkpoint-gated reclamation and matching replacement on Proxmox and Tart.
+See the [allocator architecture](current.md#environment-allocator).
 
-The candidate dashboard uses a dedicated read-only review credential to read
+The production dashboard uses a dedicated read-only review credential to read
 lease summaries and an active clone projection from the
 [Rust allocator review API](../../allocator/rust/src/review.rs). It joins that projection on
 changed guest observations or manual comparison. Unchanged heartbeats use the
 cached join. An unavailable allocator yields an unverified ownership entry.
 Provider mutation, task access and evidence retrieval stay under the controller's
 separate authorization checks. The live staging browser verified the managed
-lease link and row removal after release. [Dashboard join](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/dashboard/lease_review.py) · [Lease projection](https://github.com/csells/home-lab-registry/blob/e86592f9c6af06db2f84d08397aee4bdf8f85618/allocator/review.py)
+lease link and row removal after release. Production verified lease issues
+through the authenticated dashboard. [Dashboard join](../../dashboard/rust/src/reconcile.rs) · [Lease projection](../../allocator/rust/src/review.rs)
 
 Persistent services and disposable development have different lifecycles. Service
 source changes require an isolated staging VM and explicit promotion approval;
 promotion includes verified cleanup of dedicated staging resources. Existing
 third-party installation/migration follows its authorized backup and cutover plan.
 
-## Native inventory and deployment evidence in staging
+## Native inventory and deployment evidence
 
 Proxmox and Tart collectors combine native event notification with periodic
 observation. When an established watcher fails, the agent falls back to
 polling. The dashboard preserves the delivery mode on a fresh
 authenticated report. Live watcher-loss tests exercised both providers.
 Temporary candidate collectors matched hardware readings on four eligible
-Proxmox nodes and the Apple host. Installed collector hardware capability
-and coverage for other providers are tracked in the inventory plan.
+Proxmox nodes and the Apple host. Five installed collectors supplied fresh
+hardware in production and reported polling in the verification snapshot.
+The inventory plan tracks event delivery and other publisher coverage.
 
 The native deployment sync uses known local service identity and generation.
 Real systemd and launchd jobs remained registered while stopped or idle.

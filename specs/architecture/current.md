@@ -1,13 +1,12 @@
 # Current home-lab architecture
 
-Reconciled 2026-11-23 against `main` at `63624fb`, the verified inventory and
-backup deployments, and the integrated staging candidate on
-`feature/remaining-lab-work`. The registry
-holds current machine inventory, access references and operational evidence.
+Reconciled 2026-11-24 against the combined production registry release and
+the reviewed source on `feature/remaining-lab-work`. The registry holds
+current inventory, access references and operational evidence.
 
 The [vision](../vision/home-lab.md) describes intended outcomes. The
 [environment leasing plan](../plans/0001-renewable-test-environments.md) tracks
-staging evidence and remaining delivery.
+production and staging evidence and remaining delivery.
 
 ## System boundaries
 
@@ -22,6 +21,7 @@ flowchart TB
   Agents[BB and coding agents]
   Registry[Registry: discovery and operational records]
   Dashboard[Dashboard and browser access]
+  Allocator[Environment allocator]
   Compute[Proxmox guests / native macOS / platform-specific workers]
   Home[Home automation and media]
   Shared[Speech / models / mail / hosted applications]
@@ -35,7 +35,9 @@ flowchart TB
   People --> Dashboard
   Dashboard --> Registry
   Agents --> Registry
-  Agents -->|Current provisioning via runbooks and administration| Compute
+  Agents -->|Scoped leases| Allocator
+  Dashboard -->|Read-only lease status| Allocator
+  Allocator -->|Enrolled guests and workers| Compute
   Agents --> Shared
   Compute --> Home
   Compute --> Shared
@@ -109,11 +111,12 @@ persistent integrations, reviewable application deployments and disposable stagi
 These are separate from the agent process that requested them. A test VM need not
 run the coding agent.
 
-Stable provisioning uses registry runbooks and hypervisor administration. The
-disposable allocator shares one lease contract across Linux and Tart. Staging
-verified scoped Ollama access and NativeLink cache reads, writes and remote
-execution against an isolated instance of the deployed worker. Release and
-credential revocation both gated task access.
+Agents discover the production allocator through the registry and use one
+lease contract across enrolled Linux and Tart workers. Operators use
+registry runbooks and hypervisor administration for other placements.
+Production advertises voice and model bindings. Staging verified scoped
+Ollama use and NativeLink execution through a private route. Release and
+credential revocation both gated task access in those trials.
 
 ## Shared application capabilities
 
@@ -170,8 +173,9 @@ history and stream while viewed. Collectors also serve local guest inventory ove
 mutually authenticated TLS; the dashboard receives an initial cached report,
 then changes and freshness heartbeats, and expires stale states. Collector-side
 hypervisor sampling continues at its configured interval. **Reconcile now**
-reloads the catalog and reconnects to the collector streams. Startup also
-loads current records. Background runtime collection uses mTLS and browser
+reloads the catalog and reconnects to the collector streams. The running
+dashboard subscribes to registry metadata changes after loading current
+records at startup. Background runtime collection uses mTLS and browser
 terminals use pinned SSH. Health checks, guest inventory and address presence
 remain separate from resource streaming; some run independently of viewers. Cached
 metrics history is not a durable experiment archive.
@@ -188,12 +192,13 @@ API, SQLite state, collectors, authentication, update cadence and source modules
 [Plan 0005](../plans/0005-inventory-coverage-and-change-delivery.md) tracks metadata
 change delivery, native event sources and coverage beyond hypervisor guests.
 
-## Allocator staging
+## Environment allocator
 
 One durable SQLite ledger governs a fixed Debian slot, an on-demand Proxmox
 pool, a dedicated CUDA slot and a prepared Tart Xcode slot with managed Metal.
-Three Proxmox nodes ran independent leases concurrently and refused a fourth
-request at capacity. Capacity checks use live provider observations. Task
+Staging ran independent leases on three Proxmox nodes and refused a fourth
+request at capacity. Production verified the Proxmox and Tart lifecycle,
+including recovery into matching replacements and final release. Capacity checks use live provider observations. Task
 credentials bind a principal to its lease and grant only the selected service
 dependencies. The Debian recipe initializes the canonical workspace before
 readiness. The SCSI/ext4 recipe supports qualified active disk growth with
@@ -212,8 +217,14 @@ qualified procedure.
 Codex and Pi resumed real interrupted tasks and restored verified work.
 The Pi trial measured checkpoint, export and replacement time. Owner alerts
 passed retry, deduplication and exact routing to a controlled inbox.
-Standing credential enrollment, external alert delivery and sustained
-periodic checkpoint behavior remain acceptance items.
+Production enrolled scoped service credentials and verified task grant
+issuance and revocation. A scheduled worker uses a separate alert credential
+and submits export-failure notifications through the lab mail service to the
+operator. A controlled production failure verified operator receipt, queue
+acknowledgment and checkpoint recovery. The alert explains the failure, provides
+the lease-specific retry command and links to review and recovery instructions.
+Routine agent onboarding and sustained periodic checkpoint behavior remain
+acceptance items.
 
 Managed Tart completed simulator and Metal work. A separate clean Tart
 install restored the exact macOS base, installed the matching Apple-signed
@@ -231,12 +242,15 @@ The React dashboard and Rust dashboard and registry services run on the existing
 production host. The rollout retained the catalog database, TLS credentials,
 public sign-in route and collector identities. Authenticated reconciliation
 completed for all six configured collectors and the live inventory stream
-delivered events. Five eligible collectors now report native hardware and
-delivery mode. Backrest uses the Rust collector for 18 fleet plans, with fresh
+delivered events. Five eligible collectors report fresh hardware and
+delivery mode. They reported polling in the observed production snapshot. Backrest uses the Rust collector for 18 fleet plans, with fresh
 encrypted registry and host snapshots and registry archive verification.
 The production allocator runs alongside the registry and dashboard. Its
 enrolled provider, capture and recovery roles have production credentials.
-The registry records the artifact identity, cutover and recovery evidence.
+The signed handoff preserved the lease history. All four slots reported
+capacity after the staging VM, its disks, grants and preview route were
+retired. The registry records the artifact identity, cutover and recovery
+evidence.
 
 ## Registry platform releases
 
@@ -266,9 +280,11 @@ details are in the [registry/dashboard architecture](registry-dashboard.md#confi
 Configuration backup, media synchronization, source control and task artifacts serve
 different purposes. Git preserves public source; it does not replace private
 configuration recovery. Media files are not implied to be in configuration archives.
-The staged allocator retains task checkpoints in a separate encrypted repository
-at the same destination. Configuration archives cover the declared configuration
-scope, and task checkpoints cover the declared workspace.
+The production allocator retains task checkpoints in a separate encrypted
+repository at the same destination. The registry configuration plan now
+captures the combined release and a consistent allocator ledger and witness.
+An encrypted restore verified both SQLite databases and the matching witness
+revision. Task checkpoints cover the declared workspace.
 
 Registry recovery requires exported catalog data and private bootstrap/access
 material retrievable without the failed registry host. Recovering a service also
@@ -290,8 +306,8 @@ continue. Router, public access and backup-provider failures affect different pa
 Independent console access and recovery material reduce those dependencies; they do
 not remove the need to exercise recovery.
 
-This review read catalog deployment descriptions and implementation source, not
-all live application flows. Current status, restore results, hardware readiness and
-remaining exceptions must be checked in the registry and verified before operations.
+Current status, restore results and hardware readiness are in the live
+registry. [Plan 0009](../plans/0009-production-platform-verification.md) tracks
+remaining production checks and deferred drills.
 When a plan is implemented, update the affected architecture boundaries with actual
 behavior and validation; keep proposed capabilities in plans until then.
